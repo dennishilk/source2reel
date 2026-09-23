@@ -1,0 +1,45 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.uv/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+config/local*.toml
+config/private*.toml
+*credentials*
+*secret*
+
+# Local AI model/runtime payloads
+models/
+.model-cache/
+*.gguf
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+*.onnx
+voices/models/
+voices/cache/
+
+# Generated episode build products
+projects/*/work/
+projects/*/output/
+projects/*/tmp/
+projects/*/.cache/
+
+# Common render intermediates
+*.tmp.wav
+*.raw.wav
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
