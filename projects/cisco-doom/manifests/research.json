@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "facts": [
+    {
+      "claim": "The final local backend executes DOOM on the Cisco ARM CPU.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The MVP photo is authentic project evidence and is held static by the renderer.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    }
+  ],
+  "assets": [
+    {
+      "evidence_ref": "E0001",
+      "purpose": "Opening proof image",
+      "authentic_project_media": true
+    }
+  ]
+}

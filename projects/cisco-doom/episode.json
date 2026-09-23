@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "title": "Cisco CP-9951 DOOM — Engine MVP",
+  "slug": "cisco-doom-mvp-v2",
+  "summary": "Smallest end-to-end reference scene for the reusable Source2Reel engine.",
+  "scenes": [
+    {
+      "id": "s001",
+      "type": "PROJECT_EVIDENCE",
+      "title": "CISCO CP-9951 // DOOM v.666",
+      "narration": "This is a Cisco office phone. And yes, it really runs Doom. The game executes locally on the phone, renders to its framebuffer, and uses the physical Cisco controls.",
+      "evidence_refs": ["E0001"],
+      "asset_ref": "E0001",
+      "annotations": [],
+      "diagram": {},
+      "pad_after_seconds": 0.65,
+      "notes": "Reference MVP: authentic evidence remains static for the complete scene."
+    }
+  ]
+}

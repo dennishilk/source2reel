@@ -1,0 +1,9 @@
+[llm]
+provider = "openai_compat"
+base_url = "http://127.0.0.1:8080/v1"
+model = "qwen3-14b"
+temperature = 0.10
+timeout = 600
+
+[vision]
+enabled = false

@@ -1,0 +1,21 @@
+[voice]
+engine = "kokoro"
+model = "hexgrad/Kokoro-82M"
+model_release = "v1.0"
+inference_package = "kokoro==0.9.4"
+voice = "am_michael"
+language_code = "a"
+speed = 0.94
+sample_rate = 24000
+status = "MVP_CANDIDATE_PENDING_AUDIBLE_APPROVAL"
+
+[delivery]
+style = "clear, calm, technical, natural"
+max_sentence_words = 28
+pause_between_chunks_ms = 110
+
+[pronunciation]
+"CP-9951" = "C P ninety-nine fifty-one"
+"ARMv6" = "A R M V six"
+"/dev/fb1" = "slash dev slash F B one"
+"v.666" = "version six sixty-six"

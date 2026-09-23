@@ -1,0 +1,25 @@
+[frame]
+width = 1920
+height = 1080
+fps = 30
+background = "#080D12"
+grid = "#14232D"
+line = "#4C94AE"
+text = "#E8EEF2"
+muted = "#7F9AAA"
+accent = "#7ED5F3"
+
+[layout]
+margin_x = 72
+header_y = 45
+image_x = 72
+image_y = 154
+image_w = 1776
+image_h = 800
+footer_y = 1010
+
+[typography]
+heading_font = "/usr/share/fonts/opentype/inter/InterDisplay-SemiBold.otf"
+mono_font = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+heading_size = 48
+meta_size = 21

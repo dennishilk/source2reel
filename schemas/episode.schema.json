@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Source2Reel Episode",
+  "type": "object",
+  "required": ["version", "title", "scenes"],
+  "properties": {
+    "version": {"const": 1},
+    "title": {"type": "string"},
+    "slug": {"type": "string"},
+    "summary": {"type": "string"},
+    "scenes": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "narration", "evidence_refs"],
+        "properties": {
+          "id": {"type": "string"},
+          "type": {"enum": ["HERO","PROJECT_EVIDENCE","TERMINAL_EVIDENCE","HARDWARE_EVIDENCE","ARCHITECTURE_DIAGRAM","DATA_FLOW","TIMELINE","CODE","GRAPH","SECTION_TITLE","SUMMARY","OUTRO"]},
+          "title": {"type": "string"},
+          "narration": {"type": "string"},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}},
+          "asset_ref": {"type": ["string","null"]},
+          "annotations": {"type": "array"},
+          "diagram": {"type": "object"},
+          "pad_after_seconds": {"type": "number", "minimum": 0},
+          "notes": {"type": "string"}
+        }
+      }
+    }
+  }
+}

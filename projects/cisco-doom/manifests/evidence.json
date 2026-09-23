@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "source_root": "assets/evidence",
+  "media_candidates": [
+    "E0001"
+  ],
+  "evidence": [
+    {
+      "ref": "E0001",
+      "path": "assets/evidence/cisco_ohne_lan.webp",
+      "path_base": "project",
+      "relative_path": "cisco_ohne_lan.webp",
+      "size": 751380,
+      "sha256": "2ced2b3663f47880a8d759fc7cca2e1525841f99",
+      "mime": "image/webp",
+      "kind": "media",
+      "media": {}
+    }
+  ]
+}

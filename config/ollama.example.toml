@@ -1,0 +1,6 @@
+[llm]
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "qwen3:14b"
+temperature = 0.10
+timeout = 600
