@@ -219,3 +219,14 @@ For Source2Reel v0.2 physical deployment:
 - final encode: libx264 initially
 - fast preview encode: VA-API candidate
 - ROCm/HIP: supported-GPU benchmark path, not a hard dependency
+
+## 2026-09-23 — clean reinstall handoff
+
+Physical evidence: system `/usr/bin/llama-server` 0.4.1-dev (`b29c606e28`)
+detected AMD Radeon RX 9060 XT (RADV GFX1200); Qwen3-VL-8B-Instruct
+Q4_K_M and a matching projector served localhost HTTP 200. The isolated
+voice had Torch 2.14.0+cpu and Kokoro 0.9.4. First narration exposed
+Misaki installing `en_core_web_sm` in the wrong (core) interpreter.
+The new installer pins the English model in voice and keeps generated
+runtime state inside the checkout. Its physical fresh-install test remains
+outstanding.

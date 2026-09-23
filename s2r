@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export SOURCE2REEL_ROOT="$ROOT"
+export HF_HOME="$ROOT/cache/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export HUGGINGFACE_HUB_CACHE="$HF_HUB_CACHE"
+export TRANSFORMERS_CACHE="$HF_HOME/transformers"
+export TORCH_HOME="$ROOT/cache/torch"
+export UV_CACHE_DIR="$ROOT/cache/uv"
+export UV_PYTHON_INSTALL_DIR="$ROOT/runtime/python"
+export XDG_CACHE_HOME="$ROOT/cache/xdg"
+if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
+  echo "Source2Reel core is not installed. Run ./install.sh first." >&2
+  exit 2
+fi
+exec "$ROOT/.venv/bin/python" -m source2reel.cli "$@"

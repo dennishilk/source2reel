@@ -1,5 +1,22 @@
 # Local AI backend on Cthulhu
 
+## Repository-local session
+
+Physical Cthulhu evidence: system `/usr/bin/llama-server` 0.4.1-dev
+(commit `b29c606e28`) detected Radeon RX 9060 XT RADV GFX1200. A
+Qwen3-VL-8B-Instruct Q4_K_M GGUF with projector served HTTP 200 on localhost.
+The consolidated session launcher still needs physical validation.
+
+Put model files under ignored `models/` and configure paths in ignored
+`config/local.toml` under `[local_ai]`, or use `DENNIS_LLM_MODEL` and
+`DENNIS_LLM_MMPROJ`. `LLAMA_SERVER` can override system executable discovery.
+`./s2r ai start` writes a PID record and log under `runtime/`;
+`./s2r stop all` checks process identity before signaling. External
+llama-server processes are untouched. `./s2r` provides the interactive
+starter. Vulkan/RADV is the current default; CPU is available without Vulkan.
+ROCm is not automatically installed or selected.
+
+
 Source2Reel does not hard-code a model runtime or one immutable LLM. Providers and model names live in configuration.
 
 ## Current architecture

@@ -1,5 +1,20 @@
 # PROJECT_STATE
 
+## 2026-09-23 — installer and runtime consolidation (pending Cthulhu)
+
+- `./install.sh` joins hardware-aware bootstrap, local core, Kokoro CPU
+  voice, explicit English spaCy model, pipeline validation and doctor.
+- `./s2r` is the repository-local CLI and terminal session starter.
+  The system llama-server is preferred; Vulkan/RADV is selected when detected.
+- Hugging Face, uv and Torch caches, model storage, logs, PID records and
+  output resolve under the checkout.
+- `ai start/status` and `stop all` track PID and kernel start tick; cleanup
+  previews generated state and requires `--yes` for removal.
+- Voice candidate `am_michael` remains pending audible approval.
+- Fresh install, local model placement, actual server start and narration
+  listening on Cthulhu remain outstanding.
+
+
 ## 2026-09-23 — hardware-aware bootstrap / dependency fix
 
 Physical Cthulhu deployment exposed a core dependency bug: \`kokoro==0.9.4\` was mandatory in \`pyproject.toml\`; Kokoro requires unqualified \`torch\`, and Linux PyPI resolution attempted to install a large NVIDIA/CUDA runtime on the AMD-only Cthulhu machine.

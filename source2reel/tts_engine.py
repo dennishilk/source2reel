@@ -3,6 +3,7 @@ import os, subprocess, tomllib
 from pathlib import Path
 from typing import Any
 from .config import profile_paths
+from .paths import local_environment
 
 
 def _voice_cfg(root: Path, cfg: dict[str,Any]):
@@ -41,7 +42,7 @@ def kokoro_scene(text: str, out: Path, root: Path, engine_cfg: dict[str,Any]):
         "--speed", str(float(v["speed"])),
         "--sample-rate", str(int(v["sample_rate"])),
         "--pause-ms", str(int(cfg.get("delivery",{}).get("pause_between_chunks_ms",110))),
-    ], input=text, text=True, check=True)
+    ], input=text, text=True, check=True, env=local_environment(root))
 
 
 def espeak_preview(text: str, out: Path):

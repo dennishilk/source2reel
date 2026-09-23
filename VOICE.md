@@ -28,6 +28,12 @@ The script creates the separate runtime:
 .venv-voice-kokoro/bin/python
 \`\`\`
 
+Setup explicitly installs `en_core_web_sm==3.8.0` through `uv pip`
+into the voice interpreter. It checks `spacy.load("en_core_web_sm")` and
+initializes `KPipeline(lang_code="a")`, preventing Misaki from invoking
+pip during first narration. `./s2r voice-test` renders
+`output/tests/voice-test.wav` for a physical listening decision.
+
 The Dennis profile records that interpreter in \`voices/dennis-explainer.toml\`.
 
 For the first frozen baseline, Torch is installed from the official CPU wheel index. Kokoro's remaining non-Torch dependencies are installed separately and \`kokoro==0.9.4\` is then installed with \`--no-deps\`. This prevents the reusable core resolver from silently selecting a CUDA/NVIDIA Torch stack.

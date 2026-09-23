@@ -20,8 +20,10 @@ def deep_env_expand(value):
 
 def load_engine_config(root: Path, override: Path | None = None) -> dict[str, Any]:
     cfg = load_toml(root / "config" / "engine.toml")
-    if override and override.exists():
-        user = load_toml(override)
+    for path in (root / "config" / "local.toml", override):
+        if path is None or not path.exists():
+            continue
+        user = load_toml(path)
         for section, values in user.items():
             if isinstance(values, dict) and isinstance(cfg.get(section), dict):
                 cfg[section].update(values)

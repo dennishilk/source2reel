@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export UV_CACHE_DIR="$ROOT/cache/uv"
+export UV_PYTHON_INSTALL_DIR="$ROOT/runtime/python"
+mkdir -p "$UV_CACHE_DIR" "$UV_PYTHON_INSTALL_DIR"
 
 # Install only vendor-neutral baseline packages first. No CUDA/ROCm stack is
 # part of the normal Source2Reel baseline.
@@ -50,7 +53,6 @@ if grep -Eqi 'name = "torch"|nvidia[-_]|cuda|cudnn|nccl' uv.lock; then
   exit 3
 fi
 uv sync --python 3.12 --locked
-"$ROOT/tools/install-cli.sh"
 
 cat <<EOF
 
@@ -63,7 +65,7 @@ Install the optional permanent-voice candidate separately with:
 Before downloading a production GGUF:
   vulkaninfo --summary
   vainfo --display drm --device /dev/dri/renderD128
-  source2reel doctor
+  ./s2r doctor
 
 See docs/CTHULHU_AUDIT.md and docs/LOCAL_AI.md.
 

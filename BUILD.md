@@ -1,113 +1,76 @@
-# BUILD — Source2Reel on Arch Linux / Cthulhu
+# BUILD — Arch Linux / Cthulhu
 
-The current target machine is Cthulhu: Arch Linux x86_64, Ryzen 7 5800X3D, Radeon RX 9060 XT 16 GiB and about 31 GiB system RAM. Hardware-specific choices remain configurable and must not leak into episode files.
+Target: Arch Linux x86_64, Ryzen 7 5800X3D and Radeon RX 9060 XT 16 GiB
+with Mesa RADV/Vulkan. The system `/usr/bin/llama-server` was physically
+proven on Cthulhu; this consolidated installer has not yet run there.
 
-See \`docs/CTHULHU_AUDIT.md\` for the dated capability decision and support qualifications.
+## Fresh installation
 
-## 1. Hardware-aware core bootstrap
+```bash
+git clone https://github.com/dennishilk/source2reel.git
+cd source2reel
+./install.sh
+./s2r doctor
+./s2r voice-test
+```
 
-The primary local-AI path is llama.cpp + Vulkan. ROCm is optional.
+`install.sh` creates local runtime directories, calls the hardware-aware
+`tools/bootstrap-arch.sh` and isolated `tools/setup-voice.sh`, then runs doctor.
+It is safe to rerun. Baseline Arch packages include FFmpeg, uv, Vulkan tools,
+llama.cpp and the detected vendor's Vulkan driver. AMD gets `vulkan-radeon`.
+ROCm and CUDA are never automatically installed. Core `uv.lock` is scanned
+for Torch/NVIDIA/CUDA before syncing. Voice uses CPU Torch, Kokoro and a
+spaCy 3.8 English model inside `.venv-voice-kokoro`; setup verifies
+`spacy.load("en_core_web_sm")` and initializes `KPipeline(lang_code="a")`.
 
-\`\`\`bash
-./tools/bootstrap-arch.sh
-\`\`\`
+`./s2r` runs the local `.venv/bin/python`; it does not use global PATH setup.
 
-The bootstrap installs vendor-neutral packages first, detects the GPU through PCI data, checks Vulkan, and then chooses the vendor-specific Vulkan package where appropriate:
+## Configure and start local AI
 
-- AMD → \`vulkan-radeon\`, preferred backend \`llama.cpp+vulkan/radv\`
-- Intel → \`vulkan-intel\`, preferred backend \`llama.cpp+vulkan\`
-- NVIDIA → no CUDA/NVIDIA packages are installed automatically; an existing working Vulkan ICD may use \`llama.cpp+vulkan\`
-- no usable Vulkan path → \`llama.cpp+cpu\`
+Place authorized GGUF and matching projector files in ignored `models/`.
+Set exact paths in the ignored `config/local.toml`:
 
-The baseline never installs CUDA, cuDNN, NCCL, ROCm or PyTorch implicitly.
+```toml
+[local_ai]
+model_path = "models/YOUR-MODEL.gguf"
+mmproj_path = "models/YOUR-MMPROJ.gguf"
+```
 
-Core packages are intentionally small. Python core dependencies currently exclude Kokoro and Torch.
+Alternatively set `DENNIS_LLM_MODEL` and `DENNIS_LLM_MMPROJ`. One non-mmproj
+GGUF directly under `models/` is discovered automatically. Record chosen
+model/revision/hash in `PROJECT_STATE.md` and `LICENSES.md` before freezing
+production. `LLAMA_SERVER` overrides binary discovery, which prefers the
+system executable over a vendored build. The API binds only to localhost.
+Vulkan is chosen when detected; CPU is the fallback. ROCm is not offered
+without a validated integration.
 
-The bootstrap runs:
+```bash
+./s2r                 # terminal session interface
+./s2r ai start        # tracked local server
+./s2r ai status
+./s2r stop all        # stops only recorded, identity-matched processes
+./s2r create https://github.com/dennishilk/cisco9951-doom --review
+./s2r build cisco-doom
+```
 
-\`\`\`bash
-uv python install 3.12
-uv lock --python 3.12
-uv sync --python 3.12 --locked
-\`\`\`
+Doctor reports missing models and a stopped API as optional; `ai start`
+explains which model path is missing. The physical fresh-install and sound
+check remain acceptance gates.
 
-Before the sync, it rejects a generated core \`uv.lock\` containing Torch/NVIDIA/CUDA runtime entries.
+## Runtime state and reset
 
-## 2. Optional permanent voice stack
+The ignored `.venv/`, `.venv-voice-kokoro/`, `models/`, `cache/` (Hugging
+Face, Torch, uv), `runtime/` (Python, PID records, logs), and `output/` stay
+under the checkout. Per-episode generated `work/` and `output/` are ignored.
 
-Kokoro is not a Source2Reel core dependency. Install the Dennis Explainer voice candidate explicitly:
+```bash
+./s2r clean                 # preview only
+./s2r stop all
+./s2r clean --yes           # environments/cache/runtime/root output
+./s2r clean --models --yes  # also remove downloaded models
+./install.sh
+```
 
-\`\`\`bash
-./tools/setup-voice.sh
-\`\`\`
-
-This creates:
-
-\`\`\`text
-.venv-voice-kokoro/
-\`\`\`
-
-separately from the core \`.venv\`.
-
-The voice installer deliberately uses the official PyTorch CPU wheel index for Torch, then installs Kokoro's non-Torch dependencies and finally \`kokoro==0.9.4 --no-deps\`. The initial production design therefore remains Kokoro-on-CPU even while llama.cpp uses the AMD GPU.
-
-eSpeak remains a smoke-test fallback only and is never promoted silently to the permanent Dennis Explainer Voice.
-
-## 3. Hardware sanity checks
-
-\`\`\`bash
-python3 source2reel/hardware.py
-vulkaninfo --summary
-vainfo --display drm --device /dev/dri/renderD128
-ffmpeg -hide_banner -encoders | grep -E 'h264_vaapi|hevc_vaapi|av1_vaapi'
-\`\`\`
-
-## 4. Doctor
-
-\`\`\`bash
-source2reel doctor
-\`\`\`
-
-Doctor reports separate sections for:
-
-- required core tools/profile files
-- detected GPU vendor/device, Vulkan state and selected inference backend
-- local AI endpoint
-- optional voice runtime and eSpeak preview fallback
-
-A missing Kokoro runtime is reported as optional and does not by itself make the core installation unhealthy.
-
-## 5. Local AI service
-
-The engine expects a localhost API and remains independent of runtime.
-
-Primary baseline: packaged llama.cpp + Vulkan/RADV on Cthulhu.
-
-A production GGUF is not committed. After choosing a model, store it outside Git, calculate SHA-256 and record exact model/revision/quantization in \`PROJECT_STATE.md\` and \`LICENSES.md\`.
-
-See \`docs/LOCAL_AI.md\`.
-
-## 6. Optional ROCm/HIP benchmark
-
-\`\`\`bash
-./tools/bootstrap-rocm-arch.sh
-\`\`\`
-
-Do this only after the Vulkan baseline works. ROCm is not required for normal Source2Reel installation.
-
-## 7. Create/review an episode
-
-\`\`\`bash
-source2reel create https://github.com/dennishilk/cisco9951-doom --review
-source2reel build cisco9951-doom
-\`\`\`
-
-## 8. Revise without manual scene programming
-
-\`\`\`bash
-source2reel revise cisco9951-doom \
-  "Make the hook stronger but keep all factual claims evidence-grounded." \
-  --build
-\`\`\`
-
-Generated \`work/\`, \`output/\`, local voice environments, models and rendered media are intentionally excluded from Git.
+Cleanup does not remove Arch packages, global caches, Git credentials or
+project source. The legacy `tools/install-cli.sh` is optional only; an
+existing `~/.local/bin/source2reel` can be removed manually.

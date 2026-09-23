@@ -1,6 +1,10 @@
 # Python / uv
 .venv/
 .venv-voice-*/
+uv.lock
+cache/
+runtime/
+output/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -38,6 +42,8 @@ projects/*/.cache/
 # Common render intermediates
 *.tmp.wav
 *.raw.wav
+*.wav
+*.mp4
 
 # Editor / OS noise
 .DS_Store

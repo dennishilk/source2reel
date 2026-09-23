@@ -9,13 +9,13 @@ Cisco CP-9951 DOOM is the first reference episode and acceptance test. It is not
 ## Normal workflow
 
 ```bash
-source2reel create https://github.com/OWNER/PROJECT
+./s2r create https://github.com/OWNER/PROJECT
 ```
 
 Multiple authoritative sources can be combined:
 
 ```bash
-source2reel create \
+./s2r create \
   https://www.example.com/project/ \
   https://github.com/OWNER/PROJECT \
   /path/to/original-media \
@@ -40,11 +40,11 @@ source ingestion
 ## Core commands
 
 ```bash
-source2reel doctor
-source2reel create <PROJECT_URL_OR_DIRECTORY>
-source2reel create <SOURCE> --review
-source2reel build <project-slug>
-source2reel revise <project-slug> "Make the hook stronger." --build
+./s2r doctor
+./s2r create <PROJECT_URL_OR_DIRECTORY>
+./s2r create <SOURCE> --review
+./s2r build <project-slug>
+./s2r revise <project-slug> "Make the hook stronger." --build
 ```
 
 ## Engine vs. production profile
@@ -62,13 +62,13 @@ Reusable functionality belongs in `source2reel/`, `themes/`, `voices/`, `schemas
 ## Cisco reference MVP
 
 ```bash
-source2reel build cisco-doom
+./s2r build cisco-doom
 ```
 
 The canonical command requires Kokoro. In a restricted smoke-test environment only:
 
 ```bash
-source2reel build cisco-doom --preview-espeak
+./s2r build cisco-doom --preview-espeak
 ```
 
 eSpeak is explicitly non-canonical and must never become the Dennis Explainer production voice.
@@ -76,13 +76,28 @@ eSpeak is explicitly non-canonical and must never become the Dennis Explainer pr
 See `docs/ARCHITECTURE.md`, `docs/LOCAL_AI.md`, `BUILD.md`, `VOICE.md`, `STYLE_GUIDE.md`, `LICENSES.md` and `PROJECT_STATE.md`.
 
 
-## Installation split
+## Installation and local state
 
-The reusable core and permanent voice are deliberately separate:
+```bash
+git clone https://github.com/dennishilk/source2reel.git
+cd source2reel
+./install.sh
+./s2r doctor
+./s2r voice-test
+./s2r ai start
+./s2r ai status
+./s2r stop all
+```
 
-\`\`\`bash
-./tools/bootstrap-arch.sh   # core + hardware detection + llama.cpp/Vulkan baseline
-./tools/setup-voice.sh      # optional Kokoro CPU voice environment
-\`\`\`
+`./s2r` opens a terminal session when called without arguments. No global CLI or
+Fish PATH change is necessary. The installer creates separate core and Kokoro
+CPU voice environments, explicitly installs the English spaCy model into voice,
+and validates the pipeline. `am_michael` remains pending audible approval.
 
-The normal core install does not depend on Kokoro or Torch and does not auto-install CUDA/NVIDIA runtime packages. \`source2reel doctor\` reports the optional voice stack separately.
+Put GGUF models in ignored `models/`. Set `[local_ai] model_path` and
+`mmproj_path` in ignored `config/local.toml`, or set `DENNIS_LLM_MODEL` and
+`DENNIS_LLM_MMPROJ`. The system `llama-server` is preferred; set
+`LLAMA_SERVER` to override it. Logs and process records are under `runtime/`;
+Hugging Face, uv and Torch caches are under `cache/`; voice samples are under
+`output/`. `./s2r clean` previews generated-state removal; `--yes` confirms,
+while models require an additional `--models` flag. See `BUILD.md`.
