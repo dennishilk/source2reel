@@ -1,0 +1,197 @@
+{
+  "title": "I Made a €35 Cisco Office Phone Run DOOM — Here’s How",
+  "summary": "This project transformed a €35 Cisco CP-9951 IP phone from a networked thin client into a self-contained DOOM v.666 machine. Starting with streamed video over H.264/PCMU, it evolved through SSH access, reverse-engineered input, native ARMv6 compilation, local audio routing, and persistent installation — culminating in offline cold-boot gameplay with real keypad input and local sound.",
+  "scenes": [
+    {
+      "id": "s001",
+      "type": "HERO",
+      "title": "Cisco CP-9951 — DOOM v.666 Running Locally",
+      "narration": "This is a Cisco office phone. And yes, it really runs DOOM. But it didn’t start that way. The final result runs natively on the phone’s ARMv6 CPU, rendering to /dev/fb1 and reading input from /dev/input/keypad0. Sound is local, persistence is baked in, and it boots cold without Ethernet or shell access. This is not a remote hack — it’s a self-contained machine.",
+      "evidence_refs": [
+        "E0001",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027",
+        "E0132"
+      ],
+      "asset_ref": "E0132",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s002",
+      "type": "PROJECT_EVIDENCE",
+      "title": "Werner’s Early Media Proof",
+      "narration": "Before native DOOM, the phone received video and audio via H.264/PCMU streaming. This proved the device could handle useful media — but it was still remote. The phone was a receiver, not a runner. This early proof, captured in E0105, shows the device in use, but not yet self-sufficient.",
+      "evidence_refs": [
+        "E0105"
+      ],
+      "asset_ref": "E0105",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s003",
+      "type": "PROJECT_EVIDENCE",
+      "title": "DOOM on Cthulhu — Not Native",
+      "narration": "The game ran on a remote server called Cthulhu, streamed to the Cisco. This was DOOM v.666, but not native. It was a client-side experience, not a local one. The phone was a display and input device — not a processor. This is shown in E0102, where the phone displays a video call with 'DOOM' as a participant — a humorous but technically accurate indicator of remote execution.",
+      "evidence_refs": [
+        "E0102"
+      ],
+      "asset_ref": "E0102",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s004",
+      "type": "PROJECT_EVIDENCE",
+      "title": "Remote Controller via RFC4733",
+      "narration": "To control the remote DOOM, the Cisco’s physical keypad was mapped through RFC4733 DTMF signaling to Asterisk AMI, then Python, then uinput — finally feeding input to DOOM on Cthulhu. This was a remote controller, not a native system. The phone was still a client — not a host. E0101 shows the phone in use with a video call interface, confirming the remote setup.",
+      "evidence_refs": [
+        "E0101"
+      ],
+      "asset_ref": "E0101",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s005",
+      "type": "TERMINAL_EVIDENCE",
+      "title": "SSH Access — The Turning Point",
+      "narration": "The breakthrough came when diagnostic SSH provisioning allowed access to the embedded MontaVista Linux shell. This was not brute force or exploitation — it was a legitimate provisioning path. The shell gave us the first real view of the system: Linux 2.6.18_pro500 on ARMv6, 244 MB RAM, and accessible framebuffers. This is shown in E0005, where the terminal lists /dev/fb* and /dev/input device files — the foundation for native control.",
+      "evidence_refs": [
+        "E0005"
+      ],
+      "asset_ref": "E0005",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s006",
+      "type": "TERMINAL_EVIDENCE",
+      "title": "Framebuffer and Input Discovery",
+      "narration": "We discovered the phone’s framebuffers and input devices. /dev/fb1 was the display target, and /dev/input/keypad0 was the input source. This was confirmed by listing device files in the terminal — shown in E0006. The phone had real hardware interfaces, not just virtual ones. This was the first step toward native control.",
+      "evidence_refs": [
+        "E0006"
+      ],
+      "asset_ref": "E0006",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s007",
+      "type": "PROJECT_EVIDENCE",
+      "title": "Keypad Reverse-Engineered Locally",
+      "narration": "The physical keypad was reverse-engineered to work directly with the phone’s input system. No longer did we need SIP or DTMF forwarding — the phone’s own /dev/input/keypad0 could read button presses. This was confirmed in E0007, which shows the reverse-engineering process — the phone now had native input, not remote control.",
+      "evidence_refs": [
+        "E0007"
+      ],
+      "asset_ref": "E0007",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s008",
+      "type": "PROJECT_EVIDENCE",
+      "title": "First Native DOOM Execution",
+      "narration": "DOOM v.666 was compiled for ARMv6 and ran natively on the phone. It rendered to /dev/fb1 and read input from /dev/input/keypad0. This was the first native execution — but sound was not yet local. The gameplay was real, the input was real, but the audio was still remote. E0132 visually shows the phone booting, the Applications menu with a Doom entry, and first-person gameplay — but this does not prove local sound or offline persistence.",
+      "evidence_refs": [
+        "E0013",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027",
+        "E0132"
+      ],
+      "asset_ref": "E0132",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s009",
+      "type": "DATA_FLOW",
+      "title": "Local Audio Architecture",
+      "narration": "To solve local sound, we routed game audio through the phone’s media system. Compact DOOM sound events were emitted and relayed via 8 kHz G.711 μ-law RTP. A local service handled the audio, with fallback to loopback on cold boot. This was not a simple audio driver — it was a full media stack. The architecture is shown in E0013 and E0016 — the phone now had local audio, not remote streaming.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "asset_ref": null,
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s010",
+      "type": "DATA_FLOW",
+      "title": "Persistence and Launch Path",
+      "narration": "The game was installed under /mnt/flash2/doom-v666 and launched via the Applications menu using http://127.0.0.1:8095/launch. This was made possible by xinetd and a persistent service. The phone now had a launch path — not just a runtime. This is shown in E0013 and E0016 — the phone could launch DOOM from the Applications menu, not just from a shell.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "asset_ref": null,
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s011",
+      "type": "HARDWARE_EVIDENCE",
+      "title": "Final Offline Cold Boot Proof",
+      "narration": "The final proof: Ethernet disconnected, cold boot, Applications → Doom, real gameplay, and local sound. E0132 visually shows the phone booting, the Applications menu with a Doom entry, and first-person gameplay — but this does not prove offline execution. E0004 shows the phone on a desk with no Ethernet — the hardware proof. The documentary evidence (E0017, E0018, E0019, E0027) confirms the offline, cold-boot, persistent, local sound, native execution — the phone is now a self-contained DOOM machine.",
+      "evidence_refs": [
+        "E0004",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "asset_ref": "E0004",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s012",
+      "type": "OUTRO",
+      "title": "From Thin Client to Self-Contained DOOM Machine",
+      "narration": "What started as a remote streaming experiment became a self-contained DOOM machine. The phone runs DOOM natively, renders to its screen, reads its keypad, produces local audio, survives reboot, and launches from the Applications menu. It’s no longer a thin client — it’s a DOOM machine. And it costs €35.",
+      "evidence_refs": [
+        "E0001",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    }
+  ],
+  "version": 1
+}

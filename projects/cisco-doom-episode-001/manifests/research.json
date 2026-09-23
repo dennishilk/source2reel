@@ -1,0 +1,1099 @@
+{
+  "version": 1,
+  "facts": [
+    {
+      "claim": "The Cisco CP-9951 runs DOOM natively on its ARMv6 CPU, rendering to `/dev/fb1` and using `/dev/input/keypad0` for input.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final build was physically verified on 15 September 2026 after a cold boot with Ethernet disconnected.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone uses MontaVista Linux Professional Edition Blackfoot with kernel `Linux 2.6.18_pro500`.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The DOOM binary is installed persistently at `/mnt/flash2/doom-v666`.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The game is launched via the phone’s Applications menu by selecting 'Doom'.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Sound is produced locally via an 8 kHz G.711 µ-law RTP path bound to `127.0.0.1`.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The IWAD used is Freedoom Phase 2.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project began as a streamed DOOM experience on Cthulhu, using Asterisk and Baresip for video/audio delivery.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project evolved to use direct shell access via SSH after provisioning, leading to reverse-engineering the embedded Linux environment.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone exposes multiple framebuffers (`/dev/fb0` to `/dev/fb3`) and input devices including `/dev/input/keypad0`.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The input devices are managed by Cisco’s Raven input stack, including Raven Keypad, Touchscreen, and Hookswitch.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Keypad events are 16-byte Linux-style input records, mapped to physical buttons including navigation cluster, OK, *, #, and red handset button.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The red handset button is used to exit DOOM cleanly and return to the normal Cisco UI.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project was documented in `docs/project-history.md` and `docs/keypad-reverse-engineering.md`.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project was initially accessed via SSH using PuTTY 0.60 and `plink` to connect to `nebu@10.1.1.2`.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s SSH login presented a second Cisco-internal login using the `default` user (uid=65533).",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project was not dependent on external services, HTTP, TFTP, SSH, or Internet for final operation.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project was documented in a field note at https://www.dennishilk.com/museum/home-computing-lab/field-notes/field-note-7/.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "background",
+      "confidence": "high"
+    },
+    {
+      "claim": "The installation process for Cisco CP-9951 DOOM v.666 requires a deployment host at IP `10.1.1.1` serving FTP content on port `2121`.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone-side installation root is hardcoded to `/mnt/flash2/doom-v666` and must be below `/mnt/flash2`.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The installer replaces the phone's existing Doom and Doom Beep entries with a single local Doom entry.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone must be rebooted after installation to load the new xinetd service at `/usr/local/etc/doom-local`.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The audio design uses a FIFO to relay events from file descriptor 9 to a UDP service on port 8096, which emits G.711 μ-law RTP to Cisco's RTPRx endpoint.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The service uses port 8095 for HTTP proxying and port 8097 for the backend, with fallback to loopback during cold boot.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The package does not use `libms`, `LD_PRELOAD`, kill Cisco media processes, or write to `/dev/dsplink`.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The package uses Freedoom Phase 2 as the redistributable IWAD and does not include Cisco firmware or proprietary libraries.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The installer includes rollback scripts to restore backed-up phone files and deployment host provisioning XML.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The persistent cold-boot trigger installs the service under `/mnt/flash` and uses a single `DOOM_ROOT` for all components.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The physical acceptance test requires disconnecting LAN, powering off the phone, and verifying audible Doom SFX after selecting 'Doom' from the Applications menu.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The installer accepts only a single positional argument for the DOOM_BINARY, FTP_ROOT, and PROVISIONING_XML, with defaults provided.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone's keypad mapping is preserved from the ARM binary, with OK, *, and red handset button mapped to specific actions.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The package is an experimental community project for privately owned hardware and is not affiliated with or supported by Cisco.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "background",
+      "confidence": "high"
+    },
+    {
+      "claim": "The Cisco CP-9951 exposes its physical keypad locally as Linux-style input events via the device file `/dev/input/keypad0`.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The keypad input is handled by Cisco kernel modules `keyhandle` and `keypad`, which are part of the MontaVista Linux kernel `2.6.18_pro500` on ARMv6.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Each input event is 16 bytes and follows the Linux `struct input_event_32` layout with fields: `tv_sec`, `tv_usec`, `type`, `code`, `value`.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Key events have `type = 0x0001`, with `value = 1` for press and `value = 0` for release.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The device `/dev/input/keypad0` uses a ring buffer of 16 slots, and a fresh open returns one zero-initialized 16-byte slot.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The CP-9951 does not require remote DTMF, SIP signaling, or desktop-side key forwarding for game control.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The `keyhandle.ko` module is not stripped, allowing direct inspection of the keypad implementation.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The physical keypad’s event codes are mapped directly from hardware observation, with contiguous ranges for numeric, navigation, softkeys, line keys, volume, and feature buttons.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The kernel driver `ravenKeypad_pressedKeyIntr` and `ravenKeypad_freeKeyIntr` are part of the input event path.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The `keypadClassDev_fop_read()` and `keypadClassDev_event()` functions were reverse-engineered to understand event format and ring buffer behavior.",
+      "evidence_refs": [
+        "E0011"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project began with a used Cisco Unified IP Phone CP-9951 purchased for €35, running original Cisco firmware `sip9951.9-2-1` and provisioned via DHCP/TFTP with Asterisk.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The first test, named 'Werner', used extension `111` to demonstrate H.264 video and PCMU audio reception on the phone.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 2 involved streaming DOOM from a Linux workstation 'Cthulhu' via a chain: DOOM → wf-recorder → v4l2loopback → Baresip → Asterisk → Cisco CP-9951.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 3 used the phone's keypad via RFC4733 DTMF → Asterisk AMI → Python bridge → uinput → DOOM on Cthulhu, making the phone both display and controller.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 4 achieved SSH access to the phone via Cisco's diagnostic SSH path, using an old PuTTY 0.60 client to authenticate with credentials added to the provisioning file.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 4 revealed the phone runs MontaVista Linux Professional Edition Blackfoot (Linux 2.6.18_pro500) on ARMv6, with 244 MB RAM and accessible framebuffer devices.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 5 reverse-engineered the physical keypad input via `/dev/input/keypad0`, eliminating the need for DTMF or SIP signaling for native input.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 6 compiled DOOM for the phone's ARM CPU, rendering to `/dev/fb1`, using local keypad input, and supporting full gameplay with OK for confirmations and red handset button for exit.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 7 implemented local sound by emitting compact DOOM sound events and relaying 8 kHz G.711 μ-law RTP via a service bound to source `127.0.0.1`, with fallback to loopback on cold boot.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 8 installed the game, Freedoom IWAD, and helpers persistently under `/mnt/flash2/doom-v666`, with a local 'Applications → Doom' menu launching via `http://127.0.0.1:8095/launch` using xinetd.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final physical acceptance test on 15 September 2026 confirmed DOOM runs natively, locally, persistently, and offline on the phone without external services or shell access.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final distribution is named `Cisco9951-doom.doompkg`, using Freedoom Phase 2 as the redistributable IWAD, and does not include Cisco firmware, proprietary libraries, or commercial IWADs.",
+      "evidence_refs": [
+        "E0013",
+        "E0014"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The package `Cisco9951-doom.doompkg` has a size of 11,881,944 bytes and SHA-256 checksum `2f0c29fa6213bf0cdb0a5cb9124d083c1ccff54ce4009730917c371d784d4dbd`.",
+      "evidence_refs": [
+        "E0014"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The public release tag is **v.666**.",
+      "evidence_refs": [
+        "E0014"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The cat wallpaper was retained throughout the project and was identified as the correct priority early on.",
+      "evidence_refs": [
+        "E0013"
+      ],
+      "phase": "background",
+      "confidence": "high"
+    },
+    {
+      "claim": "The Cisco CP-9951 can run DOOM natively, locally, persistently, and offline.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final v.666 build executes on the phone's ARM CPU, renders directly to /dev/fb1, reads the real Cisco keypad from /dev/input/keypad0, produces audible sound through the phone's local media path, survives reboot, and launches from Applications → Doom.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project began with a €35 Cisco Unified IP Phone CP-9951, initially for reconnaissance into its hardware and interfaces.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The cat wallpaper was set as the initial background and remained throughout all stages, including the final v.666 build.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project progressed through 8 distinct stages, from proving H.264/PCMU video/audio reception (Werner on extension 111) to native DOOM execution with local input, sound, persistence, and offline cold boot.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 4 (Shell) involved accessing MontaVista Linux via the Cisco’s diagnostic SSH path, enabling direct control of the phone’s OS.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 5 (Raven hardware) involved reverse engineering /dev/input/keypad0 to enable real keypad input for DOOM.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 6 (Native DOOM) involved executing, rendering, and reading input directly on the Cisco’s ARMv6 CPU.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 7 (Local sound) involved routing game audio through the phone’s native media path.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 8 (Persistence) involved installing DOOM under flash storage and launching it from Applications → Doom.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final stage involved pulling Ethernet, cold booting, and launching DOOM completely offline.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The initial DOOM implementation (Stage 2) ran on Cthulhu, not the phone, using H.264 streaming via Asterisk and Baresip.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 3 enabled real phone keypad input to control DOOM remotely via DTMF → Asterisk AMI → uinput.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s framebuffer is accessed via /dev/fb1 for direct rendering.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s audio is produced through its local media path, not external streaming.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project used MontaVista Linux as the base OS for native execution.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s ARMv6 CPU was used for native DOOM execution.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project used v4l2loopback to reduce buffering in the streamed DOOM phase.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s firmware remained stock (sip9951.9-2-1) until Stage 4, when SSH access enabled OS-level control.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project used Asterisk for SIP routing and media handling.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project used Baresip for H.264/PCMU video/audio delivery.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project used wf-recorder to capture DOOM gameplay for streaming.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project used Python to bridge DTMF events to Linux /dev/uinput for keyboard input.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s keypad was mapped to DOOM controls: 2=forward, 8=backward, 4=left, 6=right.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The Cisco CP-9951 was successfully accessed via SSH using credentials 'default' / 'cisco', exposing an embedded Linux shell running MontaVista Linux Professional Edition Blackfoot.",
+      "evidence_refs": [
+        "E0017"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The embedded Linux system on the Cisco CP-9951 runs ARMv6 architecture with a 2.6.18_pro500 kernel and BusyBox 1.9.1.",
+      "evidence_refs": [
+        "E0017"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project transitioned from a SIP-based DTMF controller to a native DOOM port running directly on the Cisco CP-9951’s ARM CPU.",
+      "evidence_refs": [
+        "E0017"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "DOOM renders directly to /dev/fb1 and reads input from /dev/input/keypad0 using the physical Cisco keypad.",
+      "evidence_refs": [
+        "E0017"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final installation persists under /mnt/flash2/doom-v666 and is launched via a web endpoint http://127.0.0.1:8095/launch through Cisco’s Applications menu.",
+      "evidence_refs": [
+        "E0017"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Sound is handled via 8 kHz G.711 μ-law RTP, relayed locally to the Cisco media system with fallback to loopback for cable-free operation.",
+      "evidence_refs": [
+        "E0017"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project was physically tested on 15 September 2026 with no Ethernet, no Cthulhu service, and no manual shell — the phone booted to DOOM via Applications → Doom.",
+      "evidence_refs": [
+        "E0017"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The Cisco CP-9951 runs DOOM natively, locally, persistently and offline.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The game loop, framebuffer rendering and keypad input all execute locally on the CP-9951 itself.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Sound is handled via a local RTP service emitting 8 kHz G.711 μ-law audio for the Cisco media system.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The installation persists under /mnt/flash2/doom-v666 and is launched via http://127.0.0.1:8095/launch.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final proof test was conducted on 15 September 2026 with Ethernet disconnected, cold boot, and no manual shell commands.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The release package is named Cisco9951-doom.doompkg and uses Freedoom Phase 2.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project does not include Cisco firmware, proprietary libraries, or commercial DOOM IWAD.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The physical keypad input is mapped to navigation, OK, *, #, and red handset button for exit.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The RTP audio source is bound to 127.0.0.1 to enable fallback to loopback without Ethernet.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The installer and rollback are included in the package for persistent setup.",
+      "evidence_refs": [
+        "E0018"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The Cisco CP-9951 phone runs DOOM v.666 natively, locally, persistently, and offline using its ARMv6 CPU.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The DOOM v.666 build renders directly to /dev/fb1 and reads input from /dev/input/keypad0.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone produces audible sound through its local media path.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The DOOM runtime survives reboot and launches from Applications → Doom.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project began with a €35 Cisco Unified IP Phone CP-9951.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone initially ran stock Cisco firmware sip9951.9-2-1.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The cat wallpaper was the original background and remained throughout the project.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The first DOOM implementation was streamed from Cthulhu, not native to the phone.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s keypad was used to control DOOM via DTMF → Asterisk AMI → uinput.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The turning point was gaining SSH access to the embedded Linux shell.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The embedded Linux system is MontaVista Linux Professional Edition Blackfoot, ARMv6, kernel 2.6.18_pro500.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone has approximately 244 MB of RAM and uses BusyBox.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project was finalized on 15 SEP 2026.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone supports offline cold boot and persistent DOOM launch.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone’s hardware is identified as 'raven' in the shell.",
+      "evidence_refs": [
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Das Cisco CP-9951 führt DOOM nativ, lokal, persistent und offline aus.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Die DOOM-Engine läuft direkt auf der Cisco-ARM-CPU und rendert auf /dev/fb1.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Die Eingabe erfolgt über /dev/input/keypad0 und nutzt die echten Cisco-Tasten.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Der Sound wird als 8-kHz-G.711-μ-law-RTP an einen lokalen Relay-Dienst gesendet.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Der RTP-Quellbindungsfix an 127.0.0.1 ermöglicht den Betrieb ohne Ethernet.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Die Installation ist persistent unter /mnt/flash2/doom-v666.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Das Spiel wird über das Cisco-Applications-Menü gestartet via http://127.0.0.1:8095/launch.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Ein xinetd-Dienst sorgt für Persistenz und automatischen Start nach Neustart.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Der finale Abnahmetest erfolgte ohne Ethernet, mit Kaltstart und ohne Shell-Befehl.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Das öffentliche Paket heißt Cisco9951-doom.doompkg und verwendet Freedoom Phase 2.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Das Paket enthält keine Cisco-Firmware, keine proprietären Bibliotheken und keine kommerziellen IWADs.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Der SHA-256-Hash des Pakets ist 2f0c29fa6213bf0cdb0a5cb9124d083c1ccff54ce4009730917c371d784d4dbd.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Der finale Offline-Beweis wurde am 15. September 2026 dokumentiert.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Ein Video mit dem Titel 'Cisco CP-9951 runs DOOM natively — v.666 offline cold boot proof' ist verfügbar.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    }
+  ],
+  "assets": [
+    {
+      "evidence_ref": "E0002",
+      "purpose": "Offline cold-boot proof with Ethernet disconnected",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0010",
+      "purpose": "Installation and verified runtime documentation for Cisco CP-9951 DOOM v.666",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0012",
+      "purpose": "Media notes indicating that the hero image and proof video are added after the final physical v.666 photo/video session, and preferred screenshots for the historical gallery are specified.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0013",
+      "purpose": "Project history and technical documentation including all stages of development, architecture, and final verification.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0014",
+      "purpose": "Release metadata including package name, checksum, size, and distribution policy.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0016",
+      "purpose": "Primary documentation of the project’s architecture, chronology, and technical implementation.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0017",
+      "purpose": "Primary documentation of the project’s architecture, development phases, and final runtime behavior.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0018",
+      "purpose": "Final offline cold-boot proof image showing Cisco CP-9951 with Ethernet disconnected.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0018",
+      "purpose": "YouTube video embed for the final v.666 offline cold-boot proof.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0018",
+      "purpose": "Source code repository link for Cisco9951-doom project.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0018",
+      "purpose": "Measured keypad reverse-engineering documentation.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0018",
+      "purpose": "Project history documentation.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0019",
+      "purpose": "Primary documentation of the project, including chronology, technical details, and final architecture.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0027",
+      "purpose": "Beweisfoto des Cisco CP-9951 ohne Ethernet-Kabel bei Kaltstart.",
+      "authentic_project_media": true
+    },
+    {
+      "evidence_ref": "E0027",
+      "purpose": "Beweisvideo des Offline-Kaltstarts auf YouTube.",
+      "authentic_project_media": true
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "facts": [
+    {
+      "claim": "Das Paket enthält keine Cisco-Firmware, keine proprietären Bibliotheken und keine kommerziellen IWADs.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Der SHA-256-Hash des Pakets ist 2f0c29fa6213bf0cdb0a5cb9124d083c1ccff54ce4009730917c371d784d4dbd.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Der finale Offline-Beweis wurde am 15. September 2026 dokumentiert.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Ein Video mit dem Titel 'Cisco CP-9951 runs DOOM natively — v.666 offline cold boot proof' dokumentiert den Beweis.",
+      "evidence_refs": [
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    }
+  ]
+}

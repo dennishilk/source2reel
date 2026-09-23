@@ -1,0 +1,405 @@
+{
+  "version": 1,
+  "evidence": [
+    {
+      "ref": "E0001",
+      "path": "sources/source-01/repo/README.md",
+      "path_base": "project",
+      "relative_path": "source-01/README.md",
+      "size": 11181,
+      "sha256": "813aac3357cf20802861076f5743b60b8083dcadead361f49843ce1a4eeade51",
+      "mime": "text/markdown",
+      "kind": "document",
+      "line_start": 1,
+      "line_end": 209,
+      "excerpt": "# Cisco CP-9951 DOOM v.666\n\n<p align=\"center\">\n  <img alt=\"release\" src=\"https://img.shields.io/badge/release-v.666-8B0000?style=for-the-badge\">\n  <img alt=\"platform\" src=\"https://img.shields.io/badge/platform-Cisco%20CP--9951-1f6feb?style=for-the-badge\">\n  <img alt=\"cpu\" src=\"https://img.shields.io/badge/CPU-ARMv6-444?style=for-the-badge\">\n  <img alt=\"kernel\" src=\"https://img.shields.io/badge/kernel-2.6.18__pro500-555?style=for-the-badge\">\n</p>\n\n<p align=\"center\">\n  <img alt=\"video\" src=\"https://img.shields.io/badge/video-%2Fdev%2Ffb1-success?style=flat-square\">\n  <img alt=\"input\" src=\"https://img.shields.io/badge/input-%2Fdev%2Finput%2Fkeypad0-success?style=flat-square\">\n  <img alt=\"sound\" src=\"https://img.shields.io/badge/sound-local%20G.711%20%C2%B5--law-success?style=flat-square\">\n  <img alt=\"offline\" src=\"https://img.shields.io/badge/offline%20cold%20boot-PROVEN-success?style=flat-square\">\n  <img alt=\"iwad\" src=\"https://img.shields.io/badge/IWAD-Freedoom%20Phase%202-blueviolet?style=flat-square\">\n  <img alt=\"cat\" src=\"https://img.shields.io/badge/cat%20wallpaper-MANDATORY-ff69b4?style=flat-square\">\n</p>\n\n> **Native DOOM on a €35 Cisco IP phone.**  \n> Not streamed. Not remotely controlled. Not dependent on Ethernet after installation.\n\nThe Cisco CP-9951 runs DOOM on its own ARM CPU, renders directly through `/dev/fb1`, reads its real physical keypad through `/dev/input/keypad0`, produces sound through the phone's local media path, survives reboot and launches from **Applications → Doom**.\n\nOn **15 September 2026**, the final build was physically verified after a cold boot **with the Ethernet cable disconnected**.\n\n<p align=\"center\">\n  <b>Stage 1:</b> Cisco displays DOOM from Cthulhu<br>\n  <b>Stage 2:</b> Cisco controls DOOM on Cthulhu<br>\n  <b>v.666:</b> <strong>the Cisco itself runs DOOM</strong>\n</p>\n\n---\n\n## Final verified result\n\n| | Physically verified state |\n|---|---|\n| Phone | Cisco Unified IP Phone CP-9951 |\n| Firmware | `sip9951.9-2-1` |\n| OS | MontaVista Linux Professional Edition Blackfoot |\n| Kernel | `Linux 2.6.18_pro500` |\n| CPU | ARMv6 / ARMv6l |\n| Cisco hardware ID | `raven` |\n| Rendering | `/dev/fb1` |\n| Physical input | `/dev/input/keypad0` |\n| Persistent install | `/mnt/flash2/doom-v666` |\n| Launch | **Applications → Doom** |\n| Sound | local 8 kHz G.711 µ-law path |\n| Network after install | **not required** |\n| Exit | red handset button :D |\n| IWAD | Freedoom Phase 2 |\n\nThe final acceptance test was intentionally simple:\n\n```text\nunplug Ethernet\nremove power\ncold boot with power only\nopen Applications\nselect Doom\nplay with sound\nexit with red handset button\n```\n\nNo Cthulhu service, external HTTP/TFTP/FTP, SSH launch or Internet connection is needed for normal final operation.\n\n<p align=\"center\">\n  <img src=\"assets/final/cisco_ohne_lan.webp\" alt=\"Cisco CP-9951 DOOM v.666 during the offline cold-boot proof with Ethernet disconnected\" width=\"900\">\n</p>\n\n<p align=\"center\"><em>Offline means offline: the final v.666 phone was cold-booted and tested with Ethernet disconnected.</em></p>\n\n---\n\n## This is not the original streamed version\n\nThe project began with the CP-9951 acting as a SIP/H.264 thin client. DOOM ran on the Linux workstation **Cthulhu**, while Asterisk and Baresip delivered live video and audio to the phone.\n\nThe next version used the physical Cisco keypad as a controller through RFC4733 DTMF → Asterisk AMI → Python → Linux `uinput`.\n\nThen direct shell access changed the project completely.\n\nThe phone turned out to expose a small embedded ARM Linux environment with local framebuffer and input interfaces. That made a native port possible.\n\nThe complete chronology is in [`docs/project-history.md`](docs/project-history.md).\n\nThe longer workshop story, photos and video belong to:\n\n### [Field Note #007 — I Bought a €35 Cisco Phone. Naturally, I Put DOOM on It.](https://www.dennishilk.com/museum/home-computing-lab/field-notes/field-note-7/)\n\n---\n\n## Under the hood\n\n### First shell access\n\nHow we got there matters: the CP-9951's generation includes an **official Cisco SSH diagnostic-access path**. This was not an exploit, a bootloader hack or a modified firmware image.\n\nCthulhu was already provisioning the phone through DHCP/TFTP, so the existing SEP configuration path could be used. The working configuration was backed up first as `SEPC40ACB4D05D0.cnf.xml.pre-ssh`, then SSH credentials for the outer authentication stage were added to the provisioning file.\n\nThe phone's SSH implementation is old enough that modern OpenSSH was not a practical match. An old **PuTTY 0.60 / `plink`** client provided the compatible connection:\n\n```text\n/tmp/putty-0.60/unix/plink -ssh nebu@10.1.1.2\n```\n\nAfter the outer SSH authentication, the phone presented a second Cisco-internal login. Using the internal `default` login finally reached the real Linux shell. It was not root (`uid=65533(default)`, `gid=100(users)`), but it was more than enough to inspect the running system.\n\nThen this appeared:\n\n```text\nMontaVista(R) Linux(R) Professional Edition Blackfoot\nCisco IP Phone 9951 9-2-1\n```\n\nThat was the point where the project stopped being only a strange Cisco-phone experiment and became an embedded Linux reverse-engineering job.\n\nThe full SSH/provisioning transition is documented in [`docs/project-history.md`](docs/project-history.md#stage-4--the-turning-point-getting-a-shell-on-the-phone).\n\n<p align=\"center\">\n  <img src=\"assets/reverse-engineering/01-first-shell.webp\" alt=\"First SSH login on the Cisco CP-9951 showing MontaVista Linux and Cisco IP Phone 9951 9-2-1\" width=\"900\">\n</p>\n\n<p align=\"center\"><em>First direct shell access to the CP-9951.</em></p>\n\n### Local framebuffer and input devices\n\nLater inspection showed the local hardware interfaces needed for a real native game port:\n\n```text\n/dev/fb0\n/dev/fb1\n/dev/fb2\n/dev/fb3\n\n/dev/input/keypad0\n/dev/input/touchscreen0\n/dev/input/hookswitch0\n```\n\n<p align=\"center\">\n  <img src=\"assets/reverse-engineering/02-framebuffer-input-devices.webp\" alt=\"Framebuffer and local input devices on the Cisco CP-9951 including /dev/fb1 and /dev/input/keypad0\" width=\"900\">\n</p>\n\n<p align=\"center\"><em>The phone exposes both native framebuffer output and local physical input devices.</em></p>\n\n### Raven input stack\n\n`/proc/bus/input/devices` identifies the important local interfaces as:\n\n```text\nRaven Keypad\nRaven Touchscreen\nRaven Hookswitch\n```\n\n<p align=\"center\">\n  <img src=\"assets/reverse-engineering/03-raven-input-devices.webp\" alt=\"Raven Keypad, Raven Touchscreen and Raven Hookswitch listed in /proc/bus/input/devices\" width=\"900\">\n</p>\n\n<p align=\"center\"><em>The CP-9951 exposes its physical controls through Cisco's Raven input stack.</em></p>\n\n### Local keypad path\n\nThe physical input path was reverse engineered as:\n\n```text\nphysical key\n    ↓\nRaven keypad hardware driver\n    ↓\nCisco keyhandle layer\n    ↓\n/dev/input/keypad0\n    ↓\nlocal userspace application\n```\n\nEach keypad event is a 16-byte Linux-style input record. The numeric keypad, navigation cluster, softkeys, line keys, volume keys and feature buttons were measured directly on the phone.\n\nThe complete map and event format are documented in [`docs/keypad-reverse-engineering.md`](docs/keypad-reverse-engineering.md).\n\n---\n\n## Native video and controls\n\nDOOM executes directly on the CP-9951 CPU and renders to `/dev/fb1`.\n\nThe final binary reads the Cisco keypad locally rather than using DTMF or desktop-side forwarding.\n\nNotable controls include:\n\n- navigation cluster for movement/menu navigation\n- OK for menu confirmation\n- `*` for fire in the verified mapping\n- `#` for use/open in the verified mapping\n- **red handset button to exit DOOM cleanly**\n\nThe normal Cisco UI returns after exit.\n\n---\n\n## Local sound\n\nSound was the last major runtime problem.\n\nThe final implementation emits compact DOOM sound events to a small phone-local relay/service path. The service produces **8 kHz G.711 µ-law RTP** for the Cisco media subsystem.\n\nThe important physical fix is that RTP packets are explicitly bound to source `127.0.0.1`. With Ethernet present the configured phone address can be used; after a cable-free cold boot, the service falls back to loopback rather than failing because the Ethernet route does not exist.",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0003",
+      "path": "sources/source-01/repo/assets/final/cisco_bigmac_background.webp",
+      "path_base": "project",
+      "relative_path": "source-01/assets/final/cisco_bigmac_background.webp",
+      "size": 1036826,
+      "sha256": "df07e54e4a118a5db65889b956ae2b90d16e8f3d5b9c7ddd97665902ba03862d",
+      "mime": "image/webp",
+      "kind": "media",
+      "media": {
+        "width": 4000,
+        "height": 1800,
+        "format": "WEBP"
+      },
+      "ai_media": {
+        "category": "screenshot",
+        "caption": "Cisco device screen showing a sleeping cat with 'Connecting' status.",
+        "visible_text": "Connecting",
+        "evidence_value": "medium",
+        "reasons": "The image shows a Cisco device with a screen displaying a cat and the word 'Connecting', which suggests a network or system status. The visible text is clear and directly related to the device's function. However, the presence of a cat image is unusual for a technical device and may not be relevant to a technical explainer, reducing its documentary value."
+      }
+    },
+    {
+      "ref": "E0004",
+      "path": "sources/source-01/repo/assets/final/cisco_ohne_lan.webp",
+      "path_base": "project",
+      "relative_path": "source-01/assets/final/cisco_ohne_lan.webp",
+      "size": 751380,
+      "sha256": "c01c21eb718b30ddf7745275fed4b6f13c1c28e49b18cb2f5265bc277f1561a2",
+      "mime": "image/webp",
+      "kind": "media",
+      "media": {
+        "width": 4000,
+        "height": 1800,
+        "format": "WEBP"
+      },
+      "ai_media": {
+        "category": "hardware evidence",
+        "caption": "Cisco IP phone on a wooden desk with office supplies nearby.",
+        "visible_text": "cisco",
+        "evidence_value": "high",
+        "reasons": "The device is clearly identifiable as a Cisco IP phone, which is a specific piece of networking hardware. The visible branding and physical design provide strong documentary evidence for the subject matter. The presence of a serial number sticker (v666) adds further specificity. The context (desk with office supplies) supports a real-world deployment scenario."
+      }
+    },
+    {
+      "ref": "E0005",
+      "path": "sources/source-01/repo/assets/reverse-engineering/01-first-shell.webp",
+      "path_base": "project",
+      "relative_path": "source-01/assets/reverse-engineering/01-first-shell.webp",
+      "size": 346292,
+      "sha256": "8bf0ae778ac4af81ab2e9d72078b585ac0e93c238dd2d54cebc4f1f8f2c08f0c",
+      "mime": "image/webp",
+      "kind": "media",
+      "media": {
+        "width": 859,
+        "height": 680,
+        "format": "WEBP"
+      }
+    },
+    {
+      "ref": "E0006",
+      "path": "sources/source-01/repo/assets/reverse-engineering/02-framebuffer-input-devices.webp",
+      "path_base": "project",
+      "relative_path": "source-01/assets/reverse-engineering/02-framebuffer-input-devices.webp",
+      "size": 501736,
+      "sha256": "b7545e727ab4b07b8918b335108cb5b9edd8d6ddb42f858b2301ae246a8e12c0",
+      "mime": "image/webp",
+      "kind": "media",
+      "media": {
+        "width": 898,
+        "height": 886,
+        "format": "WEBP"
+      },
+      "ai_media": {
+        "category": "terminal",
+        "caption": "Terminal displaying Linux file system output for /dev/fb* and /dev/input directories, showing device files and permissions.",
+        "visible_text": [
+          "$ id",
+          "uid=65533(default) gid=100(users)",
+          "$ ls -l /dev/fb*",
+          "/dev/fb:",
+          "crw-rw-rw- 1 root root 29, 0 Jan 1 1970 0",
+          "crw-rw-rw- 1 root root 29, 1 Jan 1 1970 1",
+          "crw-rw-rw- 1 root root 29, 2 Jan 1 1970 2",
+          "crw-rw-rw- 1 root root 29, 3 Jan 1 1970 3",
+          "$ ls -l /dev/input /dev/input/*",
+          "/dev/input:",
+          "crw-rw-rw- 1 root root 13, 64 Jan 1 1970 event0",
+          "crw-rw-rw- 1 root root 13, 65 Jan 1 1970 event1",
+          "crw-rw-rw- 1 root root 13, 66 Jan 1 1970 event2",
+          "crw-rw-rw- 1 root root 13, 224 Jan 1 1970 hookswitch0",
+          "crw-rw-rw- 1 root root 13, 160 Jan 1 1970 keypad0",
+          "crw-rw-rw- 1 root root 13, 192 Jan 1 1970 touchscreen0",
+          "ts0"
+        ],
+        "evidence_value": "high",
+        "reasons": "The terminal output clearly shows Linux device files for framebuffers and input devices, which are critical for understanding system-level hardware interaction. This is highly relevant for technical documentation or educational content about Linux device management."
+      }
+    },
+    {
+      "ref": "E0007",
+      "path": "sources/source-01/repo/assets/reverse-engineering/03-raven-input-devices.webp",
+      "path_base": "project",
+      "relative_path": "source-01/assets/reverse-engineering/03-raven-input-devices.webp",
+      "size": 358968,
+      "sha256": "409face57c2d3759c76e25f50d98667b57187fa0de911537c3a69a00e90b2439",
+      "mime": "image/webp",
+      "kind": "media",
+      "media": {
+        "width": 828,
+        "height": 657,
+        "format": "WEBP"
+      }
+    },
+    {
+      "ref": "E0009",
+      "path": "sources/source-01/repo/assets/reverse-engineering/cisco_first_shh_meme.webp",
+      "path_base": "project",
+      "relative_path": "source-01/assets/reverse-engineering/cisco_first_shh_meme.webp",
+      "size": 659872,
+      "sha256": "60ff9265f464b98ecd0b6fccf58d987b3e84fdd7ad59d558e3d34f9f60be7e7b",
+      "mime": "image/webp",
+      "kind": "media",
+      "media": {
+        "width": 1254,
+        "height": 1254,
+        "format": "WEBP"
+      },
+      "ai_media": {
+        "category": "other",
+        "caption": "A cartoon drawing of a man with multiple sunglasses playing drums with the text '*BA DUM TSSS*' above.",
+        "visible_text": "*BA DUM TSSS*",
+        "evidence_value": "low",
+        "reasons": "The image is a stylized cartoon with no technical or documentary content. The text is a meme phrase, not relevant to technical explanation. No hardware, diagrams, or UI elements are present."
+      }
+    },
+    {
+      "ref": "E0010",
+      "path": "sources/source-01/repo/docs/installation.md",
+      "path_base": "project",
+      "relative_path": "source-01/docs/installation.md",
+      "size": 5172,
+      "sha256": "870fe5d0d6e546865439f06b9c0d9eac3ac40f64c2fee363c1be5475064797e4",
+      "mime": "text/markdown",
+      "kind": "document",
+      "line_start": 1,
+      "line_end": 158,
+      "excerpt": "# Installation and verified runtime\n\nThis document describes the physically verified Cisco CP-9951 DOOM v.666 installation path.\n\n## Verified configuration\n\n| Setting | Tested value |\n|---|---|\n| Phone | Cisco CP-9951 |\n| Firmware | `sip9951.9-2-1` |\n| Phone address | `10.1.1.2` |\n| Deployment host | `10.1.1.1` |\n| FTP port | `2121` |\n| Install root | `/mnt/flash2/doom-v666` |\n| Applications URL | `http://127.0.0.1:8095/launch` |\n\nThe two phone-side values are centralized in `config/doom.env`:\n\n```sh\nDOOM_ROOT=/mnt/flash2/doom-v666\nPHONE_IP=10.1.1.2\n```\n\nChange them before preparing the phone archive if your laboratory differs. The installer intentionally accepts only an installation root below `/mnt/flash2`.\n\n## Prepare on the deployment host\n\nThe tested provisioning file was:\n\n```text\n/home/nebu/cisco9951-tftp/SEPC40ACB4D05D0.cnf.xml\n```\n\nRun:\n\n```sh\ncd Cisco9951-doom\nhost/prepare-on-cthulhu.sh\n```\n\nThis validates the Doom executable, creates the FTP payloads, backs up the provisioning XML and replaces old Doom / Doom Beep entries with one local Doom entry.\n\nThe prepared files are:\n\n```text\n/tmp/cisco9951-ftp/Cisco9951-doom-phone.tar\n/tmp/cisco9951-ftp/install-Cisco9951-doom.sh\n```\n\nCustom paths may be supplied as positional arguments:\n\n```sh\nhost/prepare-on-cthulhu.sh DOOM_BINARY FTP_ROOT PROVISIONING_XML\n```\n\nServe the selected FTP root on the deployment host. For the physically tested setup:\n\n```sh\npython -m pyftpdlib -i 10.1.1.1 -p 2121 -w -d /tmp/cisco9951-ftp\n```\n\n## Install on the phone\n\nIn the CP-9951 shell:\n\n```sh\nbusybox ftpget -P 2121 -u anonymous -p cisco@ 10.1.1.1 \\\n  /tmp/install-Cisco9951-doom.sh install-Cisco9951-doom.sh\nchmod 0755 /tmp/install-Cisco9951-doom.sh\n/tmp/install-Cisco9951-doom.sh\n```\n\nSuccess ends with:\n\n```text\nCISCO9951-DOOM INSTALLED\n```\n\nReboot the phone once so its existing xinetd startup path loads `/usr/local/etc/doom-local`. Reload the phone configuration if the Applications menu has not yet picked up its new entry, then choose:\n\n**Applications → Doom**\n\n## Controls\n\nThe package preserves the physically verified Cisco keypad mapping in the ARM binary.\n\nNotable controls:\n\n- OK confirms menu choices.\n- `*` fires during the final SFX check.\n- the red handset button exits Doom cleanly.\n\nFor the complete measured event map, see [`keypad-reverse-engineering.md`](keypad-reverse-engineering.md).\n\n## Audio design\n\nDoom writes compact events to file descriptor 9. The launcher connects that descriptor to a phone-local FIFO. A small relay forwards those events to the local service on UDP port 8096. The service emits 8 kHz G.711 μ-law RTP to the Cisco RTPRx endpoint.\n\nCisco's existing xinetd owns loopback port 8095; the installed bridge starts the backend once on port 8097 and proxies the Applications request to it.\n\nThe CP-9951-specific physical fix is important: RTP packets are explicitly bound to source `127.0.0.1` and normally sent to the phone address configured as `PHONE_IP` on port 20480. During a cable-free cold boot that Ethernet route does not exist, so the service falls back to a loopback destination instead of exiting. Both routes were physically verified with audible Doom SFX.\n\nThe implementation does **not** load `libms`, use `LD_PRELOAD`, kill Cisco media processes or write raw data to `/dev/dsplink`.\n\n## Rollback\n\nPhone files are backed up before replacement. To restore them:\n\n```sh\n/mnt/flash2/doom-v666/bin/rollback-Cisco9951-doom.sh\n```\n\nTo restore the deployment host's provisioning XML:\n\n```sh\nhost/rollback-applications-entry.sh\n```\n\n## Persistent cold-boot trigger\n\nThe program, WAD and helpers are installed under the single configurable `DOOM_ROOT`. The installer also adds the isolated xinetd service `/usr/local/etc/doom-local` on the phone's persistent `/mnt/flash` filesystem. Its generated `server` path comes from the same `DOOM_ROOT`; there is no second install-root setting. Cisco's unmodified boot sequence loads that service.\n\nThe completed physical acceptance test was:\n\n1. disconnect LAN\n2. power-cycle the phone\n3. open **Applications**\n4. select **Doom**\n5. play with audible sound\n6. exit with the red handset button\n\nNo shell command or deployment host was involved after the cold boot.\n\n## Verification hashes\n\nPhysically verified payload hashes:\n\n```text\nDoom executable\n67cd221941e64b1d8182b9b69aea991f4f8cd62c0aa1d10266aa0b7d8e1dc9bb\n\nlocal service\n92f83e055691624ccf021f1a6c8639bb426d7d2a261f0ac077a92d11fc9f2ea7\n\nxinetd HTTP proxy\n34006fa495cc867c583ed4234d4d140dadb85318b13d053ee8ae14319f8836d5\n\nDoom sound relay\n6d2fbe16a0ea9189f9ce3f28dbf037d110a80fc182958a95da94c6864eec1dfb\n```\n\nRun `sha256sum -c MANIFEST.sha256` from the package root to verify every distributed file.\n\n## Licensing and warning\n\nThe package uses Freedoom Phase 2 as the redistributable IWAD and does not include Cisco firmware, proprietary Cisco libraries or a commercial Doom IWAD.\n\nSee the package license notices and source files for the applicable licenses. This is an experimental community project for privately owned hardware. It is not affiliated with or supported by Cisco. Use it at your own risk and keep backups of provisioning and phone-side files.",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0011",
+      "path": "sources/source-01/repo/docs/keypad-reverse-engineering.md",
+      "path_base": "project",
+      "relative_path": "source-01/docs/keypad-reverse-engineering.md",
+      "size": 6496,
+      "sha256": "ffba0d0beec56554268d780cf02479746f2f8bfaf2dc857e28dfb9f4e3559e2c",
+      "mime": "text/markdown",
+      "kind": "document",
+      "line_start": 1,
+      "line_end": 394,
+      "excerpt": "# Cisco CP-9951 — Local Keypad Input Reverse Engineering\n\n**Device:** Cisco Unified IP Phone CP-9951-CL-K9  \n**Firmware:** `sip9951.9-2-1`  \n**Kernel:** Linux `2.6.18_pro500`, ARMv6, MontaVista Linux  \n**Date:** 2026-09-13\n\n---\n\n**The CP-9951 exposes its physical keypad locally as Linux-style input events.**\n\nThe relevant character device is:\n\n```text\n/dev/input/keypad0\n```\n\nThe device is backed by Cisco kernel modules:\n\n```text\nkeyhandle 7684 1 - Live 0xbf03d000\nkeypad    6264 0 - Live 0xbf03a000\n```\n\nRelevant symbols from the running kernel include:\n\n```text\nkeypadClassDev_fop_poll\nkeypadClassDev_fop_fasync\nkeypadClassDev_fop_release\nkeypadClassDev_fop_open\nkeypadClassDev_disconnect\nkeypadClassDev_event\nkeypadClassDev_fop_read\nkeypadClassDev_connect\nkeypadClassDev_fop_ioctl\n\nravenKeypad_open\nravenKeypad_close\nravenKeypad_pressedKeyIntr\nravenKeypad_freeKeyIntr\n```\n\nThis establishes a clear path:\n\n```text\nphysical key\n    ↓\nRaven keypad hardware driver\n    ↓\nCisco keyhandle layer\n    ↓\n/dev/input/keypad0\n    ↓\nlocal userspace application\n```\n\nNo remote key forwarding is required.\n\n---\n\n## `keyhandle.ko`\n\nThe original module was copied read-only from the phone:\n\n```text\n/lib/modules/2.6.18_pro500/extra/keyhandle.ko\n```\n\nFile size:\n\n```text\n10276 bytes\n```\n\nOn Cthulhu:\n\n```text\nELF 32-bit LSB relocatable, ARM, EABI4 version 1 (SYSV), not stripped\n```\n\nThe fact that it is **not stripped** made the internal keypad implementation directly inspectable.\n\n---\n\n## Event format\n\nReverse engineering of:\n\n```text\nkeypadClassDev_event()\nkeypadClassDev_fop_read()\n```\n\nshowed that each event is exactly **16 bytes**.\n\nThe structure matches the 32-bit Linux `struct input_event` layout:\n\n```c\nstruct input_event_32 {\n    uint32_t tv_sec;\n    uint32_t tv_usec;\n    uint16_t type;\n    uint16_t code;\n    int32_t  value;\n};\n```\n\nByte layout:\n\n```text\n+0x00  tv_sec       4 bytes\n+0x04  tv_usec      4 bytes\n+0x08  type         2 bytes\n+0x0a  code         2 bytes\n+0x0c  value        4 bytes\n```\n\nObserved event semantics:\n\n```text\ntype = 0x0001  -> key event\ntype = 0x0000  -> SYN / synchronization event\n\nvalue = 1      -> key press\nvalue = 0      -> key release\n```\n\nExample for physical key `5`:\n\n```text\n... 01 00 06 02 01 00 00 00\n```\n\nDecoded:\n\n```text\ntype  = 0x0001\ncode  = 0x0206\nvalue = 1\n```\n\nRelease:\n\n```text\n... 01 00 06 02 00 00 00 00\n```\n\nDecoded:\n\n```text\ntype  = 0x0001\ncode  = 0x0206\nvalue = 0\n```\n\n---\n\n## Important read behavior\n\nA fresh open of `/dev/input/keypad0` initially returns one all-zero 16-byte slot:\n\n```text\n00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n```\n\nInspection of `keypadClassDev_fop_open()` showed that the per-client structure is allocated with:\n\n```text\nkmem_cache_zalloc()\n```\n\nThe event ring therefore starts zero-initialized.\n\nThe key event path advances the ring and then stores real events. This explains why one-shot reads initially appeared to return only zeros.\n\nKeeping the same open alive and reading multiple records exposes real key events normally.\n\n---\n\n## Ring buffer behavior\n\nThe Cisco key handler maintains a small per-client event ring.\n\nReverse engineering shows:\n\n```text\n16-byte records\n16 ring slots\nread() supports multiple complete records\npoll()\nfasync()\nwake-up support\n```\n\nThis is very suitable for a game input loop.\n\n---\n\n# Confirmed CP-9951 key map\n\nAll codes below were measured directly from the physical phone.\n\n## Numeric keypad\n\n| Physical key | Event code |\n|---|---:|\n| `0` | `0x0201` |\n| `1` | `0x0202` |\n| `2` | `0x0203` |\n| `3` | `0x0204` |\n| `4` | `0x0205` |\n| `5` | `0x0206` |\n| `6` | `0x0207` |\n| `7` | `0x0208` |\n| `8` | `0x0209` |\n| `9` | `0x020a` |\n| `*` | `0x020b` |\n| `#` | `0x020c` |\n\nThe numeric block is therefore a clean contiguous range:\n\n```text\n0x0201 .. 0x020c\n```\n\n---\n\n## Navigation cluster\n\n| Physical key | Event code |\n|---|---:|\n| Up | `0x0220` |\n| Center / OK | `0x0221` |\n| Down | `0x0222` |\n| Left | `0x0223` |\n| Right | `0x0224` |\n\nContiguous range:\n\n```text\n0x0220 .. 0x0224\n```\n\n---\n\n## Back and softkeys\n\n| Physical key | Event code |\n|---|---:|\n| Back | `0x020d` |\n| Softkey 1, leftmost | `0x020e` |\n| Softkey 2 | `0x020f` |\n| Softkey 3 | `0x0210` |\n| Softkey 4, rightmost | `0x0211` |\n\nThis continues directly after the numeric keypad:\n\n```text\n0x0201 .. 0x0211\n```\n\nwith `0x020d` as Back and `0x020e..0x0211` as the four display softkeys.\n\n---\n\n## Programmable line keys\n\nFive physical programmable buttons exist on the right side of the display.\n\n| Physical key | Event code |\n|---|---:|\n| Line key 1, top | `0x0218` |\n| Line key 2 | `0x0219` |\n| Line key 3 | `0x021a` |\n| Line key 4 | `0x021b` |\n| Line key 5, bottom | `0x021c` |\n\nContiguous range:\n\n```text\n0x0218 .. 0x021c\n```\n\n---\n\n## Volume\n\n| Physical key | Event code |\n|---|---:|\n| Volume + | `0x021e` |\n| Volume - | `0x021f` |\n\n---\n\n## Feature / audio buttons\n\n| Physical key | Event code |\n|---|---:|\n| Messages / envelope | `0x0225` |\n| Contacts / address book | `0x0226` |\n| Applications / gear | `0x0227` |\n| Headset | `0x0228` |\n| Speaker | `0x0229` |\n| Mute | `0x022a` |\n\nAgain, a clean contiguous range:\n\n```text\n0x0225 .. 0x022a\n```\n\n---\n\n# Consolidated map\n\n```text\n0x0201  0\n0x0202  1\n0x0203  2\n0x0204  3\n0x0205  4\n0x0206  5\n0x0207  6\n0x0208  7\n0x0209  8\n0x020a  9\n0x020b  *\n0x020c  #\n0x020d  Back\n0x020e  Softkey 1\n0x020f  Softkey 2\n0x0210  Softkey 3\n0x0211  Softkey 4\n\n0x0218  Line key 1\n0x0219  Line key 2\n0x021a  Line key 3\n0x021b  Line key 4\n0x021c  Line key 5\n\n0x021e  Volume +\n0x021f  Volume -\n\n0x0220  Up\n0x0221  OK / Center\n0x0222  Down\n0x0223  Left\n0x0224  Right\n0x0225  Messages\n0x0226  Contacts\n0x0227  Applications\n0x0228  Headset\n0x0229  Speaker\n0x022a  Mute\n```\n\n---\n\n# Example raw capture\n\nPhysical `5` press and release:\n\n```text\n00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n92 84 a6 6a 58 1c 01 00 01 00 06 02 01 00 00 00\n92 84 a6 6a 65 1c 01 00 00 00 00 00 00 00 00 00\n92 84 a6 6a 77 6a 02 00 01 00 06 02 00 00 00 00\n```\n\nDecoded:\n\n```text\ninitial zero slot\nEV_KEY  code=0x0206  value=1\nEV_SYN\nEV_KEY  code=0x0206  value=0\n```\n\nPhysical Up press and release:\n\n```text\nEV_KEY  code=0x0220  value=1\nEV_SYN\nEV_KEY  code=0x0220  value=0\n```\n\n---\n\n# Key technical conclusion\n\nThe Cisco CP-9951 does **not** require remote DTMF, SIP signaling, streamed controller input, or desktop-side key forwarding for game control.\n\nThe real physical keypad is exposed inside the phone through Cisco's Raven keypad driver and `keyhandle` module as Linux-style 16-byte input events.",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0013",
+      "path": "sources/source-01/repo/docs/project-history.md",
+      "path_base": "project",
+      "relative_path": "source-01/docs/project-history.md",
+      "size": 7373,
+      "sha256": "f915e18196c2f5a0730a0e958500e5fe6dfbb15e8f4c9c7901f1577723173a20",
+      "mime": "text/markdown",
+      "kind": "document",
+      "line_start": 1,
+      "line_end": 267,
+      "excerpt": "# Project history — from €35 office phone to DOOM v.666\n\n## Stage 1 — normal Cisco phone, then Werner\n\nThe experiment started with a used Cisco Unified IP Phone CP-9951 that cost about €35. The phone remained on its original Cisco firmware (`sip9951.9-2-1`) and was provisioned in the homelab with DHCP/TFTP and Asterisk.\n\nThe first deliberately unnecessary use was a media endpoint called **Werner** on extension `111`, proving that the phone could receive suitable H.264 video and PCMU audio.\n\nThe cat wallpaper was kept from the beginning. This turned out to be the correct priority.\n\n## Stage 2 — streamed DOOM on 666\n\nThe first DOOM implementation did **not** run on the Cisco itself. DOOM ran on the Linux workstation **Cthulhu** and the Cisco acted as a SIP/H.264 thin client.\n\nThe useful low-latency path became:\n\n```text\nDOOM / Sway\n  ↓\nwf-recorder\n  ↓\nv4l2loopback (/dev/video42)\n  ↓\nBaresip v4l2 / H.264 RTP\n  ↓\nAsterisk\n  ↓\nCisco CP-9951\n```\n\nAudio came from Cthulhu and was sent as PCMU over SIP/RTP.\n\nDialing `666` therefore showed the same live DOOM session to the phone; it did not create a new game instance per caller.\n\n## Stage 3 — the Cisco becomes the controller\n\nThe phone keypad was next used as a controller for the still-remote game.\n\nThe early path was:\n\n```text\nCisco keypad\n  ↓\nRFC4733 DTMF\n  ↓\nAsterisk AMI\n  ↓\nPython bridge\n  ↓\nLinux uinput\n  ↓\nDOOM on Cthulhu\n```\n\nAt this point the Cisco was both display and controller, but the game still executed elsewhere.\n\n## Stage 4 — the turning point: getting a shell on the phone\n\nUntil this point the CP-9951 was still, for practical purposes, a very unusual SIP/H.264 client.\n\nThen we found that Cisco had provided an official SSH diagnostic-access path for this generation of 89xx/99xx phones.\n\nThis was **not an exploit**, not a bootloader modification and not a modified firmware image.\n\nCthulhu was already supplying the phone's provisioning through DHCP/TFTP, so the existing provisioning path could be used:\n\n```text\nCthulhu\n  ↓\ndnsmasq / TFTP\n  ↓\nSEPC40ACB4D05D0.cnf.xml\n  ↓\nCisco CP-9951\n```\n\nBefore changing anything, the working provisioning file was backed up as:\n\n```text\nSEPC40ACB4D05D0.cnf.xml.pre-ssh\n```\n\nSSH credentials for the first authentication stage were then added through the SEP provisioning file. After the phone reloaded the configuration, TCP port 22 was actually reachable.\n\nThere was one more time-travel problem: the phone's SSH server is old enough that a current OpenSSH client on Cthulhu would not negotiate with it cleanly.\n\nThe practical solution was an appropriately old client:\n\n```text\nPuTTY 0.60 / plink\n```\n\nThe command that became the normal connection method was:\n\n```text\n/tmp/putty-0.60/unix/plink -ssh nebu@10.1.1.2\n```\n\nAfter that first SSH authentication, the phone presented a **second login**. On this Cisco generation, the outer SSH login and the internal Linux shell login are separate stages.\n\nUsing Cisco's internal `default` login and `cisco` password finally landed on the real Linux shell of the phone.\n\nAnd that was the moment the project changed completely:\n\n```text\nWelcome to MontaVista Linux Professional Edition Blackfoot\n```\n\nThe shell user was not root:\n\n```text\nuid=65533(default)\ngid=100(users)\n```\n\nBut it was more than sufficient to inspect the running system directly.\n\n`uname`, `/proc`, `/dev` and the available BusyBox tools revealed:\n\n- Linux `2.6.18_pro500`\n- ARMv6 / ARMv6TEJ\n- platform `raven`\n- roughly 244 MB RAM\n- Cisco Enhanced BusyBox 1.9.1\n- multiple framebuffer devices\n- local input devices\n- writable or otherwise useful runtime storage areas\n\nImportant local interfaces included:\n\n```text\n/dev/fb0\n/dev/fb1\n/dev/fb2\n/dev/fb3\n\n/dev/input/keypad0\n/dev/input/touchscreen0\n/dev/input/hookswitch0\n```\n\nThe phone was no longer merely a proprietary SIP appliance. It was an embedded ARM Linux computer that could be investigated directly.\n\nThe question changed from:\n\n> **How far can we abuse this Cisco phone as a display and controller?**\n\ninto:\n\n> **Wait. If this thing runs Linux on ARM... can we just run DOOM on the phone itself?**\n\nA few days later, the answer was yes. :D\n\n## Stage 5 — Raven keypad reverse engineering\n\nThe physical keypad path was reverse engineered from Cisco's local input stack.\n\nThe important result was:\n\n```text\nphysical key\n    ↓\nRaven keypad hardware driver\n    ↓\nCisco keyhandle layer\n    ↓\n/dev/input/keypad0\n    ↓\nlocal userspace application\n```\n\nThe events are 16-byte Linux-style input records. A complete useful key map was measured directly on the physical phone.\n\nThis removed the need for DTMF, SIP signaling or Cthulhu-side input forwarding for a native application.\n\nSee [`keypad-reverse-engineering.md`](keypad-reverse-engineering.md) for the full event format and measured key map.\n\n## Stage 6 — native DOOM\n\nDOOM was then built for the CP-9951's ARM CPU.\n\nThe final native backend:\n\n- executes directly on the phone CPU\n- renders locally through `/dev/fb1`\n- reads the real Cisco keypad locally\n- supports complete gameplay\n- uses OK for confirmations and menu interaction\n- exits cleanly with the red handset button\n\nAt this point the distinction became important:\n\n> **DOOM is no longer streamed from Cthulhu.**\n\n## Stage 7 — local sound\n\nSound was the difficult final runtime problem.\n\nThe completed implementation emits compact DOOM sound events and uses a small local relay/service path that produces 8 kHz G.711 μ-law RTP for the existing Cisco media system.\n\nThe implementation does not load a second private Cisco `libms` client, use `LD_PRELOAD`, kill Cisco media processes or blindly write raw audio to `/dev/dsplink`.\n\nA key physical fix binds RTP packets to source `127.0.0.1`. If a cold boot occurs without Ethernet, the service falls back to loopback instead of failing because the Ethernet route is absent.\n\nThis was physically verified with audible DOOM sound.\n\n## Stage 8 — persistence and Applications menu\n\nThe game, Freedoom IWAD and helpers were installed persistently under:\n\n```text\n/mnt/flash2/doom-v666\n```\n\nA local application entry launches DOOM through:\n\n```text\nApplications → Doom\n```\n\nusing the phone-local launch URL:\n\n```text\nhttp://127.0.0.1:8095/launch\n```\n\nThe existing Cisco xinetd startup path is used with an isolated persistent service. Installer and rollback paths are part of the package.\n\n## Final physical acceptance test — 15 September 2026\n\nThe decisive test was performed on the real CP-9951:\n\n- Ethernet cable disconnected\n- phone power-cycled from cold\n- no Cthulhu service available\n- no manually started shell service\n- **Applications → Doom** after boot\n- DOOM launches locally\n- framebuffer video works\n- physical Cisco controls work\n- sound is audible from the phone\n- the game is fully playable\n- the red handset button exits cleanly\n\nThe final answer therefore changed from:\n\n> \"Yes — as a near-realtime SIP/H.264 thin client.\"\n\ninto:\n\n> **Yes. The Cisco CP-9951 runs DOOM natively, locally, persistently and offline.**\n\n## Distribution\n\nThe final distribution is named:\n\n```text\nCisco9951-doom.doompkg\n```\n\nIt uses **Freedoom Phase 2** as the redistributable IWAD. Cisco firmware, proprietary Cisco libraries and commercial Doom IWADs are not distributed.\n\nThe public presentation name is:\n\n# Cisco CP-9951 DOOM v.666\n\nAnd the cat wallpaper stays.",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0016",
+      "path": "sources/source-02/web/page-000.html",
+      "path_base": "project",
+      "relative_path": "source-02/web/page-000.html",
+      "size": 24991,
+      "sha256": "8e61f0841cbce4f38dc938cb05b48d0bad6009e598458f3e86eb8ebfd32acea1",
+      "mime": "text/html",
+      "kind": "document",
+      "line_start": 26,
+      "line_end": 66,
+      "excerpt": "<h1>I BOUGHT A €35 CISCO PHONE.<br>NATURALLY, I PUT DOOM ON IT.</h1>\n<p class=\"hcl-subtitle\">It began with a cat wallpaper, Werner on extension 111 and streamed DOOM on 666. It ended with the Cisco itself running DOOM on its own ARM CPU — with local video, real keypad input, sound, persistence and an offline cold boot.</p>\n<div class=\"cisco-tags\"><span>CISCO CP-9951</span><span>DOOM v.666</span><span>ARMv6</span><span>MONTA VISTA LINUX</span><span>/dev/fb1</span><span>RAVEN KEYPAD</span><span>OFFLINE COLD BOOT</span></div>\n</header>\n<main class=\"museum-exhibit-layout hcl-layout\"><article class=\"hcl-field-story\">\n<section class=\"hcl-story-lesson\"><h2>Short version</h2><p>Can a Cisco CP-9951 run DOOM?</p><p><strong>Yes. Natively, locally, persistently and offline.</strong></p><p>The final v.666 build executes on the phone's ARM CPU, renders directly to <code>/dev/fb1</code>, reads the real Cisco keypad from <code>/dev/input/keypad0</code>, produces audible sound through the phone's local media path, survives reboot and launches from <strong>Applications → Doom</strong>.</p></section>\n<figure class=\"hcl-story-evidence\"><img src=\"https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/final/cisco_bigmac_background.webp\" alt=\"BigMac the cat as the wallpaper on the Cisco CP-9951\"><figcaption><strong>Image 1, obviously:</strong> the cat wallpaper. Before Werner, before DOOM and before the shell — the cat was there first. It stayed through v.666.</figcaption></figure>\n<section><h2>The actual chronology</h2><p>This project only makes sense as a story, because the answer to “is DOOM running on the Cisco?” changed several times. The first three stages still depended on Cthulhu. The decisive break came with the local shell; only after that did the runtime move onto the phone itself.</p><div class=\"cisco-timeline\"><p><span class=\"cisco-stage\">Prologue:</span> a €35 office phone arrives; the cat becomes the wallpaper.</p><p><span class=\"cisco-stage\">1 · Werner:</span> prove the stock phone can receive useful H.264 video and PCMU audio.</p><p><span class=\"cisco-stage\">2 · Streamed DOOM:</span> Cthulhu runs the game; the Cisco receives it on extension 666.</p><p><span class=\"cisco-stage\">3 · Cisco controller:</span> real phone keys → DTMF → Asterisk AMI → uinput → remote DOOM.</p><p><span class=\"cisco-stage\">4 · Shell:</span> Cisco's diagnostic SSH path gives us MontaVista Linux on the phone.</p><p><span class=\"cisco-stage\">5 · Raven hardware:</span> inspect the framebuffer and reverse engineer <code>/dev/input/keypad0</code>.</p><p><span class=\"cisco-stage\">6 · Native DOOM:</span> execute, render and read input directly on the Cisco.</p><p><span class=\"cisco-stage\">7 · Local sound:</span> make the phone's own media path produce game audio.</p><p><span class=\"cisco-stage\">8 · Persistence:</span> install under flash storage and launch from Applications → Doom.</p><p><span class=\"cisco-stage\">Final:</span> pull Ethernet, cold boot, launch and play completely offline.</p></div></section>\n<section><h2>Prologue — a €35 office phone arrives</h2><p>The experiment started with a used Cisco Unified IP Phone CP-9951. The original plan was simple reconnaissance: understand provisioning, SIP, video, the local hardware and whatever useful interfaces Cisco had left exposed.</p><p>The phone stayed on its normal Cisco firmware, <code>sip9951.9-2-1</code>. Cthulhu supplied DHCP/TFTP provisioning and Asterisk handled SIP. One engineering requirement was established immediately and never revisited: <strong>the cat background stays.</strong></p><p>At this point there was no native-DOOM plan. It was simply a very cheap enterprise phone that clearly had more computer inside it than a phone had any business having.</p></section>\n<section><h2>1 — Werner on 111</h2><p>The first deliberately unnecessary application was <strong>Werner</strong>. Before touching DOOM, we wanted a clean proof that the stock CP-9951 could be used as a real H.264/PCMU endpoint with the existing firmware.</p><p>Provisioning enabled the phone's H.264 receive path, Asterisk routed extension <strong>111</strong>, and Baresip delivered 640×480 H.264 video plus PCMU audio. Call 111 and Werner appeared on the office phone. Completely sensible use of enterprise telephony hardware.</p><pre>Cthulhu\n ↓ H.264 + PCMU\nAsterisk / Baresip\n ↓ extension 111\nCisco CP-9951\n ↓\nWerner</pre><div class=\"cisco-video\"><video controls preload=\"metadata\" playsinline><source src=\"/assets/home-computing-lab/field-notes/cisco-werner-111-web.mp4\" type=\"video/mp4\"></video></div><div class=\"cisco-callout\"><strong>Why I am laughing at this scene:</strong><p>Werner is cult in Germany — the comics and films are part of the cultural furniture here. If you have never met him: Werner is the character created by German cartoonist <a href=\"https://en.wikipedia.org/wiki/R%C3%B6tger_Feldmann\" target=\"_blank\" rel=\"noopener\">Rötger Feldmann (“Brösel”)</a>; this ice-race scene comes from <a href=\"https://de.wikipedia.org/wiki/Werner_%E2%80%93_Das_mu%C3%9F_kesseln%21%21%21\" target=\"_blank\" rel=\"noopener\"><em>Werner – Das muß kesseln!!!</em></a> (1996).</p><p>Nobelschröder has parked his car on a frozen lake. He gets out and immediately realizes how slippery it is: <strong>“Whoa, this is slippery.”</strong> Werner replies, <strong>“Can't you at least greet us properly?”</strong> Andi adds, <strong>“Come on, give us a proper bow.”</strong></p><p>Nobelschröder tries, slides away, does roughly half a somersault and lands on his head. Werner's dry conclusion: <strong>“He's wrecking all the ice with that wrecking ball of his.”</strong> That is what is playing on extension 111. :D</p></div><p>That mattered because it proved the stock phone could already be our screen and speaker. The next question was obvious only in retrospect: if Werner works, what happens on extension <strong>666</strong>?</p></section>\n<section><h2>2 — Live DOOM on 666: still running on Cthulhu</h2><p>The first DOOM success was <strong>not</strong> native. DOOM still ran on Cthulhu under Wayland/Sway and the Cisco received the live result as a video call.</p><pre>DOOM / Sway on Cthulhu\n ↓\nwf-recorder\n ↓\nv4l2loopback (/dev/video42)\n ↓\nBaresip / H.264 RTP\n ↓\nAsterisk\n ↓ extension 666\nCisco CP-9951</pre><div class=\"cisco-video\"><video controls preload=\"metadata\" playsinline><source src=\"/assets/home-computing-lab/field-notes/cisco-doom-666-web.mp4\" type=\"video/mp4\"></video></div><p>The first media path technically worked but buffered several seconds, which is fine for watching a clip and terrible for DOOM. Moving the live capture to <code>v4l2loopback</code> removed that multi-second delay and made the display close enough to realtime to become ridiculous in a much more useful way.</p><div class=\"cisco-callout\"><strong>Important:</strong><p>The Cisco was displaying DOOM and playing the call audio, but the game process was still on Cthulhu.</p></div></section>\n<section><h2>3 — Recording 03: the Cisco really controls DOOM</h2><p>Displaying DOOM on the phone was funny. Actually playing it with the phone was better. The last missing piece of the streamed phase was input.</p><p>The real number keys sent RFC4733 DTMF during the active call. Asterisk exposed those events over a localhost-only AMI connection, and a tiny Python bridge turned them into real Linux keyboard events through <code>/dev/uinput</code>.</p><pre>Cisco CP-9951 keypad\n ↓\nDTMF / RFC4733\n ↓\nAsterisk\n ↓\nAMI DTMF events\n ↓\nlocal Python bridge\n ↓\nLinux /dev/uinput\n ↓\nDOOM Retro on Cthulhu</pre><figure class=\"hcl-story-evidence\"><video controls preload=\"metadata\" playsinline><source src=\"/assets/home-computing-lab/field-notes/cisco-cp-9951-doom-controller-web.mp4\" type=\"video/mp4\"></video><figcaption><strong>Recording 03 — Cisco keypad as a DOOM controller.</strong> Movement, firing and opening doors are driven by the real number keys on the CP-9951.</figcaption></figure><pre>2 = forward       8 = backward\n4 = turn left     6 = turn right",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0017",
+      "path": "sources/source-02/web/page-000.html",
+      "path_base": "project",
+      "relative_path": "source-02/web/page-000.html",
+      "size": 24991,
+      "sha256": "8e61f0841cbce4f38dc938cb05b48d0bad6009e598458f3e86eb8ebfd32acea1",
+      "mime": "text/html",
+      "kind": "document",
+      "line_start": 59,
+      "line_end": 111,
+      "excerpt": "AMI DTMF events\n ↓\nlocal Python bridge\n ↓\nLinux /dev/uinput\n ↓\nDOOM Retro on Cthulhu</pre><figure class=\"hcl-story-evidence\"><video controls preload=\"metadata\" playsinline><source src=\"/assets/home-computing-lab/field-notes/cisco-cp-9951-doom-controller-web.mp4\" type=\"video/mp4\"></video><figcaption><strong>Recording 03 — Cisco keypad as a DOOM controller.</strong> Movement, firing and opening doors are driven by the real number keys on the CP-9951.</figcaption></figure><pre>2 = forward       8 = backward\n4 = turn left     6 = turn right\n5 = fire          0 = use / open</pre><p>The existing video/audio path stayed untouched; AMI remained local to Cthulhu.</p><div class=\"cisco-callout\"><strong>Chronology boundary:</strong><p>The Cisco was now both display and controller. <strong>DOOM was still not running on the phone.</strong> It was already ridiculous enough to stop here. We did not stop here.</p></div></section>\n<section><h2>4 — The turning point: getting into the real Linux shell</h2><p>This is where the project stopped being a clever SIP trick. Cisco provided a diagnostic SSH-access path for this 89xx/99xx generation, so we used the already-working provisioning chain instead of replacing firmware or touching the bootloader.</p><pre>Cthulhu\n ↓\ndnsmasq / TFTP\n ↓\nSEPC40ACB4D05D0.cnf.xml\n ↓\nCisco CP-9951</pre><p>The working SEP configuration was backed up first. SSH credentials were added through provisioning, and the phone exposed TCP port 22. The server is old enough that a period-compatible client was the practical answer:</p><pre>/tmp/putty-0.60/unix/plink -ssh nebu@10.1.1.2</pre><p>The first SSH authentication was only the outer diagnostic login. Then the phone presented a <strong>second login</strong> for the embedded system. On the tested <code>sip9951.9-2-1</code> firmware, Cisco's internal shell login was <code>default</code> / <code>cisco</code>.</p><div class=\"cisco-callout\"><strong>The highly scientific password-recovery process:</strong><p>Mentally I was already opening Google, expecting some forgotten 2011 service manual, a dead forum thread and a factory password that looked like <code>C1sc0!raven#diag$</code> or <code>2434!!$$5/b</code>. Better make an Ostfriesentee first.</p><p>Password? ... uh ... <code>cisco</code>?</p><p><strong>Enter.</strong></p><p>First try.</p><p>The phone, essentially: <strong>“Ja moin. Welcome to MontaVista(R) Linux(R) Professional Edition Blackfoot.”</strong></p><p>Okay. Let's go. :D</p></div><pre>Welcome to MontaVista Linux Professional Edition Blackfoot\n\nLinux 2.6.18_pro500\nARMv6 / ARMv6TEJ\nHardware: raven\nroughly 244 MB RAM\nCisco Enhanced BusyBox 1.9.1\n\nuid=65533(default)\ngid=100(users)</pre><div class=\"cisco-grid\"><figure class=\"hcl-story-evidence\"><img src=\"https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/reverse-engineering/01-first-shell.webp\" alt=\"First successful SSH shell on the Cisco CP-9951\"><figcaption>The first successful shell. From here the Cisco was an embedded Linux computer, not just a SIP endpoint.</figcaption></figure><figure class=\"hcl-story-evidence\"><img src=\"https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/reverse-engineering/cisco_first_shh_meme.webp\" alt=\"BA DUM TSSS meme after the first Cisco shell login\"><figcaption>A technically appropriate reaction to the first shell.</figcaption></figure></div><p>The question changed immediately from “how far can this phone act as a DOOM terminal?” to <strong>“if this thing is Linux on ARM, can we just run DOOM directly on it?”</strong></p></section>\n<section><h2>So what is actually inside this thing?</h2><p>The shell was not root, but it exposed a surprisingly normal embedded Linux computer: ARMv6, a 2.6.18-era MontaVista kernel, BusyBox, roughly 244 MB of RAM and hardware identified as <code>raven</code>.</p><p>More importantly, the interfaces we needed were already there:</p><pre>/dev/fb0\n/dev/fb1\n/dev/fb2\n/dev/fb3\n\n/dev/input/keypad0\n/dev/input/touchscreen0\n/dev/input/hookswitch0</pre><p>At that point the project had a completely different shape. No custom firmware was necessary. We had a framebuffer, real input devices and enough userspace to start treating the phone like the small ARM Linux computer it had been all along.</p></section>\n<section><h2>5 — Raven keypad and the local hardware path</h2><p>The physical keypad was measured directly. Kernel symbols and device behavior exposed the Raven keypad and Cisco keyhandle path:</p><pre>physical key\n ↓\nRaven keypad hardware driver\n ↓\nCisco keyhandle layer\n ↓\n/dev/input/keypad0\n ↓\nlocal userspace application</pre><p>The device produces 16-byte Linux-style input records. Navigation cluster, numeric pad, softkeys, line keys, volume keys and feature buttons were mapped on the real phone.</p><div class=\"cisco-grid\"><figure class=\"hcl-story-evidence\"><img src=\"https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/reverse-engineering/02-framebuffer-input-devices.webp\" alt=\"Cisco CP-9951 framebuffer and input devices\"><figcaption><code>/dev/fb1</code> became the local DOOM display target.</figcaption></figure><figure class=\"hcl-story-evidence\"><img src=\"https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/reverse-engineering/03-raven-input-devices.webp\" alt=\"Raven input devices on the Cisco CP-9951\"><figcaption>Raven Keypad, Raven Touchscreen and Raven Hookswitch.</figcaption></figure></div><p>This was the point where the DTMF controller became history: native play could read the real Cisco keypad directly, without SIP key forwarding or a desktop-side bridge.</p></section>\n<section><h2>6 — Native DOOM</h2><p>DOOM was then built for the CP-9951's ARM environment. The final local backend has no Cthulhu rendering, H.264 game stream or DTMF controller path:</p><pre>DOOM engine\n → executes on the Cisco ARM CPU\n → renders directly to /dev/fb1\n → reads /dev/input/keypad0\n → uses the physical Cisco controls\n → returns to the Cisco UI on exit</pre><p>The navigation cluster handles movement and menus, OK confirms, <code>*</code> fires, <code>#</code> uses/opens, and the red handset button exits cleanly.</p><div class=\"cisco-callout\"><strong>This is the actual port:</strong><p>From here on, the game loop, framebuffer rendering and keypad input all execute locally on the CP-9951 itself.</p></div></section>\n<section><h2>7 — Local sound: the last big runtime problem</h2><p>Video and input were local; sound was the last major runtime problem. The completed build emits compact sound events to a small phone-local relay/service which produces <strong>8 kHz G.711 μ-law RTP</strong> for the existing Cisco media system.</p><p>The physical fix for cable-free operation was to bind the RTP <strong>source</strong> to <code>127.0.0.1</code>. With Ethernet available the configured phone address can be the destination; without Ethernet the service can fall back to loopback instead of dying on a missing route. Audible DOOM sound was physically verified on the real phone.</p></section>\n<section><h2>8 — Persistence: Applications → Doom</h2><p>A native binary is nice. A phone that still needs a workstation and a shell command after every reboot is not finished.</p><p>The final installation lives persistently under:</p><pre>/mnt/flash2/doom-v666</pre><p>The normal Cisco Applications menu launches the phone-local endpoint:</p><pre>http://127.0.0.1:8095/launch</pre><p>An isolated persistent xinetd service uses Cisco's existing boot path. The game, Freedoom IWAD and helpers survive reboot; installer and rollback are part of the package. Normal use needs no manual shell command.</p></section>\n<section><h2>Final physical proof — 15 September 2026</h2><p>The acceptance test removed the last ambiguity. Ethernet was physically disconnected. The phone was power-cycled from cold. No Cthulhu service was available. No shell service was started manually.</p><p>After boot: <strong>Applications → Doom</strong>.</p><pre>disconnect Ethernet\nremove power\ncold boot from power only",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0018",
+      "path": "sources/source-02/web/page-000.html",
+      "path_base": "project",
+      "relative_path": "source-02/web/page-000.html",
+      "size": 24991,
+      "sha256": "8e61f0841cbce4f38dc938cb05b48d0bad6009e598458f3e86eb8ebfd32acea1",
+      "mime": "text/html",
+      "kind": "document",
+      "line_start": 104,
+      "line_end": 122,
+      "excerpt": " → reads /dev/input/keypad0\n → uses the physical Cisco controls\n → returns to the Cisco UI on exit</pre><p>The navigation cluster handles movement and menus, OK confirms, <code>*</code> fires, <code>#</code> uses/opens, and the red handset button exits cleanly.</p><div class=\"cisco-callout\"><strong>This is the actual port:</strong><p>From here on, the game loop, framebuffer rendering and keypad input all execute locally on the CP-9951 itself.</p></div></section>\n<section><h2>7 — Local sound: the last big runtime problem</h2><p>Video and input were local; sound was the last major runtime problem. The completed build emits compact sound events to a small phone-local relay/service which produces <strong>8 kHz G.711 μ-law RTP</strong> for the existing Cisco media system.</p><p>The physical fix for cable-free operation was to bind the RTP <strong>source</strong> to <code>127.0.0.1</code>. With Ethernet available the configured phone address can be the destination; without Ethernet the service can fall back to loopback instead of dying on a missing route. Audible DOOM sound was physically verified on the real phone.</p></section>\n<section><h2>8 — Persistence: Applications → Doom</h2><p>A native binary is nice. A phone that still needs a workstation and a shell command after every reboot is not finished.</p><p>The final installation lives persistently under:</p><pre>/mnt/flash2/doom-v666</pre><p>The normal Cisco Applications menu launches the phone-local endpoint:</p><pre>http://127.0.0.1:8095/launch</pre><p>An isolated persistent xinetd service uses Cisco's existing boot path. The game, Freedoom IWAD and helpers survive reboot; installer and rollback are part of the package. Normal use needs no manual shell command.</p></section>\n<section><h2>Final physical proof — 15 September 2026</h2><p>The acceptance test removed the last ambiguity. Ethernet was physically disconnected. The phone was power-cycled from cold. No Cthulhu service was available. No shell service was started manually.</p><p>After boot: <strong>Applications → Doom</strong>.</p><pre>disconnect Ethernet\nremove power\ncold boot from power only\nopen Applications\nselect Doom\nplay with the real Cisco keypad\nhear local sound\nexit with the red handset button</pre><figure class=\"hcl-story-evidence\"><img src=\"https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/final/cisco_ohne_lan.webp\" alt=\"Cisco CP-9951 during the final offline cold-boot proof with Ethernet disconnected\"><figcaption>The final offline proof: the network cable is not connected to the phone.</figcaption></figure><div class=\"cisco-youtube\" id=\"cisco-final-proof\" style=\"background-image:url('https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/final/cisco_bigmac_background.webp')\"><button type=\"button\" onclick=\"loadCiscoProof()\">▶ Load final v.666 proof video from YouTube</button></div><p><small>The player loads only after you press the button. Direct link: <a href=\"https://youtu.be/tVq-SPnCe9I\">Cisco CP-9951 runs DOOM natively — v.666 offline cold boot proof</a>.</small></p><div class=\"cisco-callout\"><strong>Final result:</strong><p><strong>The Cisco CP-9951 runs DOOM natively, locally, persistently and offline.</strong></p></div></section>\n<section><h2>v.666 — release and source</h2><div class=\"cisco-release\"><h3>Cisco CP-9951 DOOM v.666</h3><p>The public package is <code>Cisco9951-doom.doompkg</code> and uses <strong>Freedoom Phase 2</strong>. It contains no Cisco firmware, proprietary Cisco libraries or commercial DOOM IWAD.</p><pre>SHA-256\n2f0c29fa6213bf0cdb0a5cb9124d083c1ccff54ce4009730917c371d784d4dbd  Cisco9951-doom.doompkg</pre><div class=\"cisco-links\"><a href=\"https://github.com/dennishilk/cisco9951-doom/releases/tag/v.666\">Download v.666</a><a href=\"https://github.com/dennishilk/cisco9951-doom\">Source &amp; docs</a><a href=\"https://github.com/dennishilk/cisco9951-doom/blob/main/docs/keypad-reverse-engineering.md\">Measured key map</a><a href=\"https://github.com/dennishilk/cisco9951-doom/blob/main/docs/project-history.md\">Full technical chronology</a></div></div></section>\n<p><a class=\"hcl-archive-return\" href=\"/museum/home-computing-lab/field-notes/\">← RETURN TO FIELD NOTES &amp; ARTIFACTS</a></p>\n</article></main></div>\n<footer><div class=\"nebby-terminal-line\"><picture><source srcset=\"/assets/generated/images/nebby.webp\" type=\"image/webp\"><img src=\"/nebby.png\" class=\"nebby\" alt=\"Nebby mascot\"></picture><span class=\"coffee-text\">&gt; cisco-9951 --doom=v.666 --native --offline<span class=\"cursor\"></span></span></div><p class=\"footer-links\">© 2026 Dennis Hilk — <a href=\"/impressum.html\">Impressum</a> · <a href=\"/datenschutzerklaerung.html\">Datenschutz</a></p></footer>\n</div><script>function loadCiscoProof(){const box=document.getElementById('cisco-final-proof');if(!box)return;const iframe=document.createElement('iframe');iframe.src='https://www.youtube-nocookie.com/embed/tVq-SPnCe9I?autoplay=1';iframe.title='Cisco CP-9951 runs DOOM natively — v.666 offline cold boot proof';iframe.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';iframe.allowFullscreen=true;box.innerHTML='';box.appendChild(iframe);}function initCiscoImageLightbox(){const dialog=document.createElement('dialog');dialog.className='cisco-lightbox';dialog.setAttribute('aria-label','Expanded image');const full=document.createElement('img');dialog.appendChild(full);document.body.appendChild(dialog);document.querySelectorAll('.hcl-field-story img').forEach(img=>{img.tabIndex=0;img.setAttribute('role','button');img.setAttribute('aria-label',(img.alt||'Image')+' — click to enlarge');const open=()=>{full.src=img.currentSrc||img.src;full.alt=img.alt||'';dialog.showModal();};img.addEventListener('click',open);img.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});});dialog.addEventListener('click',()=>dialog.close());}document.addEventListener('DOMContentLoaded',initCiscoImageLightbox);</script></body></html>",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0019",
+      "path": "sources/source-02/web/page-000.txt",
+      "path_base": "project",
+      "relative_path": "source-02/web/page-000.txt",
+      "size": 12361,
+      "sha256": "6983caf2462c3ff7a5daaa19b2c7f22f03f13bcfc52f85196786479fcedad20e",
+      "mime": "text/plain",
+      "kind": "document",
+      "line_start": 1,
+      "line_end": 144,
+      "excerpt": "I Bought a €35 Cisco Phone. Naturally, I Put DOOM on It. – Field Note #007\nHome\nENGLISH\nDEUTSCH\n← FIELD NOTES & ARTIFACTS\nFIELD NOTE #007 · STARTED 12 SEP 2026 · FINALIZED 15 SEP 2026\nI BOUGHT A €35 CISCO PHONE.\nNATURALLY, I PUT DOOM ON IT.\nIt began with a cat wallpaper, Werner on extension 111 and streamed DOOM on 666. It ended with the Cisco itself running DOOM on its own ARM CPU — with local video, real keypad input, sound, persistence and an offline cold boot.\nCISCO CP-9951\nDOOM v.666\nARMv6\nMONTA VISTA LINUX\n/dev/fb1\nRAVEN KEYPAD\nOFFLINE COLD BOOT\nShort version\nCan a Cisco CP-9951 run DOOM?\nYes. Natively, locally, persistently and offline.\nThe final v.666 build executes on the phone's ARM CPU, renders directly to\n/dev/fb1\n, reads the real Cisco keypad from\n/dev/input/keypad0\n, produces audible sound through the phone's local media path, survives reboot and launches from\nApplications → Doom\n.\nImage 1, obviously:\nthe cat wallpaper. Before Werner, before DOOM and before the shell — the cat was there first. It stayed through v.666.\nThe actual chronology\nThis project only makes sense as a story, because the answer to “is DOOM running on the Cisco?” changed several times. The first three stages still depended on Cthulhu. The decisive break came with the local shell; only after that did the runtime move onto the phone itself.\nPrologue:\na €35 office phone arrives; the cat becomes the wallpaper.\n1 · Werner:\nprove the stock phone can receive useful H.264 video and PCMU audio.\n2 · Streamed DOOM:\nCthulhu runs the game; the Cisco receives it on extension 666.\n3 · Cisco controller:\nreal phone keys → DTMF → Asterisk AMI → uinput → remote DOOM.\n4 · Shell:\nCisco's diagnostic SSH path gives us MontaVista Linux on the phone.\n5 · Raven hardware:\ninspect the framebuffer and reverse engineer\n/dev/input/keypad0\n.\n6 · Native DOOM:\nexecute, render and read input directly on the Cisco.\n7 · Local sound:\nmake the phone's own media path produce game audio.\n8 · Persistence:\ninstall under flash storage and launch from Applications → Doom.\nFinal:\npull Ethernet, cold boot, launch and play completely offline.\nPrologue — a €35 office phone arrives\nThe experiment started with a used Cisco Unified IP Phone CP-9951. The original plan was simple reconnaissance: understand provisioning, SIP, video, the local hardware and whatever useful interfaces Cisco had left exposed.\nThe phone stayed on its normal Cisco firmware,\nsip9951.9-2-1\n. Cthulhu supplied DHCP/TFTP provisioning and Asterisk handled SIP. One engineering requirement was established immediately and never revisited:\nthe cat background stays.\nAt this point there was no native-DOOM plan. It was simply a very cheap enterprise phone that clearly had more computer inside it than a phone had any business having.\n1 — Werner on 111\nThe first deliberately unnecessary application was\nWerner\n. Before touching DOOM, we wanted a clean proof that the stock CP-9951 could be used as a real H.264/PCMU endpoint with the existing firmware.\nProvisioning enabled the phone's H.264 receive path, Asterisk routed extension\n111\n, and Baresip delivered 640×480 H.264 video plus PCMU audio. Call 111 and Werner appeared on the office phone. Completely sensible use of enterprise telephony hardware.\nCthulhu ↓ H.264 + PCMU Asterisk / Baresip ↓ extension 111 Cisco CP-9951 ↓ Werner\nWhy I am laughing at this scene:\nWerner is cult in Germany — the comics and films are part of the cultural furniture here. If you have never met him: Werner is the character created by German cartoonist\nRötger Feldmann (“Brösel”)\n; this ice-race scene comes from\nWerner – Das muß kesseln!!!\n(1996).\nNobelschröder has parked his car on a frozen lake. He gets out and immediately realizes how slippery it is:\n“Whoa, this is slippery.”\nWerner replies,\n“Can't you at least greet us properly?”\nAndi adds,\n“Come on, give us a proper bow.”\nNobelschröder tries, slides away, does roughly half a somersault and lands on his head. Werner's dry conclusion:\n“He's wrecking all the ice with that wrecking ball of his.”\nThat is what is playing on extension 111. :D\nThat mattered because it proved the stock phone could already be our screen and speaker. The next question was obvious only in retrospect: if Werner works, what happens on extension\n666\n?\n2 — Live DOOM on 666: still running on Cthulhu\nThe first DOOM success was\nnot\nnative. DOOM still ran on Cthulhu under Wayland/Sway and the Cisco received the live result as a video call.\nDOOM / Sway on Cthulhu ↓ wf-recorder ↓ v4l2loopback (/dev/video42) ↓ Baresip / H.264 RTP ↓ Asterisk ↓ extension 666 Cisco CP-9951\nThe first media path technically worked but buffered several seconds, which is fine for watching a clip and terrible for DOOM. Moving the live capture to\nv4l2loopback\nremoved that multi-second delay and made the display close enough to realtime to become ridiculous in a much more useful way.\nImportant:\nThe Cisco was displaying DOOM and playing the call audio, but the game process was still on Cthulhu.\n3 — Recording 03: the Cisco really controls DOOM\nDisplaying DOOM on the phone was funny. Actually playing it with the phone was better. The last missing piece of the streamed phase was input.\nThe real number keys sent RFC4733 DTMF during the active call. Asterisk exposed those events over a localhost-only AMI connection, and a tiny Python bridge turned them into real Linux keyboard events through\n/dev/uinput\n.\nCisco CP-9951 keypad ↓ DTMF / RFC4733 ↓ Asterisk ↓ AMI DTMF events ↓ local Python bridge ↓ Linux /dev/uinput ↓ DOOM Retro on Cthulhu\nRecording 03 — Cisco keypad as a DOOM controller.\nMovement, firing and opening doors are driven by the real number keys on the CP-9951.\n2 = forward 8 = backward 4 = turn left 6 = turn right 5 = fire 0 = use / open\nThe existing video/audio path stayed untouched; AMI remained local to Cthulhu.\nChronology boundary:\nThe Cisco was now both display and controller.\nDOOM was still not running on the phone.\nIt was already ridiculous enough to stop here. We did not stop here.\n4 — The turning point: getting into the real Linux shell\nThis is where the project stopped being a clever SIP trick. Cisco provided a diagnostic SSH-access path for this 89xx/99xx generation, so we used the already-working provisioning chain instead of replacing firmware or touching the bootloader.\nCthulhu ↓ dnsmasq / TFTP ↓ SEPC40ACB4D05D0.cnf.xml ↓ Cisco CP-9951\nThe working SEP configuration was backed up first. SSH credentials were added through provisioning, and the phone exposed TCP port 22. The server is old enough that a period-compatible client was the practical answer:\n/tmp/putty-0.60/unix/plink -ssh nebu@10.1.1.2\nThe first SSH authentication was only the outer diagnostic login. Then the phone presented a\nsecond login\nfor the embedded system. On the tested\nsip9951.9-2-1\nfirmware, Cisco's internal shell login was\ndefault\n/\ncisco\n.\nThe highly scientific password-recovery process:\nMentally I was already opening Google, expecting some forgotten 2011 service manual, a dead forum thread and a factory password that looked like\nC1sc0!raven#diag$\nor\n2434!!$$5/b\n. Better make an Ostfriesentee first.\nPassword? ... uh ...\ncisco\n?\nEnter.\nFirst try.\nThe phone, essentially:\n“Ja moin. Welcome to MontaVista(R) Linux(R) Professional Edition Blackfoot.”\nOkay. Let's go. :D\nWelcome to MontaVista Linux Professional Edition Blackfoot Linux 2.6.18_pro500 ARMv6 / ARMv6TEJ Hardware: raven roughly 244 MB RAM Cisco Enhanced BusyBox 1.9.1 uid=65533(default) gid=100(users)\nThe first successful shell. From here the Cisco was an embedded Linux computer, not just a SIP endpoint.\nA technically appropriate reaction to the first shell.\nThe question changed immediately from “how far can this phone act as a DOOM terminal?” to\n“if this thing is Linux on ARM, can we just run DOOM directly on it?”\nSo what is actually inside this thing?\nThe shell was not root, but it exposed a surprisingly normal embedded Linux computer: ARMv6, a 2.6.18-era MontaVista kernel, BusyBox, roughly 244 MB of RAM and hardware identified as",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0027",
+      "path": "sources/source-02/web/page-002.html",
+      "path_base": "project",
+      "relative_path": "source-02/web/page-002.html",
+      "size": 26272,
+      "sha256": "e98784f06d08fbc0b2908ffc66ee1964f8bd1ffde897d8e9f2b6ad86838621cb",
+      "mime": "text/html",
+      "kind": "document",
+      "line_start": 101,
+      "line_end": 122,
+      "excerpt": "<section><h2>6 — Natives DOOM</h2><p>DOOM wurde anschließend für die ARM-Umgebung des CP-9951 gebaut. Im finalen lokalen Laufzeitpfad gibt es kein Rendering auf Cthulhu, keinen H.264-Spielstream und keine DTMF-Steuerbrücke mehr:</p><pre>DOOM-Engine\n → läuft auf der Cisco-ARM-CPU\n → rendert direkt auf /dev/fb1\n → liest /dev/input/keypad0\n → nutzt die echten Cisco-Tasten\n → kehrt beim Beenden sauber zur Cisco-Oberfläche zurück</pre><p>Das Navigationskreuz steuert Bewegung und Menüs, OK bestätigt, <code>*</code> feuert, <code>#</code> benutzt/öffnet, und die rote Hörertaste beendet DOOM sauber.</p><div class=\"cisco-callout\"><strong>Das ist der eigentliche Port:</strong><p>Ab hier laufen Spielschleife, Framebuffer-Ausgabe und Tastenabfrage wirklich lokal auf dem CP-9951.</p></div></section>\n<section><h2>7 — Lokaler Sound: das letzte große Laufzeitproblem</h2><p>Bild und Eingabe waren lokal; Sound war das letzte große Laufzeitproblem. Der fertige Build sendet kompakte Soundereignisse an einen kleinen lokalen Relay-/Servicepfad, der <strong>8-kHz-G.711-μ-law-RTP</strong> für das vorhandene Cisco-Mediensystem erzeugt.</p><p>Der entscheidende physische Fix für den Betrieb ohne Netzwerkkabel war, die RTP-<strong>Quelle</strong> an <code>127.0.0.1</code> zu binden. Mit Ethernet kann die konfigurierte Telefonadresse Ziel sein; ohne Ethernet fällt der Dienst auf Loopback zurück, statt an einer fehlenden Route zu sterben. Hörbarer DOOM-Sound wurde am echten Telefon bestätigt.</p></section>\n<section><h2>8 — Persistenz: Applications → Doom</h2><p>Ein natives Binary ist nett. Ein Telefon, das nach jedem Neustart erst wieder einen Rechner und einen Shell-Befehl braucht, ist aber noch nicht fertig.</p><p>Die finale Installation liegt persistent unter:</p><pre>/mnt/flash2/doom-v666</pre><p>Das normale Cisco-Applications-Menü startet den lokalen Endpunkt:</p><pre>http://127.0.0.1:8095/launch</pre><p>Ein isolierter persistenter xinetd-Dienst nutzt Ciscos vorhandenen Bootpfad. Spiel, Freedoom-IWAD und Hilfsprogramme überleben Neustarts; Installer und Rollback gehören zum Paket. Für den normalen Betrieb ist kein manueller Shell-Befehl mehr nötig.</p></section>\n<section><h2>Finaler physischer Beweis — 15. September 2026</h2><p>Der Abnahmetest nahm die letzte Unklarheit weg. Ethernet wurde physisch abgezogen. Das Telefon wurde komplett stromlos gemacht und kalt gestartet. Kein Cthulhu-Dienst war verfügbar. Kein Shell-Dienst wurde manuell gestartet.</p><p>Nach dem Boot: <strong>Applications → Doom</strong>.</p><pre>Ethernet abziehen\nStrom trennen\nKaltstart nur mit Strom\nApplications öffnen\nDoom auswählen\nmit den echten Cisco-Tasten spielen\nlokalen Sound hören\nmit der roten Hörertaste sauber beenden</pre><figure class=\"hcl-story-evidence\"><img src=\"https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/final/cisco_ohne_lan.webp\" alt=\"Cisco CP-9951 beim finalen Offline-Kaltstart mit abgezogenem Ethernet\"><figcaption>Der finale Offline-Beweis: Das Netzwerkkabel steckt nicht im Telefon.</figcaption></figure><div class=\"cisco-youtube\" id=\"cisco-final-proof\" style=\"background-image:url('https://raw.githubusercontent.com/dennishilk/cisco9951-doom/main/assets/final/cisco_bigmac_background.webp')\"><button type=\"button\" onclick=\"loadCiscoProof()\">▶ Finales v.666-Beweisvideo von YouTube laden</button></div><p><small>Der Player wird erst nach einem Klick geladen. Direktlink: <a href=\"https://youtu.be/tVq-SPnCe9I\">Cisco CP-9951 runs DOOM natively — v.666 offline cold boot proof</a>.</small></p><div class=\"cisco-callout\"><strong>Endergebnis:</strong><p><strong>Das Cisco CP-9951 führt DOOM nativ, lokal, persistent und offline aus.</strong></p></div></section>\n<section><h2>v.666 — Release und Quellcode</h2><div class=\"cisco-release\"><h3>Cisco CP-9951 DOOM v.666</h3><p>Das öffentliche Paket heißt <code>Cisco9951-doom.doompkg</code> und verwendet <strong>Freedoom Phase 2</strong>. Es enthält weder Cisco-Firmware noch proprietäre Cisco-Bibliotheken oder kommerzielle DOOM-IWADs.</p><pre>SHA-256\n2f0c29fa6213bf0cdb0a5cb9124d083c1ccff54ce4009730917c371d784d4dbd  Cisco9951-doom.doompkg</pre><div class=\"cisco-links\"><a href=\"https://github.com/dennishilk/cisco9951-doom/releases/tag/v.666\">v.666 herunterladen</a><a href=\"https://github.com/dennishilk/cisco9951-doom\">Quellcode &amp; Doku</a><a href=\"https://github.com/dennishilk/cisco9951-doom/blob/main/docs/keypad-reverse-engineering.md\">Vermessene Tastenbelegung</a><a href=\"https://github.com/dennishilk/cisco9951-doom/blob/main/docs/project-history.md\">Vollständige technische Chronologie</a></div></div></section>\n<p><a class=\"hcl-archive-return\" href=\"/museum/home-computing-lab/field-notes/\">← ZURÜCK ZU FIELD NOTES &amp; ARTIFACTS</a></p>\n</article></main></div>\n<footer><div class=\"nebby-terminal-line\"><picture><source srcset=\"/assets/generated/images/nebby.webp\" type=\"image/webp\"><img src=\"/nebby.png\" class=\"nebby\" alt=\"Nebby-Maskottchen\"></picture><span class=\"coffee-text\">&gt; cisco-9951 --doom=v.666 --native --offline<span class=\"cursor\"></span></span></div><p class=\"footer-links\">© 2026 Dennis Hilk — <a href=\"/impressum.html\">Impressum</a> · <a href=\"/datenschutzerklaerung.html\">Datenschutz</a></p></footer>\n</div><script>function loadCiscoProof(){const box=document.getElementById('cisco-final-proof');if(!box)return;const iframe=document.createElement('iframe');iframe.src='https://www.youtube-nocookie.com/embed/tVq-SPnCe9I?autoplay=1';iframe.title='Cisco CP-9951 führt DOOM nativ aus — v.666 Offline-Kaltstart';iframe.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';iframe.allowFullscreen=true;box.innerHTML='';box.appendChild(iframe);}function initCiscoImageLightbox(){const dialog=document.createElement('dialog');dialog.className='cisco-lightbox';dialog.setAttribute('aria-label','Vergrößertes Bild');const full=document.createElement('img');dialog.appendChild(full);document.body.appendChild(dialog);document.querySelectorAll('.hcl-field-story img').forEach(img=>{img.tabIndex=0;img.setAttribute('role','button');img.setAttribute('aria-label',(img.alt||'Bild')+' — zum Vergrößern anklicken');const open=()=>{full.src=img.currentSrc||img.src;full.alt=img.alt||'';dialog.showModal();};img.addEventListener('click',open);img.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});});dialog.addEventListener('click',()=>dialog.close());}document.addEventListener('DOMContentLoaded',initCiscoImageLightbox);</script></body></html>",
+      "truncated_file": false
+    },
+    {
+      "ref": "E0101",
+      "path": "sources/source-02/web-media/cisco-cp-9951-doom-controller-web.mp4",
+      "path_base": "project",
+      "relative_path": "source-02/web-media/cisco-cp-9951-doom-controller-web.mp4",
+      "size": 14081367,
+      "sha256": "a91508964f480bb373ab3eef098722c3a576f7013479b770e7577453f41fb5ea",
+      "mime": "video/mp4",
+      "kind": "media",
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 960,
+            "height": 540
+          },
+          {
+            "codec_name": "aac"
+          }
+        ],
+        "format": {
+          "duration": "105.766016"
+        }
+      },
+      "ai_media": {
+        "category": "hardware evidence",
+        "caption": "Close-up of a Cisco IP phone displaying a video call interface.",
+        "visible_text": "CISCO",
+        "evidence_value": "medium",
+        "reasons": "The image shows a Cisco IP phone, which is a specific piece of hardware. The screen displays a video call interface, suggesting the device is in use for video conferencing. The visible text 'CISCO' confirms the brand. This provides contextual evidence of a communication system in operation, but the image is blurry and lacks detailed technical specifications or clear documentation of system configuration."
+      }
+    },
+    {
+      "ref": "E0102",
+      "path": "sources/source-02/web-media/cisco-doom-666-web.mp4",
+      "path_base": "project",
+      "relative_path": "source-02/web-media/cisco-doom-666-web.mp4",
+      "size": 9287848,
+      "sha256": "ae20d8c9945bed8e602b72f11fe6cfc27c66fd24e727aa7e50ea4eb41be01806",
+      "mime": "video/mp4",
+      "kind": "media",
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1280,
+            "height": 720
+          },
+          {
+            "codec_name": "aac"
+          }
+        ],
+        "format": {
+          "duration": "33.933333"
+        }
+      },
+      "ai_media": {
+        "category": "UI",
+        "caption": "Cisco IP phone displaying a video call with a sleeping cat.",
+        "visible_text": "CISCO, 12.09.2026 17:42 | 100, Lab 100, Werner, DOOM, New Call",
+        "evidence_value": "medium",
+        "reasons": "The UI shows a Cisco device in use with a video call interface, including a timestamp and participant names. The presence of 'DOOM' as a participant is unusual and may indicate a humorous or non-standard use case, which could be useful for storytelling. The device model and interface are clearly visible, supporting technical context."
+      }
+    },
+    {
+      "ref": "E0105",
+      "path": "sources/source-02/web-media/cisco-werner-111-web.mp4",
+      "path_base": "project",
+      "relative_path": "source-02/web-media/cisco-werner-111-web.mp4",
+      "size": 4330572,
+      "sha256": "30cd8b8907de4e6d189c5f599de3cfc7175384215b1f5f04fea409c321236adf",
+      "mime": "video/mp4",
+      "kind": "media",
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1280,
+            "height": 720
+          },
+          {
+            "codec_name": "aac"
+          }
+        ],
+        "format": {
+          "duration": "18.400000"
+        }
+      }
+    },
+    {
+      "ref": "E0132",
+      "path": "sources/source-02/web-media/cisco-final-v666-proof.mp4",
+      "path_base": "project",
+      "relative_path": "source-02/web-media/cisco-final-v666-proof.mp4",
+      "size": 38307995,
+      "sha256": "680e97f814ffb1bba97b1ea87943a63438c9f196d4ffb9d7be03eb0ff3508c33",
+      "mime": "video/mp4",
+      "kind": "media",
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "av1",
+            "width": 1920,
+            "height": 1080
+          },
+          {
+            "codec_name": "aac"
+          }
+        ],
+        "format": {
+          "duration": "167.624853"
+        }
+      },
+      "source_url": "https://youtu.be/tVq-SPnCe9I",
+      "provenance": "Downloaded with yt-dlp from the final proof video linked by the supplied Field Note",
+      "ai_media": {
+        "category": "final proof video",
+        "caption": "Final Cisco CP-9951 v.666 proof video. Sampled frames visibly show Cisco boot, Applications with a Doom entry, first-person gameplay on the phone display, and return to the Applications interface.",
+        "visible_text": "Cisco boot branding; Applications; Doom; gameplay HUD",
+        "evidence_value": "high",
+        "reasons": [
+          "35s visibly shows the Cisco boot screen",
+          "70s visibly shows the Applications menu with a Doom entry",
+          "105s and 140s visibly show first-person gameplay on the Cisco phone display",
+          "160s visibly shows the Applications interface again",
+          "native/offline/runtime claims must be grounded by accompanying documentary evidence, not inferred from frames alone"
+        ],
+        "inspection_manifest": "manifests/e0132-visual-inspection.json"
+      }
+    }
+  ]
+}

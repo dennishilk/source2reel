@@ -1,0 +1,85 @@
+{
+  "facts": [
+    {
+      "claim": "The Cisco CP-9951 phone runs DOOM v.666 natively, locally, persistently, and offline using its ARMv6 CPU.",
+      "evidence_refs": [
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "DOOM renders directly to /dev/fb1 and reads input from /dev/input/keypad0 using the physical Cisco keypad.",
+      "evidence_refs": [
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Sound is handled via 8 kHz G.711 μ-law RTP, relayed locally to the Cisco media system with fallback to loopback for cable-free operation.",
+      "evidence_refs": [
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The installation persists under /mnt/flash2/doom-v666 and is launched via http://127.0.0.1:8095/launch through Cisco’s Applications menu.",
+      "evidence_refs": [
+        "E0017",
+        "E0018",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project began with a €35 Cisco Unified IP Phone CP-9951 running stock firmware sip9951.9-2-1, with SSH access via 'default'/'cisco' credentials.",
+      "evidence_refs": [
+        "E0017",
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The embedded Linux system is MontaVista Linux Professional Edition Blackfoot, ARMv6, kernel 2.6.18_pro500, with 244 MB RAM and BusyBox 1.9.1.",
+      "evidence_refs": [
+        "E0017",
+        "E0019"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project transitioned from SIP-based DTMF control to a native DOOM port running directly on the phone’s ARM CPU, with physical keypad mapped to controls.",
+      "evidence_refs": [
+        "E0017",
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final proof test on 15 September 2026 confirmed cold boot, offline operation, and persistent launch via Applications → Doom without Ethernet or shell access.",
+      "evidence_refs": [
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    }
+  ]
+}

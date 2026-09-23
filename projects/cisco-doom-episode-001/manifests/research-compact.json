@@ -1,0 +1,136 @@
+{
+  "facts": [
+    {
+      "claim": "The Cisco CP-9951 runs DOOM v.666 natively on its ARMv6 CPU using MontaVista Linux 2.6.18_pro500, rendering to `/dev/fb1` and using `/dev/input/keypad0` for input.",
+      "evidence_refs": [
+        "E0001",
+        "E0011",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The game is persistently installed at `/mnt/flash2/doom-v666` and launched via the Applications menu using http://127.0.0.1:8095/launch.",
+      "evidence_refs": [
+        "E0001",
+        "E0010",
+        "E0013",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Sound is produced locally via 8 kHz G.711 μ-law RTP, relayed to the phone’s media system with fallback to loopback for offline operation.",
+      "evidence_refs": [
+        "E0001",
+        "E0010",
+        "E0013",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project began as a streamed DOOM experience on Cthulhu, evolved to SSH access, and was reverse-engineered to run natively on the phone.",
+      "evidence_refs": [
+        "E0001",
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone runs MontaVista Linux Professional Edition Blackfoot (Linux 2.6.18_pro500) on ARMv6 with 244 MB RAM and accessible framebuffers.",
+      "evidence_refs": [
+        "E0013",
+        "E0016",
+        "E0017",
+        "E0019"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project progressed through 8 stages: from H.264/PCMU streaming to native DOOM with local input, sound, persistence, and offline cold boot.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 5 reverse-engineered the physical keypad via `/dev/input/keypad0`, enabling native input without DTMF or SIP signaling.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 6 compiled DOOM for ARMv6, rendering to `/dev/fb1` and using real keypad input, with OK for confirmations and red handset button for exit.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 7 routed game audio through the phone’s local media path, emitting compact DOOM sound events and relaying 8 kHz G.711 μ-law RTP via a local service with fallback to loopback on cold boot.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 8 installed DOOM under `/mnt/flash2/doom-v666`, with a persistent 'Applications → Doom' menu launching via http://127.0.0.1:8095/launch using xinetd.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final v.666 build runs DOOM natively on the phone’s ARMv6 CPU, renders to `/dev/fb1`, reads input from `/dev/input/keypad0`, produces local audio, survives reboot, and launches from Applications → Doom.",
+      "evidence_refs": [
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final offline cold-boot proof was confirmed on 15 September 2026, with no Ethernet or shell access required.",
+      "evidence_refs": [
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    }
+  ]
+}

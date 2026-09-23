@@ -1,0 +1,75 @@
+{
+  "facts": [
+    {
+      "claim": "The Cisco CP-9951, running stock firmware sip9951.9-2-1, was acquired for €35 and used as a platform to run DOOM natively, locally, persistently, and offline.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project progressed through 8 stages: from initial H.264/PCMU video/audio reception (Werner on extension 111) to native DOOM execution with local input, sound, persistence, and offline cold boot.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 4 enabled SSH access via Cisco’s diagnostic path, revealing the phone runs MontaVista Linux Professional Edition Blackfoot (Linux 2.6.18_pro500) on ARMv6 with 244 MB RAM and accessible framebuffer devices.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 5 reverse-engineered the physical keypad via /dev/input/keypad0, enabling native input without DTMF or SIP signaling.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 6 compiled DOOM for the ARMv6 CPU, rendering to /dev/fb1 and using real keypad input, with OK for confirmations and red handset button for exit.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 7 routed game audio through the phone’s local media path, emitting compact DOOM sound events and relaying 8 kHz G.711 μ-law RTP via a local service with fallback to loopback on cold boot.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Stage 8 installed DOOM under /mnt/flash2/doom-v666, with a persistent 'Applications → Doom' menu launching via http://127.0.0.1:8095/launch using xinetd.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "The final v.666 build runs DOOM natively on the phone’s ARMv6 CPU, renders to /dev/fb1, reads input from /dev/input/keypad0, produces local audio, survives reboot, and launches from Applications → Doom.",
+      "evidence_refs": [
+        "E0016"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    }
+  ]
+}

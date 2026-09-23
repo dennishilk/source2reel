@@ -1,0 +1,198 @@
+{
+  "title": "I Made a €35 Cisco Office Phone Run DOOM — Here’s How",
+  "summary": "This project transformed a €35 Cisco CP-9951 IP phone from a networked thin client into a self-contained DOOM v.666 machine. Starting with streamed video over H.264/PCMU, it evolved through SSH access, reverse-engineered input, native ARMv6 compilation, local audio routing, and persistent installation — culminating in offline cold-boot gameplay with real keypad input and local sound.",
+  "scenes": [
+    {
+      "id": "s001",
+      "type": "HERO",
+      "title": "Cisco CP-9951 — DOOM v.666 Running Locally",
+      "narration": "This is a Cisco office phone. And yes, it really runs DOOM. The final build executes on the phone’s own ARMv6 CPU, draws directly to /dev/fb1, reads the physical keypad, produces local sound, survives reboot, and works without Ethernet. But none of that was true at the beginning.",
+      "evidence_refs": [
+        "E0001",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027",
+        "E0132"
+      ],
+      "asset_ref": "E0132",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": "Use E0132 gameplay footage around 105-140 seconds for the opening proof. No zoom or aggressive crop."
+    },
+    {
+      "id": "s002",
+      "type": "PROJECT_EVIDENCE",
+      "title": "Werner’s Early Media Proof",
+      "narration": "The first useful experiment had nothing to do with native DOOM. We used the stock phone as an H.264 and PCMU media endpoint. Call extension 111, and Werner appeared on the display. Silly as it was, that proved the old phone could receive usable video and audio.",
+      "evidence_refs": [
+        "E0105"
+      ],
+      "asset_ref": "E0105",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s003",
+      "type": "PROJECT_EVIDENCE",
+      "title": "DOOM on Cthulhu — Not Native",
+      "narration": "Then came DOOM — still on Cthulhu. The workstation ran the game, captured it, encoded it, and sent H.264 and PCMU through Baresip and Asterisk to extension 666. The Cisco was only the screen. DOOM was not running on the phone yet.",
+      "evidence_refs": [
+        "E0102"
+      ],
+      "asset_ref": "E0102",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s004",
+      "type": "PROJECT_EVIDENCE",
+      "title": "Remote Controller via RFC4733",
+      "narration": "Next, the phone became the controller too. Key presses traveled as RFC4733 DTMF into Asterisk AMI, through a Python bridge, into Linux uinput, and finally into DOOM on Cthulhu. Display and controls were now on the Cisco, but the game still executed somewhere else.",
+      "evidence_refs": [
+        "E0101"
+      ],
+      "asset_ref": "E0101",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s005",
+      "type": "TERMINAL_EVIDENCE",
+      "title": "SSH Access — The Turning Point",
+      "narration": "The turning point was Cisco’s diagnostic SSH path. Using the existing provisioning setup, we reached the phone’s embedded MontaVista Linux shell. It was ARMv6, running kernel 2.6.18_pro500, with roughly 244 megabytes of RAM. Suddenly this stopped looking like a telephone and started looking like a small Linux computer.",
+      "evidence_refs": [
+        "E0005"
+      ],
+      "asset_ref": "E0005",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s006",
+      "type": "TERMINAL_EVIDENCE",
+      "title": "Framebuffer and Input Discovery",
+      "narration": "From the shell, /dev exposed the hardware we needed: multiple framebuffers and input devices. /dev/fb1 became the display target, and /dev/input/keypad0 exposed the physical keypad. That gave us a direct path to both pixels and buttons.",
+      "evidence_refs": [
+        "E0006"
+      ],
+      "asset_ref": "E0006",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s007",
+      "type": "PROJECT_EVIDENCE",
+      "title": "Keypad Reverse-Engineered Locally",
+      "narration": "The keypad still had to be understood. Cisco’s Raven input stack delivered 16-byte Linux-style input records, so we mapped the real key codes and used the device as a local input source. From this point on, native controls no longer needed SIP, DTMF, or the workstation.",
+      "evidence_refs": [
+        "E0007"
+      ],
+      "asset_ref": "E0007",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s008",
+      "type": "PROJECT_EVIDENCE",
+      "title": "First Native DOOM Execution",
+      "narration": "Then DOOM moved onto the phone itself. We compiled the engine for ARMv6, rendered directly to /dev/fb1, and read /dev/input/keypad0 inside the game loop. The framebuffer and keypad were now local. One major piece was still missing: sound.",
+      "evidence_refs": [
+        "E0013",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027",
+        "E0132"
+      ],
+      "asset_ref": "E0132",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": "E0132 is final-build footage used to illustrate visible native gameplay; do not imply this footage was recorded at the first-native milestone."
+    },
+    {
+      "id": "s009",
+      "type": "DATA_FLOW",
+      "title": "Local Audio Architecture",
+      "narration": "Sound turned out to be the last big runtime problem. The game emitted compact sound events into a phone-local relay, which generated 8-kilohertz G.711 mu-law RTP for Cisco’s existing media system. A loopback-capable path meant the audio service could also survive a cable-free boot.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "asset_ref": null,
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s010",
+      "type": "DATA_FLOW",
+      "title": "Persistence and Launch Path",
+      "narration": "Now it had to survive a reboot. The final installation lived under /mnt/flash2/doom-v666. A local xinetd-backed launch path exposed http://127.0.0.1:8095/launch, so the normal Applications menu could start DOOM without a manual shell command.",
+      "evidence_refs": [
+        "E0013",
+        "E0016"
+      ],
+      "asset_ref": null,
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    },
+    {
+      "id": "s011",
+      "type": "PROJECT_EVIDENCE",
+      "title": "Final Offline Cold Boot Proof",
+      "narration": "Then came the test that mattered. Pull Ethernet. Remove power. Cold boot the phone. Open Applications. Select Doom. The phone launched the game, accepted the real keypad, produced local sound, and returned cleanly to Cisco’s interface afterward. No Cthulhu service or manual shell launch was required for normal operation.",
+      "evidence_refs": [
+        "E0004",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027",
+        "E0132"
+      ],
+      "asset_ref": "E0132",
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": "Use the E0132 proof sequence: Cisco boot around 35s, Doom entry around 70s, gameplay around 105-140s, and return to Applications around 160s. No zoom or aggressive crop."
+    },
+    {
+      "id": "s012",
+      "type": "OUTRO",
+      "title": "From Thin Client to Self-Contained DOOM Machine",
+      "narration": "What began as a €35 thin client for a ridiculous streaming experiment ended as a self-contained DOOM machine: ARMv6 execution, framebuffer video, physical keypad input, local sound, persistent storage, and an offline cold boot. Same Cisco phone. Very different job.",
+      "evidence_refs": [
+        "E0001",
+        "E0016",
+        "E0017",
+        "E0018",
+        "E0019",
+        "E0027"
+      ],
+      "annotations": [],
+      "pad_after_seconds": 0.5,
+      "diagram": {},
+      "notes": ""
+    }
+  ],
+  "version": 1
+}

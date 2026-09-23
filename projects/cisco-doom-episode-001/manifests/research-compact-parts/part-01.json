@@ -1,0 +1,74 @@
+{
+  "facts": [
+    {
+      "claim": "The Cisco CP-9951 runs DOOM natively on its ARMv6 CPU using MontaVista Linux 2.6.18_pro500, rendering to `/dev/fb1` and using `/dev/input/keypad0` for input.",
+      "evidence_refs": [
+        "E0001",
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The game is launched via the Applications menu, uses Freedoom Phase 2 as IWAD, and is persistently installed at `/mnt/flash2/doom-v666`.",
+      "evidence_refs": [
+        "E0001",
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "Sound is produced locally via an 8 kHz G.711 µ-law RTP path bound to `127.0.0.1`, using a FIFO from FD 9 to UDP port 8096.",
+      "evidence_refs": [
+        "E0001",
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The red handset button exits DOOM cleanly and returns to the normal Cisco UI; keypad events are 16-byte Linux-style input records handled by `keyhandle.ko` and `keypad.ko`.",
+      "evidence_refs": [
+        "E0001",
+        "E0011"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project began as a streamed DOOM experience on Cthulhu, evolved to direct shell access via SSH, and was reverse-engineered to run natively on the phone.",
+      "evidence_refs": [
+        "E0001"
+      ],
+      "phase": "development",
+      "confidence": "high"
+    },
+    {
+      "claim": "Installation requires a deployment host at `10.1.1.1` serving FTP on port `2121`, and the phone must be rebooted to load the xinetd service at `/usr/local/etc/doom-local`.",
+      "evidence_refs": [
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The phone exposes multiple framebuffers (`/dev/fb0`–`/dev/fb3`) and input devices managed by Cisco’s Raven stack, with no external services required for final operation.",
+      "evidence_refs": [
+        "E0001",
+        "E0010"
+      ],
+      "phase": "final",
+      "confidence": "high"
+    },
+    {
+      "claim": "The project is an experimental community effort for privately owned hardware, documented in `docs/project-history.md` and field notes, and not affiliated with Cisco.",
+      "evidence_refs": [
+        "E0001",
+        "E0010"
+      ],
+      "phase": "background",
+      "confidence": "high"
+    }
+  ]
+}

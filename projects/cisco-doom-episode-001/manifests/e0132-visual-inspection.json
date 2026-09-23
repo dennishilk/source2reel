@@ -1,0 +1,68 @@
+{
+  "evidence_ref": "E0132",
+  "source": "cisco-final-v666-proof.mp4",
+  "frames": [
+    {
+      "timestamp_seconds": 5,
+      "description": "A black Cisco IP phone is shown on a wooden desk. The handset is resting on the base. The screen is off, and several indicator lights are visible on the left side of the screen. The phone has a numeric keypad and function buttons. A black cable extends from the back of the phone.",
+      "visible_phone_state": "Idle, handset on base",
+      "visible_screen_content": "Screen is off, no display content visible",
+      "visible_cables": "Black cable extending from the back of the phone",
+      "evidence_value": "High",
+      "suitable_storyboard_use": "Yes"
+    },
+    {
+      "timestamp_seconds": 35,
+      "description": "A close-up of a Cisco device screen displaying the Cisco logo, copyright text 'Copyright 2000-2010, Cisco Systems, Inc.', and a 'Java Powered' logo. The screen is surrounded by green indicator lights on both sides.",
+      "visible_phone_state": null,
+      "visible_screen_content": "Cisco logo, 'Copyright 2000-2010, Cisco Systems, Inc.', 'Java Powered' logo",
+      "visible_cables": null,
+      "evidence_value": "High",
+      "suitable_storyboard_use": true
+    },
+    {
+      "timestamp_seconds": 70,
+      "description": "A close-up of a touchscreen interface showing a grid of six application icons. The icons are labeled: 'Preferences', 'Accessories', 'Administrator Settings', 'Doom', and 'Phone Information'. A mouse cursor is visible over the 'Doom' icon. At the bottom, there are two buttons labeled 'Exit' and 'Open'. The background of the screen shows a partial image of a snowy landscape with a tree.",
+      "visible_phone_state": "Screen is active, displaying a menu interface.",
+      "visible_screen_content": [
+        "Preferences icon with gear symbol",
+        "Accessories icon with puzzle piece symbol",
+        "Administrator Settings icon with user silhouette and gear symbol",
+        "Doom icon with folder and cursor symbol",
+        "Phone Information icon with phone and information symbol",
+        "Exit button",
+        "Open button"
+      ],
+      "visible_cables": false,
+      "evidence_value": "High",
+      "suitable_storyboard_use": true
+    },
+    {
+      "timestamp_seconds": 105,
+      "description": "A close-up shot of a black landline telephone with a small screen displaying a first-person shooter video game. The game screen shows a player holding a weapon, facing a structure with 'AGM' written on it. The game's HUD is visible, showing '45' ammo, '100%' health, '0%' armor, and a character portrait. The phone has multiple buttons on its sides and a handset resting on the left side.",
+      "visible_phone_state": "Idle, handset resting on the phone base",
+      "visible_screen_content": "Video game interface with HUD: '45' ammo, '100%' health, '0%' armor, character portrait, and a structure labeled 'AGM'",
+      "visible_cables": false,
+      "evidence_value": "High",
+      "suitable_storyboard_use": true
+    },
+    {
+      "timestamp_seconds": 140,
+      "description": "A Cisco IP phone with a screen displaying a first-person shooter video game. The game shows a character holding a weapon, with a health bar at 97%, ammo at 25, and armor at 0. The phone has a visible 'Cisco' logo and a label 'v.666' on its top bezel. The phone's physical buttons are visible on the left and right sides of the screen.",
+      "visible_phone_state": "On, displaying a video game",
+      "visible_screen_content": "A video game interface with a character, health, ammo, and armor indicators",
+      "visible_cables": false,
+      "evidence_value": "High",
+      "suitable_storyboard_use": true
+    },
+    {
+      "timestamp_seconds": 160,
+      "description": "A close-up of a black Cisco IP phone with a touchscreen display showing an 'Applications' menu. The screen displays the word 'Connecting' at the top, and below it, a grid of application icons. At the bottom of the screen, there are two buttons labeled 'Exit' and 'Open'. A person's thumb is visible pressing a button on the lower right side of the phone's base. The phone is sitting on a wooden surface.",
+      "visible_phone_state": "On, displaying an application menu",
+      "visible_screen_content": "Connecting\nApplications\n[Icons: 2 rows, 4 icons total]\nExit\nOpen",
+      "visible_cables": false,
+      "evidence_value": "High",
+      "suitable_storyboard_use": true
+    }
+  ]
+}
