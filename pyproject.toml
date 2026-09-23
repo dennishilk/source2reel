@@ -1,12 +1,9 @@
 [project]
 name = "source2reel"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local, evidence-first AI-assisted technical explainer production engine"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "kokoro==0.9.4",
-  "soundfile==0.13.1",
-  "numpy>=2.0,<3",
   "pillow>=11,<13",
 ]
 

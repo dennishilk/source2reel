@@ -13,6 +13,26 @@ This document records the first physical-deployment decision set for Source2Reel
 
 Hardware-specific choices remain configuration. They are not episode-schema requirements.
 
+
+## Hardware-aware bootstrap correction — 2026-09-23
+
+The first physical bootstrap exposed a dependency-architecture bug: Kokoro was a mandatory core Python dependency, and its unqualified \`torch\` dependency allowed the Linux PyPI resolver to select a CUDA/NVIDIA Torch stack on an AMD-only machine.
+
+The baseline is now explicitly hardware-aware:
+
+- \`source2reel/hardware.py\` inspects PCI display devices and Vulkan availability.
+- AMD + working Vulkan selects \`llama.cpp+vulkan/radv\`.
+- NVIDIA + working Vulkan selects \`llama.cpp+vulkan\`; Source2Reel does not infer CUDA merely from Linux/x86_64 or NVIDIA presence.
+- no usable Vulkan path selects the CPU fallback.
+- \`tools/bootstrap-arch.sh\` installs vendor-neutral packages first, then installs \`vulkan-radeon\` only when AMD is detected and \`vulkan-intel\` only when Intel is detected.
+- the baseline does not auto-install CUDA, cuDNN, NCCL, ROCm or PyTorch.
+- the generated core \`uv.lock\` is scanned before sync; Torch/NVIDIA/CUDA runtime entries abort the baseline install.
+- Kokoro now lives in a separate optional \`.venv-voice-kokoro\` created by \`tools/setup-voice.sh\`.
+- the voice setup installs Torch explicitly from the official CPU wheel index and installs Kokoro with \`--no-deps\` after its non-Torch dependencies are present.
+
+This is a Source2Reel capability, not a Cthulhu special case. The same detection layer reports AMD, NVIDIA, Intel/other and CPU-only situations. Cthulhu remains the first physical acceptance target.
+
+
 ## GPU identity and ROCm status
 
 AMD's current ROCm documentation lists the Radeon RX 9060 XT as:
@@ -119,7 +139,7 @@ PyTorch intentionally exposes HIP devices through much of the `torch.cuda` API.
 
 ## Kokoro TTS device decision
 
-Keep the permanent voice on CPU for the first frozen baseline.
+Keep the permanent voice on CPU for the first frozen baseline. The Kokoro/Torch stack is installed in the separate optional `.venv-voice-kokoro` environment and is not part of the Source2Reel core dependency graph.
 
 Reasons:
 - Kokoro-82M is small relative to the LLM.

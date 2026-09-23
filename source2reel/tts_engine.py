@@ -1,10 +1,8 @@
 from __future__ import annotations
-import subprocess, tomllib
+import os, subprocess, tomllib
 from pathlib import Path
 from typing import Any
 from .config import profile_paths
-
-_PIPELINES={}
 
 
 def _voice_cfg(root: Path, cfg: dict[str,Any]):
@@ -18,29 +16,32 @@ def apply_pronunciations(text: str, cfg: dict[str,Any]) -> str:
     return text
 
 
-def _kokoro_pipeline(lang_code: str):
-    if lang_code not in _PIPELINES:
-        from kokoro import KPipeline
-        _PIPELINES[lang_code]=KPipeline(lang_code=lang_code)
-    return _PIPELINES[lang_code]
+def voice_runtime_python(root: Path, voice_cfg: dict[str,Any]) -> Path:
+    raw = str(voice_cfg.get("voice", {}).get("runtime_python", ".venv-voice-kokoro/bin/python"))
+    expanded = Path(os.path.expandvars(os.path.expanduser(raw)))
+    return expanded if expanded.is_absolute() else root / expanded
 
 
 def kokoro_scene(text: str, out: Path, root: Path, engine_cfg: dict[str,Any]):
-    import numpy as np, soundfile as sf
     cfg=_voice_cfg(root,engine_cfg)
     v=cfg["voice"]
     text=apply_pronunciations(text,cfg)
-    pipeline=_kokoro_pipeline(v["language_code"])
-    chunks=[]
-    generated=list(pipeline(text,voice=v["voice"],speed=float(v["speed"])))
-    for i,(_,_,audio) in enumerate(generated):
-        chunks.append(audio)
-        if i != len(generated)-1:
-            chunks.append(np.zeros(int(v["sample_rate"]*0.11),dtype=np.float32))
-    if not chunks:
-        raise RuntimeError("Kokoro produced no audio")
+    runtime=voice_runtime_python(root,cfg)
+    if not runtime.exists():
+        raise RuntimeError(
+            f"Kokoro voice runtime not installed: {runtime}. "
+            "Run tools/setup-voice.sh for the optional CPU voice stack."
+        )
     out.parent.mkdir(parents=True,exist_ok=True)
-    sf.write(out,np.concatenate(chunks),int(v["sample_rate"]))
+    subprocess.run([
+        str(runtime), str(root/"source2reel"/"kokoro_worker.py"),
+        "--out", str(out),
+        "--voice", str(v["voice"]),
+        "--language-code", str(v["language_code"]),
+        "--speed", str(float(v["speed"])),
+        "--sample-rate", str(int(v["sample_rate"])),
+        "--pause-ms", str(int(cfg.get("delivery",{}).get("pause_between_chunks_ms",110))),
+    ], input=text, text=True, check=True)
 
 
 def espeak_preview(text: str, out: Path):

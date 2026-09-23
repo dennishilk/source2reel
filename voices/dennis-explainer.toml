@@ -3,6 +3,7 @@ engine = "kokoro"
 model = "hexgrad/Kokoro-82M"
 model_release = "v1.0"
 inference_package = "kokoro==0.9.4"
+runtime_python = ".venv-voice-kokoro/bin/python"
 voice = "am_michael"
 language_code = "a"
 speed = 0.94

@@ -1,0 +1,9 @@
+# Kokoro's own torch dependency is intentionally NOT resolved from PyPI here.
+# tools/setup-voice.sh installs a CPU-only torch wheel first, then installs
+# these non-torch dependencies and finally Kokoro itself with --no-deps.
+huggingface_hub
+loguru
+misaki[en]>=0.9.4
+numpy>=2.0,<3
+soundfile==0.13.1
+transformers

@@ -74,3 +74,15 @@ source2reel build cisco-doom --preview-espeak
 eSpeak is explicitly non-canonical and must never become the Dennis Explainer production voice.
 
 See `docs/ARCHITECTURE.md`, `docs/LOCAL_AI.md`, `BUILD.md`, `VOICE.md`, `STYLE_GUIDE.md`, `LICENSES.md` and `PROJECT_STATE.md`.
+
+
+## Installation split
+
+The reusable core and permanent voice are deliberately separate:
+
+\`\`\`bash
+./tools/bootstrap-arch.sh   # core + hardware detection + llama.cpp/Vulkan baseline
+./tools/setup-voice.sh      # optional Kokoro CPU voice environment
+\`\`\`
+
+The normal core install does not depend on Kokoro or Torch and does not auto-install CUDA/NVIDIA runtime packages. \`source2reel doctor\` reports the optional voice stack separately.

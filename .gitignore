@@ -1,5 +1,6 @@
 # Python / uv
 .venv/
+.venv-voice-*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
