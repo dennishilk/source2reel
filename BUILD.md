@@ -63,8 +63,8 @@ untracked source media in `projects/cisco-doom-episode-001/` and run:
 ```
 
 This uses the frozen `episode.json` and the new, separate `presentation.json`.
-The output is named from the frozen episode slug in
-`projects/cisco-doom-episode-001/output/`. Captions are generated from each
+The output is `projects/cisco-doom-episode-001/output/cisco-doom-episode-001.mp4`.
+Captions are generated from each
 scene's narration and final WAV duration; the ASS intermediates remain under
 ignored `work/captions/`. They are burned into static segments by FFmpeg's
 libass filter. A local FFmpeg build with `ass` support and a DejaVu Sans font
