@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "scene_titles": {
+    "s005": "SSH Access - The Turning Point"
+  },
   "outro": {
     "eyebrow": "SOURCE2REEL // EPISODE 001",
     "headline": ["Cisco CP-9951", "DOOM v.666"],

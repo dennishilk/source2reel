@@ -8,11 +8,11 @@ import unittest
 import wave
 from unittest.mock import patch
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 from source2reel.captions import caption_enabled, estimate_events, write_ass
-from source2reel.renderer import _encode_static_segment, _encode_video_evidence
+from source2reel.renderer import _encode_static_segment, _encode_video_evidence, _visual_scene
 from source2reel.schema import validate_episode, validate_presentation
-from source2reel.templates import render_scene
+from source2reel.templates import render_scene, render_video_shell
 from source2reel.util import run
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,10 +53,12 @@ class VisualProductTests(unittest.TestCase):
         static = {"type": "TERMINAL_EVIDENCE"}
         video = {"type": "HERO"}
         self.assertTrue(caption_enabled(static, False, {}))
-        self.assertFalse(caption_enabled(video, True, {}))
+        self.assertTrue(caption_enabled(video, True, {}))
         self.assertFalse(caption_enabled(static, False, {"captions": {"enabled": False}}))
-        self.assertTrue(caption_enabled({**video, "captions": {"enabled": True}}, True, {}))
+        self.assertFalse(caption_enabled(video, True, {"captions": {"enabled": False}}))
+        self.assertFalse(caption_enabled({**video, "captions": {"enabled": False}}, True, {}))
         self.assertFalse(caption_enabled({**static, "captions": {"enabled": False}}, False, {}))
+        self.assertFalse(caption_enabled({"type": "OUTRO"}, False, {}))
 
     def test_schema_diagram_and_offset(self):
         scene = {"id": "s1", "type": "DATA_FLOW", "narration": "A to B.",
@@ -91,6 +93,12 @@ class VisualProductTests(unittest.TestCase):
         validate_presentation(presentation, True)
         with self.assertRaisesRegex(ValueError, "OUTRO requires"):
             validate_presentation({}, True)
+        episode = json.loads((ROOT / "projects/cisco-doom-episode-001/episode.json").read_text())
+        ssh = next(scene for scene in episode["scenes"] if scene["id"] == "s005")
+        rendered_ssh = _visual_scene(ssh, presentation)
+        self.assertEqual(rendered_ssh["title"], "SSH Access - The Turning Point")
+        self.assertNotIn("\ufffd", rendered_ssh["title"])
+        self.assertEqual(ssh["title"], "SSH Access — The Turning Point")
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "outro.png"
             scene = {"id": "outro", "type": "OUTRO"}
@@ -100,6 +108,10 @@ class VisualProductTests(unittest.TestCase):
             base = Image.new("RGB", image.size, (8, 13, 18))
             for box in ((100,230,1810,450),(100,540,1810,640),(100,690,1810,820)):
                 self.assertIsNotNone(ImageChops.difference(image.crop(box),base.crop(box)).getbbox())
+            without_titles = Path(tmp) / "endcard-without-titles.png"
+            render_scene(scene, None, without_titles, ROOT, {},
+                         presentation={"outro": presentation["outro"]})
+            self.assertEqual(output.read_bytes(), without_titles.read_bytes())
             changed = {"outro": {**presentation["outro"], "links": [
                 {"label": "DOCS", "url": "example.org/new-project"}]}}
             other = Path(tmp) / "other.png"
@@ -127,6 +139,45 @@ class VisualProductTests(unittest.TestCase):
             pixels=region.get_flattened_data() if hasattr(region,"get_flattened_data") else region.getdata()
             count = sum(1 for r,g,b in pixels if min(r,g,b)>130)
             self.assertGreater(count,500)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
+    def test_video_caption_pixels_and_contained_footage(self):
+        with tempfile.TemporaryDirectory(prefix="s2r video caption ") as tmp:
+            d=Path(tmp)
+            source=d/"source.png"
+            image=Image.new("RGB",(640,480),(24,30,40)); draw=ImageDraw.Draw(image)
+            draw.rectangle((0,0,65,65),fill=(245,30,30))
+            draw.rectangle((574,0,639,65),fill=(30,245,30))
+            draw.rectangle((0,414,65,479),fill=(30,30,245))
+            draw.rectangle((574,414,639,479),fill=(245,245,30))
+            image.save(source)
+            video=d/"source.mp4"
+            run(["ffmpeg","-y","-loglevel","error","-loop","1","-framerate","30",
+                 "-i",source,"-t","1","-c:v","libx264","-pix_fmt","yuv420p",video])
+            shell=d/"shell.png"
+            render_video_shell({"title":"Video proof"},shell,ROOT,{},captions_enabled=True)
+            audio=d/"voice.wav"
+            with wave.open(str(audio),"wb") as w:
+                w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)
+                w.writeframes(b"\0\0"*24000)
+            ass=d/"caption.ass"
+            write_ass(ass,estimate_events("Visible video caption proof.",1.0))
+            seg=d/"segment.mp4"
+            _encode_video_evidence(shell,video,audio,seg,1.1,0.1,0.0,ass)
+            shot=d/"shot.png"
+            run(["ffmpeg","-y","-loglevel","error","-ss","0.4","-i",seg,
+                 "-frames:v","1",shot])
+            result=Image.open(shot).convert("RGB")
+            self.assertEqual(result.size,(1920,1080))
+            corners=((580,190,(245,30,30)),(1340,190,(30,245,30)),
+                     (580,745,(30,30,245)),(1340,745,(245,245,30)))
+            for x,y,expected in corners:
+                actual=result.getpixel((x,y))
+                self.assertTrue(all(abs(a-b)<60 for a,b in zip(actual,expected)),
+                                (x,y,actual,expected))
+            region=result.crop((350,800,1570,950))
+            pixels=region.get_flattened_data() if hasattr(region,"get_flattened_data") else region.getdata()
+            self.assertGreater(sum(1 for r,g,b in pixels if min(r,g,b)>130),500)
 
     def test_ffmpeg_offset_command(self):
         with patch("source2reel.renderer.run") as mock:

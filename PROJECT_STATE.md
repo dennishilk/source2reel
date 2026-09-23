@@ -15,6 +15,10 @@ Synthetic FFmpeg tests verify caption pixels; the final full render with
 original large media remains a Cthulhu gate. Build with
 `./s2r build cisco-doom-episode-001` after pulling the changes.
 
+Final polish: authentic video scenes now use the same burned-in caption
+pipeline as static scenes. The episode presentation sidecar supplies an ASCII
+SSH title correction while preserving the frozen episode JSON and endcard.
+
 ## 2026-09-23 — installer and runtime consolidation (pending Cthulhu)
 
 - `./install.sh` joins hardware-aware bootstrap, local core, Kokoro CPU

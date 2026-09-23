@@ -11,6 +11,9 @@ _TIMED_MEDIA_NOTE=re.compile(r"\b(?:start|seek|begin|footage|gameplay)\b[^.\n]{0
 
 def validate_presentation(presentation: dict, has_outro: bool) -> None:
     if not isinstance(presentation,dict): raise ValueError("presentation must be an object")
+    titles=presentation.get("scene_titles",{})
+    if not isinstance(titles,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not v.strip() or "\ufffd" in v for k,v in titles.items()):
+        raise ValueError("presentation.scene_titles requires nonempty titles without replacement characters")
     if not has_outro: return
     outro=presentation.get("outro")
     if not isinstance(outro,dict): raise ValueError("OUTRO requires presentation.outro")

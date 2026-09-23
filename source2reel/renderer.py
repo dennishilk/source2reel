@@ -17,6 +17,11 @@ VIDEO_EXTS={".mp4",".mov",".mkv",".webm"}
 def _evidence_map(inv): return {e["ref"]:e for e in inv["evidence"]}
 
 
+def _visual_scene(scene: dict[str,Any], presentation: dict[str,Any]) -> dict[str,Any]:
+    title=presentation.get("scene_titles",{}).get(scene["id"])
+    return {**scene,"title":title} if title else scene
+
+
 def _encode_static_segment(frame: Path, audio: Path, seg: Path, dur: float, pad: float, captions: Path|None=None):
     video_filter=f"[0:v]{ass_filter(captions)}[vo];" if captions else "[0:v]null[vo];"
     run(["ffmpeg","-y","-loglevel","error","-loop","1","-framerate","30","-i",frame,"-i",audio,
@@ -52,11 +57,12 @@ def build_episode(root: Path, project_dir: Path, episode: dict[str,Any], invento
     manifest=[]; transcript=[]; segment_paths=[]; backends=set()
     for idx,scene in enumerate(episode["scenes"],1):
         sid=scene["id"]; aref=scene.get("asset_ref"); evidence_item=emap.get(aref) if aref else None; asset=resolve_evidence_path(evidence_item,project_dir) if evidence_item else None
+        visual_scene=_visual_scene(scene,presentation)
         frame=frames/f"{idx:03d}-{sid}.png"
         is_video=bool(asset and asset.suffix.lower() in VIDEO_EXTS and scene["type"] in EVIDENCE_TYPES)
         captions_on=caption_enabled(scene,is_video,cfg)
-        if is_video: render_video_shell(scene,frame,root,cfg,captions_on)
-        else: render_scene(scene,asset,frame,root,cfg,evidence_item,captions_on,presentation)
+        if is_video: render_video_shell(visual_scene,frame,root,cfg,captions_on)
+        else: render_scene(visual_scene,asset,frame,root,cfg,evidence_item,captions_on,presentation)
         raw=audio/f"{idx:03d}-{sid}-raw.wav"; norm=audio/f"{idx:03d}-{sid}.wav"
         backend=render_scene_audio(scene["narration"],raw,norm,root,cfg,preview_espeak); backends.add(backend)
         pad=float(scene.get("pad_after_seconds",0.5)); voice_duration=ffprobe_duration(norm); dur=voice_duration+pad; seg=segs/f"{idx:03d}-{sid}.mp4"

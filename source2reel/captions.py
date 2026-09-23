@@ -15,7 +15,7 @@ class CaptionEvent:
 
 def caption_enabled(scene: dict, is_video: bool, cfg: dict) -> bool:
     default = (cfg.get("captions", {}).get("enabled", True) and
-               scene["type"] not in {"SECTION_TITLE", "OUTRO"} and not is_video)
+               scene["type"] not in {"SECTION_TITLE", "OUTRO"})
     return scene.get("captions", {}).get("enabled", default)
 
 

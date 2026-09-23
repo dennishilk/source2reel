@@ -49,8 +49,9 @@ Static evidence, terminal, code and diagram scenes use deterministic captions
 derived from the approved narration WAV duration. At most two large lines are
 shown in the lower information strip. The evidence frame ends above that
 strip; neither the evidence nor the captions move during their display.
-Moving project footage and the endcard omit captions by default. Scene-level
-configuration can override this when editorially needed.
+Moving project footage uses the same captions in a reserved lower strip while
+the full video image remains contained in a fixed frame. The endcard omits
+captions by default. Scene-level configuration can override this when needed.
 
 The OUTRO is a fixed full-frame card: a short series/episode eyebrow, large
 project headline, dominant readable project links, and an optional compact

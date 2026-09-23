@@ -70,7 +70,7 @@ ignored `work/captions/`. They are burned into static segments by FFmpeg's
 libass filter. A local FFmpeg build with `ass` support and a DejaVu Sans font
 is required. The original media is required only for the physical render.
 
-Static scenes caption by default; moving evidence and the outro do not.
+Static scenes and moving evidence caption by default; the outro does not.
 Set `"captions": {"enabled": true}` or `false` on a scene to override. Set
 `[captions] enabled = false` in the engine config to disable the default for
 the whole build (explicit scene overrides still apply). `media.start_seconds`
@@ -80,6 +80,8 @@ diagrams fail validation. New episodes may put `presentation.outro` in the
 episode spec; a project's `presentation.json` can supply or override it when
 the episode JSON is immutable. An outro takes `eyebrow`, `headline` (1–3
 lines), `links` (label and URL or URL lines), and optional `footer`.
+For a frozen episode, `presentation.json` may also specify `scene_titles`
+by scene ID to correct on-screen typography without rewriting acceptance data.
 
 Doctor reports missing models and a stopped API as optional; `ai start`
 explains which model path is missing. The physical fresh-install and sound
