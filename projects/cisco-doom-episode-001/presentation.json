@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "outro": {
+    "eyebrow": "SOURCE2REEL // EPISODE 001",
+    "headline": ["Cisco CP-9951", "DOOM v.666"],
+    "links": [
+      {"label": "GITHUB", "url": "github.com/dennishilk/cisco9951-doom"},
+      {"label": "FULL PROJECT / FIELD NOTES", "url": [
+        "www.dennishilk.com/museum/home-computing-lab/",
+        "field-notes/field-note-7/"
+      ]}
+    ],
+    "footer": "NATIVE ARMv6 // LOCAL AUDIO // PERSISTENT // OFFLINE COLD BOOT"
+  }
+}

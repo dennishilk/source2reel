@@ -24,6 +24,11 @@ def plan(provider: LLMProvider, research: dict[str,Any], inventory: dict[str,Any
                 "evidence_refs":["E0001"],"asset_ref":"E0001","annotations":[],"pad_after_seconds":0.5,
                 "diagram":{},"notes":""
             }]
+        },
+        "optional_structured_scene_fields":{
+            "media.start_seconds":"non-negative seconds into an authentic video, when evidence calls for an offset",
+            "captions.enabled":"boolean scene override; static scenes default on, video defaults off",
+            "diagram.nodes":"at least two explicit evidence-supported labels for diagram scenes"
         }
     }
     system=(project_dir.parents[1]/"prompts"/"storyboard.txt").read_text()

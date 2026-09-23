@@ -8,6 +8,7 @@
     "title": {"type": "string"},
     "slug": {"type": "string"},
     "summary": {"type": "string"},
+    "presentation": {"type": "object", "properties": {"outro": {"$ref": "#/$defs/outro"}}},
     "scenes": {
       "type": "array", "minItems": 1,
       "items": {
@@ -22,10 +23,22 @@
           "asset_ref": {"type": ["string","null"]},
           "annotations": {"type": "array"},
           "diagram": {"type": "object"},
+          "media": {"type": "object", "properties": {"start_seconds": {"type": "number", "minimum": 0}}},
+          "captions": {"type": "object", "properties": {"enabled": {"type": "boolean"}}},
           "pad_after_seconds": {"type": "number", "minimum": 0},
           "notes": {"type": "string"}
-        }
+        },
+        "allOf": [{"if": {"properties": {"type": {"enum": ["ARCHITECTURE_DIAGRAM", "DATA_FLOW", "TIMELINE"]}}, "required": ["type"]},
+                   "then": {"properties": {"diagram": {"type": "object", "anyOf": [
+                     {"required": ["nodes"], "properties": {"nodes": {"type": "array", "minItems": 2, "maxItems": 8}}},
+                     {"required": ["steps"], "properties": {"steps": {"type": "array", "minItems": 2, "maxItems": 8}}}
+                   ]}}, "required": ["diagram"]}}]
       }
     }
-  }
+  },
+  "$defs": {"outro": {"type": "object", "required": ["headline", "links"],
+    "properties": {"eyebrow": {"type": "string"}, "headline": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string"}},
+      "links": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "object", "required": ["label", "url"],
+        "properties": {"label": {"type": "string"}, "url": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}}}},
+      "footer": {"type": "string"}}}}
 }

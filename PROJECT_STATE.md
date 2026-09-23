@@ -1,5 +1,20 @@
 # PROJECT_STATE
 
+## 2026-09-23 — post-acceptance visual product changes
+
+Physical acceptance freeze: `889d772919d713a178f4a7bc5bf0ce4ef9b143ad`.
+The twelve committed Episode 001 JSON fixtures remain immutable. Cthulhu
+proved 12 scenes, about 283.6 seconds, 1920×1080, video seek offsets, diagram
+nodes, narration and final assembly. The permanent Kokoro voice is approved:
+`am_michael`, speed 0.94, isolated CPU runtime.
+
+This descendant adds deterministic narration captions, a large metadata-led
+endcard, explicit schema/prompt support for video offsets, and diagram-node
+validation. Episode 001 endcard copy lives in a new `presentation.json`.
+Synthetic FFmpeg tests verify caption pixels; the final full render with
+original large media remains a Cthulhu gate. Build with
+`./s2r build cisco-doom-episode-001` after pulling the changes.
+
 ## 2026-09-23 — installer and runtime consolidation (pending Cthulhu)
 
 - `./install.sh` joins hardware-aware bootstrap, local core, Kokoro CPU

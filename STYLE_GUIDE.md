@@ -42,3 +42,17 @@ Cuts and restrained fades are allowed. Animation is reserved for diagrams, flows
 
 ## Readability
 Terminal screenshots, code and hardware displays must remain readable for the narration that discusses them. If one frame cannot remain legible, split the explanation into multiple evidence scenes rather than adding camera motion.
+
+## Captions and endcard
+
+Static evidence, terminal, code and diagram scenes use deterministic captions
+derived from the approved narration WAV duration. At most two large lines are
+shown in the lower information strip. The evidence frame ends above that
+strip; neither the evidence nor the captions move during their display.
+Moving project footage and the endcard omit captions by default. Scene-level
+configuration can override this when editorially needed.
+
+The OUTRO is a fixed full-frame card: a short series/episode eyebrow, large
+project headline, dominant readable project links, and an optional compact
+footer. Its copy comes from per-episode presentation metadata, not renderer
+constants. Keep the card static through the last narration and padding.

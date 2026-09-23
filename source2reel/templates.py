@@ -12,7 +12,9 @@ def _rgb(x):
 
 def _font(path,size):
     try: return ImageFont.truetype(path,size)
-    except Exception: return ImageFont.load_default()
+    except OSError:
+        try: return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",size)
+        except OSError: return ImageFont.load_default(size=size)
 
 def _theme(root,cfg):
     theme_path,_=profile_paths(root,cfg)
@@ -41,15 +43,15 @@ def _evidence_footer(d,t,label="AUTHENTIC PROJECT EVIDENCE // STATIC"):
     right="POSITION LOCK // SCALE LOCK // CROP LOCK"; rb=d.textbbox((0,0),right,font=mf); d.text((1920-72-(rb[2]-rb[0]),1018),right,font=mf,fill=_rgb(F["muted"]))
 
 
-def render_evidence(scene, asset: Path, out: Path, root: Path, cfg):
-    im,d,t=_base(root,scene.get("title") or "PROJECT EVIDENCE",cfg); F=t["frame"]; box=(72,154,1776,800); px,py,nw,nh=_contain(im,asset,box)
+def render_evidence(scene, asset: Path, out: Path, root: Path, cfg, captions_enabled=False):
+    im,d,t=_base(root,scene.get("title") or "PROJECT EVIDENCE",cfg); F=t["frame"]; box=(72,154,1776,630 if captions_enabled else 800); px,py,nw,nh=_contain(im,asset,box)
     d.rectangle((px-2,py-2,px+nw+1,py+nh+1),outline=_rgb(F["line"]),width=2); _evidence_footer(d,t)
     out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
 
 
-def render_video_shell(scene,out,root,cfg):
+def render_video_shell(scene,out,root,cfg,captions_enabled=False):
     im,d,t=_base(root,scene.get("title") or "PROJECT VIDEO",cfg); F=t["frame"]
-    d.rectangle((72,154,1848,954),outline=_rgb(F["line"]),width=2)
+    d.rectangle((72,154,1848,784 if captions_enabled else 954),outline=_rgb(F["line"]),width=2)
     _evidence_footer(d,t,"AUTHENTIC PROJECT VIDEO // FIXED FRAME")
     out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
 
@@ -61,7 +63,7 @@ def render_title(scene,out,root,cfg):
     out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
 
 
-def render_code(scene,asset,out,root,cfg,evidence_item=None):
+def render_code(scene,asset,out,root,cfg,evidence_item=None,captions_enabled=False):
     im,d,t=_base(root,scene.get("title") or "CODE",cfg); F=t["frame"]; mf=_font(t["typography"]["mono_font"],27)
     if asset and asset.exists():
         lines=asset.read_text(errors="replace").splitlines()
@@ -70,7 +72,7 @@ def render_code(scene,asset,out,root,cfg,evidence_item=None):
         else: lines=lines[:26]
     else: lines=(scene.get("diagram",{}).get("code","")).splitlines()
     y=160
-    for line in lines[:26]: d.text((96,y),line[:110],font=mf,fill=_rgb(F["text"])); y+=31
+    for line in lines[:20 if captions_enabled else 26]: d.text((96,y),line[:110],font=mf,fill=_rgb(F["text"])); y+=31
     out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
 
 
@@ -80,23 +82,24 @@ def _node_labels(scene):
     return [str(x) for x in nodes]
 
 
-def render_diagram(scene,out,root,cfg):
-    im,d,t=_base(root,scene.get("title") or scene["type"],cfg); F=t["frame"]; mf=_font(t["typography"]["mono_font"],27); labels=_node_labels(scene) or ["SOURCE","PROCESS","OUTPUT"]
-    n=len(labels); top=220; bottom=840; x=960; gap=(bottom-top)/(max(1,n-1)); coords=[]
+def render_diagram(scene,out,root,cfg,captions_enabled=False):
+    im,d,t=_base(root,scene.get("title") or scene["type"],cfg); F=t["frame"]; mf=_font(t["typography"]["mono_font"],27); labels=_node_labels(scene)
+    if len(labels)<2: raise ValueError(f"{scene['id']}: explicit diagram nodes required")
+    n=len(labels); top=210; bottom=730 if captions_enabled else 840; x=960; gap=(bottom-top)/(n-1); coords=[]; h=min(86,gap-8)
     for i,label in enumerate(labels):
-        y=top+i*gap; coords.append((x,y)); w=780; h=86; d.rounded_rectangle((x-w/2,y-h/2,x+w/2,y+h/2),radius=10,outline=_rgb(F["line"]),width=3); bb=d.textbbox((0,0),label,font=mf); d.text((x-(bb[2]-bb[0])/2,y-(bb[3]-bb[1])/2),label,font=mf,fill=_rgb(F["text"]))
-        if i: d.line((x,coords[i-1][1]+43,x,y-43),fill=_rgb(F["accent"]),width=3); d.polygon([(x,y-43),(x-9,y-60),(x+9,y-60)],fill=_rgb(F["accent"]))
+        y=top+i*gap; coords.append((x,y)); w=1300; d.rounded_rectangle((x-w/2,y-h/2,x+w/2,y+h/2),radius=10,outline=_rgb(F["line"]),width=3); font=_fit_text(d,label,t["typography"]["mono_font"],27,w-30); bb=d.textbbox((0,0),label,font=font); d.text((x-(bb[2]-bb[0])/2,y-(bb[3]-bb[1])/2),label,font=font,fill=_rgb(F["text"]))
+        if i: d.line((x,coords[i-1][1]+h/2,x,y-h/2),fill=_rgb(F["accent"]),width=3)
     out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
 
 
-def render_graph(scene,out,root,cfg):
+def render_graph(scene,out,root,cfg,captions_enabled=False):
     im,d,t=_base(root,scene.get("title") or "GRAPH",cfg); F=t["frame"]; mf=_font(t["typography"]["mono_font"],24); data=scene.get("diagram") or {}; pts=data.get("points") or []
     xy=[]
     for i,p in enumerate(pts):
         if isinstance(p,dict): xy.append((float(p.get("x",i)),float(p.get("y",0)),str(p.get("label",""))))
         elif isinstance(p,(list,tuple)) and len(p)>=2: xy.append((float(p[0]),float(p[1]),""))
     if not xy: xy=[(0,0,""),(1,1,""),(2,0.6,"")]
-    left,top,right,bottom=180,180,1740,870; d.line((left,bottom,right,bottom),fill=_rgb(F["line"]),width=2); d.line((left,top,left,bottom),fill=_rgb(F["line"]),width=2)
+    left,top,right,bottom=180,180,1740,730 if captions_enabled else 870; d.line((left,bottom,right,bottom),fill=_rgb(F["line"]),width=2); d.line((left,top,left,bottom),fill=_rgb(F["line"]),width=2)
     xs=[p[0] for p in xy]; ys=[p[1] for p in xy]; xmin,xmax=min(xs),max(xs); ymin,ymax=min(ys),max(ys); xr=max(xmax-xmin,1e-9); yr=max(ymax-ymin,1e-9)
     px=[]
     for x,y,label in xy:
@@ -106,19 +109,57 @@ def render_graph(scene,out,root,cfg):
     out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
 
 
-def render_summary(scene,out,root,cfg):
-    im,d,t=_base(root,scene.get("title") or scene["type"],cfg); F=t["frame"]; mf=_font(t["typography"]["mono_font"],31); items=scene.get("annotations") or []; y=245
+def render_summary(scene,out,root,cfg,captions_enabled=False):
+    im,d,t=_base(root,scene.get("title") or scene["type"],cfg); F=t["frame"]; mf=_font(t["typography"]["mono_font"],31); items=scene.get("annotations") or []; y=215
     for item in items[:7]:
-        text=item if isinstance(item,str) else str(item.get("text") or item); d.text((180,y),"— "+text,font=mf,fill=_rgb(F["text"])); y+=92
+        text=item if isinstance(item,str) else str(item.get("text") or item); d.text((180,y),"— "+text,font=mf,fill=_rgb(F["text"])); y+=78 if captions_enabled else 92
     out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
 
 
-def render_scene(scene: dict[str,Any], asset: Path|None, out: Path, root: Path, cfg: dict[str,Any], evidence_item: dict[str,Any]|None=None):
+def _fit_text(d, value, font_path, preferred, width):
+    size=preferred
+    while size>26 and d.textbbox((0,0),value,font=_font(font_path,size))[2]>width: size-=2
+    font=_font(font_path,size)
+    if d.textbbox((0,0),value,font=font)[2]>width:
+        raise ValueError(f"Presentation text too wide; split into lines: {value[:60]}")
+    return font
+
+
+def render_outro(out: Path, root: Path, cfg: dict, presentation: dict):
+    im,d,t=_base(root,"",cfg); F=t["frame"]; T=t["typography"]
+    data=presentation.get("outro") or {}
+    if not data: raise ValueError("OUTRO requires presentation.outro metadata (headline and links)")
+    left=112; bright=_rgb(F["text"]); accent=_rgb(F["accent"])
+    eyebrow=data.get("eyebrow",""); d.text((left,155),eyebrow,font=_font(T["mono_font"],30),fill=accent)
+    lines=data.get("headline",[])
+    if isinstance(lines,str): lines=[lines]
+    if not lines or len(lines)>3: raise ValueError("OUTRO headline requires 1–3 lines")
+    y=230
+    for line in lines:
+        font=_fit_text(d,line,T["heading_font"],90,1696)
+        d.text((left,y),line,font=font,fill=bright); y+=105
+    links=data.get("links",[])
+    if not 1<=len(links)<=3: raise ValueError("OUTRO requires 1–3 links")
+    y=max(510,y+20)
+    for link in links:
+        d.text((left,y),link["label"],font=_font(T["mono_font"],29),fill=accent); y+=43
+        url_lines=link["url"] if isinstance(link["url"],list) else [link["url"]]
+        for line in url_lines:
+            font=_fit_text(d,line,T["heading_font"],49,1696)
+            d.text((left,y),line,font=font,fill=bright); y+=57
+        y+=32
+    footer=data.get("footer","")
+    if footer: d.text((left,942),footer,font=_fit_text(d,footer,T["mono_font"],25,1696),fill=_rgb(F["muted"]))
+    out.parent.mkdir(parents=True,exist_ok=True); im.save(out)
+
+
+def render_scene(scene: dict[str,Any], asset: Path|None, out: Path, root: Path, cfg: dict[str,Any], evidence_item: dict[str,Any]|None=None, captions_enabled=False, presentation=None):
     typ=scene["type"]
-    if typ in {"HERO","PROJECT_EVIDENCE","TERMINAL_EVIDENCE","HARDWARE_EVIDENCE"} and asset: return render_evidence(scene,asset,out,root,cfg)
-    if typ in {"SECTION_TITLE","OUTRO"}: return render_title(scene,out,root,cfg)
-    if typ=="CODE": return render_code(scene,asset,out,root,cfg,evidence_item)
-    if typ=="GRAPH": return render_graph(scene,out,root,cfg)
-    if typ in {"ARCHITECTURE_DIAGRAM","DATA_FLOW","TIMELINE"}: return render_diagram(scene,out,root,cfg)
-    if typ=="SUMMARY": return render_summary(scene,out,root,cfg)
+    if typ in {"HERO","PROJECT_EVIDENCE","TERMINAL_EVIDENCE","HARDWARE_EVIDENCE"} and asset: return render_evidence(scene,asset,out,root,cfg,captions_enabled)
+    if typ=="OUTRO": return render_outro(out,root,cfg,presentation or {})
+    if typ=="SECTION_TITLE": return render_title(scene,out,root,cfg)
+    if typ=="CODE": return render_code(scene,asset,out,root,cfg,evidence_item,captions_enabled)
+    if typ=="GRAPH": return render_graph(scene,out,root,cfg,captions_enabled)
+    if typ in {"ARCHITECTURE_DIAGRAM","DATA_FLOW","TIMELINE"}: return render_diagram(scene,out,root,cfg,captions_enabled)
+    if typ=="SUMMARY": return render_summary(scene,out,root,cfg,captions_enabled)
     return render_title(scene,out,root,cfg)

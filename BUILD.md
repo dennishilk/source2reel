@@ -53,6 +53,34 @@ without a validated integration.
 ./s2r build cisco-doom
 ```
 
+## Rebuild accepted Episode 001
+
+After pulling the post-acceptance changes on Cthulhu, keep the existing
+untracked source media in `projects/cisco-doom-episode-001/` and run:
+
+```bash
+./s2r build cisco-doom-episode-001
+```
+
+This uses the frozen `episode.json` and the new, separate `presentation.json`.
+The output is named from the frozen episode slug in
+`projects/cisco-doom-episode-001/output/`. Captions are generated from each
+scene's narration and final WAV duration; the ASS intermediates remain under
+ignored `work/captions/`. They are burned into static segments by FFmpeg's
+libass filter. A local FFmpeg build with `ass` support and a DejaVu Sans font
+is required. The original media is required only for the physical render.
+
+Static scenes caption by default; moving evidence and the outro do not.
+Set `"captions": {"enabled": true}` or `false` on a scene to override. Set
+`[captions] enabled = false` in the engine config to disable the default for
+the whole build (explicit scene overrides still apply). `media.start_seconds`
+is the non-negative seek time for video evidence. Diagram scenes require
+explicit `diagram.nodes` or `diagram.steps` with at least two labels; empty
+diagrams fail validation. New episodes may put `presentation.outro` in the
+episode spec; a project's `presentation.json` can supply or override it when
+the episode JSON is immutable. An outro takes `eyebrow`, `headline` (1–3
+lines), `links` (label and URL or URL lines), and optional `footer`.
+
 Doctor reports missing models and a stopped API as optional; `ai start`
 explains which model path is missing. The physical fresh-install and sound
 check remain acceptance gates.
