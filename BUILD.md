@@ -2,62 +2,90 @@
 
 The current target machine is Cthulhu: Arch Linux x86_64, Ryzen 7 5800X3D, Radeon RX 9060 XT 16 GiB and about 31 GiB system RAM. Hardware-specific AI/encoding choices remain configurable and must not leak into episode files.
 
-## 1. Base packages
+See `docs/CTHULHU_AUDIT.md` for the dated capability decision and support qualifications.
 
-Keep the system Python untouched. The current TTS environment uses Python 3.12 because the pinned `kokoro==0.9.4` package declares a Python constraint that is safest to satisfy with an isolated interpreter.
+## 1. Baseline packages
+
+The primary local-AI path is llama.cpp + Vulkan/RADV. ROCm is optional.
 
 ```bash
-sudo pacman -S --needed ffmpeg espeak-ng git cmake ninja base-devel vulkan-radeon vulkan-icd-loader
+./tools/bootstrap-arch.sh
 ```
 
-Install `uv` using its current official instructions if needed, then:
+Equivalent core packages include:
+
+```bash
+sudo pacman -S --needed \
+  ffmpeg espeak-ng uv git \
+  llama-cpp ggml-vulkan \
+  vulkan-radeon vulkan-icd-loader vulkan-tools \
+  libva-utils
+```
+
+Keep the system Python untouched for the voice environment. The pinned Kokoro environment uses an isolated Python 3.12 interpreter:
 
 ```bash
 uv python install 3.12
 uv sync --python 3.12
 ```
 
-## 2. CLI
+## 2. Hardware sanity checks
 
-Inside the repository:
+```bash
+vulkaninfo --summary
+vainfo --display drm --device /dev/dri/renderD128
+ffmpeg -hide_banner -encoders | grep -E 'h264_vaapi|hevc_vaapi|av1_vaapi'
+```
+
+## 3. CLI
 
 ```bash
 uv run source2reel --help
-```
-
-Optional local wrapper:
-
-```bash
 ./tools/install-cli.sh
+source2reel doctor
 ```
 
-## 3. Local AI service
+## 4. Local AI service
 
-The engine expects a localhost API and remains independent of runtime. The first conservative candidate is current llama.cpp with Vulkan on AMD Linux; ROCm/HIP is evaluated separately in the Cthulhu capability audit before being frozen.
+The engine expects a localhost API and remains independent of runtime.
+
+Primary baseline: packaged llama.cpp + Vulkan/RADV.
+
+A production GGUF is not committed. After choosing a model, store it outside Git, calculate SHA-256 and record exact model/revision/quantization in `PROJECT_STATE.md` and `LICENSES.md`.
+
+If the packaged server cannot provide a required multimodal feature, `tools/build-llama-vulkan.sh` remains available for a pinned upstream build. Do not leave it tracking an unfrozen moving `master` in a production freeze.
 
 See `docs/LOCAL_AI.md`.
 
-## 4. Create or review an episode
+## 5. Optional ROCm/HIP benchmark
 
 ```bash
-uv run source2reel create https://github.com/dennishilk/cisco9951-doom --review
+./tools/bootstrap-rocm-arch.sh
+```
+
+Do this only after the Vulkan baseline works. Compare the same model and context on both paths before freezing a backend.
+
+## 6. Create/review an episode
+
+```bash
+source2reel create https://github.com/dennishilk/cisco9951-doom --review
 ```
 
 Then inspect the generated evidence/research/storyboard and build:
 
 ```bash
-uv run source2reel build cisco9951-doom
+source2reel build cisco9951-doom
 ```
 
-## 5. Revise without manual scene programming
+## 7. Revise without manual scene programming
 
 ```bash
-uv run source2reel revise cisco9951-doom \
+source2reel revise cisco9951-doom \
   "Make the hook stronger but keep all factual claims evidence-grounded." \
   --build
 ```
 
-## 6. Outputs
+## 8. Outputs
 
 Each episode output directory contains at least:
 
