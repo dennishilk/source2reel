@@ -43,14 +43,16 @@ def _context_options(cfg: dict) -> dict:
 def create(root: Path, sources: list[str], slug: str|None, instructions: str, preview_espeak: bool, stop_after_storyboard: bool, cfg_path: Path|None=None) -> Path:
     if not sources: raise ValueError("At least one source is required")
     slug=slug or slugify(project_title_from_source(sources[0])); pdir=root/"projects"/slug; pdir.mkdir(parents=True,exist_ok=True)
+    title_hint=project_title_from_source(sources[0])
     cfg=load_engine_config(root,cfg_path)
     source_roots=_ingest_many(sources,pdir,int(cfg.get("ingest",{}).get("max_web_pages",12)))
     inv=build_inventory(source_roots,pdir); provider=provider_from_config(cfg)
     if cfg.get("vision",{}).get("enabled",False): inv=enrich_media(provider,inv,pdir,int(cfg.get("vision",{}).get("max_items",40)))
     context = _context_options(cfg)
-    res=research(provider,inv,pdir,int(cfg["research"].get("batch_chars",45000)),**context)
+    res=research(provider,inv,pdir,int(cfg["research"].get("batch_chars",45000)),
+                 title_hint=title_hint,instructions=instructions,**context)
     ep=plan(
-        provider,res,inv,pdir,project_title_from_source(sources[0]),instructions,
+        provider,res,inv,pdir,title_hint,instructions,
         **context,
         max_reduce_levels=int(cfg.get("chunking",{}).get("max_reduce_levels",4)),
     )

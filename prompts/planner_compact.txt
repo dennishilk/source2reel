@@ -8,6 +8,7 @@ Rules:
 - Retain visually useful authentic media when it materially helps explain the project.
 - Each capsule must be traceable to the records in this request.
 - Prefer fewer, stronger capsules over repetition.
+- Keep primary project evidence prominent; use embedded references and generated artifacts as supporting proof unless optional_instructions explicitly requests that focus.
 - Merge duplicates and near-duplicates.
 - Do not turn "detected", "possible", "unknown", or "insufficient evidence" into a stronger claim.
 - Return only the requested JSON object.

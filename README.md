@@ -37,6 +37,11 @@ source ingestion
 → transcript + storyboard + evidence + provenance artifacts
 ```
 
+Research receives the requested project subject and marks likely embedded
+examples and generated artifacts as supporting evidence. These files remain
+available to cite, while their path role helps keep the main project in focus.
+This is a research hint, not a guarantee about an AI-generated storyboard.
+
 ## Context-safe local AI passes
 
 Source2Reel budgets requests against `local_ai.context_size` instead of assuming

@@ -12,7 +12,7 @@ from .util import json_dump
 
 def _media_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
     return [
-        {k: e.get(k) for k in ("ref", "relative_path", "kind", "mime", "media", "ai_media")}
+        {k: e.get(k) for k in ("ref", "relative_path", "kind", "mime", "media", "ai_media", "evidence_role")}
         for e in inventory["evidence"]
         if e["kind"] == "media"
     ]
@@ -20,7 +20,7 @@ def _media_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _evidence_index(inventory: dict[str, Any], refs: set[str] | None = None) -> list[dict[str, Any]]:
     return [
-        {k: e.get(k) for k in ("ref", "relative_path", "kind", "line_start", "line_end", "mime")}
+        {k: e.get(k) for k in ("ref", "relative_path", "kind", "line_start", "line_end", "mime", "evidence_role")}
         for e in inventory["evidence"]
         if refs is None or e["ref"] in refs
     ]
@@ -129,10 +129,12 @@ def _planner_records(
     return records
 
 
-def _compact_payload(level: int, part: int, records: list[dict[str, Any]]) -> dict[str, Any]:
+def _compact_payload(level: int, part: int, records: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
     return {
         "level": level,
         "part": part,
+        "project_title_hint": title_hint,
+        "optional_instructions": instructions,
         "records": records,
         "required_output": {
             "capsules": [{
@@ -320,12 +322,13 @@ def plan(
     compact_system = (project_dir.parents[1] / "prompts" / "planner_compact.txt").read_text()
     records = _planner_records(research, media, evidence_index)
     media_ref_set = {m["ref"] for m in media}
+    make_compact_payload = lambda level, part, batch: _compact_payload(level, part, batch, title_hint, instructions)
 
     for level in range(1, max(1, max_reduce_levels) + 1):
         chunks = split_for_context(
             records,
             compact_system,
-            lambda part, batch: _compact_payload(level, part, batch),
+            lambda part, batch: make_compact_payload(level, part, batch),
             context_size,
             output_reserve_tokens,
             safety_tokens,
@@ -339,7 +342,7 @@ def plan(
             result = checkpointed_complete_json(
                 provider,
                 compact_system,
-                _compact_payload(level, part, batch),
+                make_compact_payload(level, part, batch),
                 checkpoint,
                 lambda value: _normalize_capsules(value, valid, media_ref_set),
                 max_retries=max_retries,

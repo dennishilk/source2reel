@@ -85,6 +85,11 @@ def split_for_context(
                     "split the source evidence into smaller inventory records."
                 )
         else:
+            if not fits_context(system, payload, context_size, output_reserve_tokens, safety_tokens):
+                raise ValueError(
+                    "Research request metadata or a single evidence record exceeds the "
+                    "configured local-AI context budget."
+                )
             current = candidate
             current_chars = candidate_chars
 

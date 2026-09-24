@@ -8,9 +8,11 @@ from .providers import LLMProvider
 from .util import json_dump
 
 
-def _payload(batch_number: int, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
     return {
         "batch": batch_number,
+        "project_title_hint": title_hint,
+        "optional_instructions": instructions,
         "evidence": evidence,
         "required_output": {
             "facts": [{
@@ -49,6 +51,8 @@ def research(
     output_reserve_tokens: int = 4096,
     safety_tokens: int = 1024,
     max_retries: int = 2,
+    title_hint: str = "",
+    instructions: str = "",
 ) -> dict[str, Any]:
     system = (project_dir.parents[1] / "prompts" / "research.txt").read_text()
     valid = {e["ref"] for e in inventory["evidence"]}
@@ -79,10 +83,18 @@ def research(
             assets.append(clean)
         return {"facts": facts, "assets": assets}
 
-    chunks = split_for_context(
+    make_payload = lambda part, batch: _payload(part, batch, title_hint, instructions)
+    # Keep inventory and refs intact; process core evidence before supporting
+    # examples and repetitive generated records when creating research facts.
+    role_order = {"primary": 0, "embedded_reference": 1, "generated_artifact": 2}
+    ordered_evidence = sorted(
         inventory["evidence"],
+        key=lambda entry: role_order.get(entry.get("evidence_role", "primary"), 0),
+    )
+    chunks = split_for_context(
+        ordered_evidence,
         system,
-        _payload,
+        make_payload,
         context_size,
         output_reserve_tokens,
         safety_tokens,
@@ -100,7 +112,7 @@ def research(
         result = checkpointed_complete_json(
             provider,
             system,
-            _payload(i, batch),
+            make_payload(i, batch),
             checkpoint,
             normalize,
             max_retries=max_retries,
