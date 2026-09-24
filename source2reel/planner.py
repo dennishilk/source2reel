@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .chunking import checkpointed_complete_json, fits_context, split_for_context
+from .progress import Progress, step
 from .providers import LLMProvider
 from .schema import SCENE_TYPES, validate_episode
 from .util import json_dump
@@ -297,6 +298,7 @@ def plan(
     safety_tokens: int = 1024,
     max_retries: int = 2,
     max_reduce_levels: int = 4,
+    progress: Progress | None = None,
 ) -> dict[str, Any]:
     valid = {e["ref"] for e in inventory["evidence"]}
     media = _media_inventory(inventory)
@@ -315,7 +317,8 @@ def plan(
             "media_inventory": media,
             "evidence_index": evidence_index,
         })
-        ep = _complete_episode(provider, system, direct_ask, valid, max_retries)
+        with step(progress, "Generating storyboard"):
+            ep = _complete_episode(provider, system, direct_ask, valid, max_retries)
         json_dump(project_dir / "episode.json", ep)
         return ep
 
@@ -339,14 +342,15 @@ def plan(
                 project_dir / "manifests" / "planner-compact-parts"
                 / f"level-{level:02d}-part-{part:03d}.json"
             )
-            result = checkpointed_complete_json(
-                provider,
-                compact_system,
-                make_compact_payload(level, part, batch),
-                checkpoint,
-                lambda value: _normalize_capsules(value, valid, media_ref_set),
-                max_retries=max_retries,
-            )
+            with step(progress, f"Planning evidence — level {level}, part {part}/{len(chunks)}"):
+                result = checkpointed_complete_json(
+                    provider,
+                    compact_system,
+                    make_compact_payload(level, part, batch),
+                    checkpoint,
+                    lambda value: _normalize_capsules(value, valid, media_ref_set),
+                    max_retries=max_retries,
+                )
             capsules.extend(result["capsules"])
 
         capsules = _dedupe_capsules(capsules)
@@ -374,7 +378,8 @@ def plan(
                 "media_inventory": compact_media,
                 "evidence_index": compact_index,
             })
-            ep = _complete_episode(provider, system, ask, valid, max_retries)
+            with step(progress, "Generating storyboard"):
+                ep = _complete_episode(provider, system, ask, valid, max_retries)
             json_dump(project_dir / "episode.json", ep)
             return ep
 

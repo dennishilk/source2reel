@@ -54,6 +54,13 @@ compaction before the final storyboard request. Completed parts are input-hashed
 under `projects/<episode>/manifests/`, so reruns reuse valid work and retry only
 the missing or changed part.
 
+`create` and `build` report their active stage on stderr. Research batches,
+planner compaction parts, and render scenes show known counters. On an interactive
+terminal, a blocking step also updates its elapsed time about every seven seconds.
+Redirected stderr receives only start and completion lines, without terminal
+control sequences or periodic heartbeats. The final storyboard (`--review`) or
+video path remains the only output on stdout.
+
 ## Core commands
 
 ```bash

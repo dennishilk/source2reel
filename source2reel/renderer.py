@@ -10,6 +10,7 @@ from .templates import render_scene, render_video_shell
 from .captions import ass_filter, caption_enabled, estimate_events, write_ass
 from .tts_engine import render_scene_audio
 from .util import ffprobe_duration, json_dump, json_load, run, sha256_file
+from .progress import Progress, step
 
 VIDEO_EXTS={".mp4",".mov",".mkv",".webm"}
 
@@ -46,7 +47,7 @@ def _encode_video_evidence(shell: Path, source_video: Path, audio: Path, seg: Pa
     run(cmd)
 
 
-def build_episode(root: Path, project_dir: Path, episode: dict[str,Any], inventory: dict[str,Any], preview_espeak=False, cfg: dict[str,Any]|None=None) -> Path:
+def build_episode(root: Path, project_dir: Path, episode: dict[str,Any], inventory: dict[str,Any], preview_espeak=False, cfg: dict[str,Any]|None=None, progress: Progress|None=None) -> Path:
     cfg=cfg or load_engine_config(root)
     emap=_evidence_map(inventory); validate_episode(episode,set(emap))
     sidecar=project_dir/"presentation.json"
@@ -56,34 +57,36 @@ def build_episode(root: Path, project_dir: Path, episode: dict[str,Any], invento
     for d in (frames,audio,segs,outdir): d.mkdir(parents=True,exist_ok=True)
     manifest=[]; transcript=[]; segment_paths=[]; backends=set()
     for idx,scene in enumerate(episode["scenes"],1):
-        sid=scene["id"]; aref=scene.get("asset_ref"); evidence_item=emap.get(aref) if aref else None; asset=resolve_evidence_path(evidence_item,project_dir) if evidence_item else None
-        visual_scene=_visual_scene(scene,presentation)
-        frame=frames/f"{idx:03d}-{sid}.png"
-        is_video=bool(asset and asset.suffix.lower() in VIDEO_EXTS and scene["type"] in EVIDENCE_TYPES)
-        captions_on=caption_enabled(scene,is_video,cfg)
-        if is_video: render_video_shell(visual_scene,frame,root,cfg,captions_on)
-        else: render_scene(visual_scene,asset,frame,root,cfg,evidence_item,captions_on,presentation)
-        raw=audio/f"{idx:03d}-{sid}-raw.wav"; norm=audio/f"{idx:03d}-{sid}.wav"
-        backend=render_scene_audio(scene["narration"],raw,norm,root,cfg,preview_espeak); backends.add(backend)
-        pad=float(scene.get("pad_after_seconds",0.5)); voice_duration=ffprobe_duration(norm); dur=voice_duration+pad; seg=segs/f"{idx:03d}-{sid}.mp4"
-        events=estimate_events(scene["narration"],voice_duration) if captions_on else []
-        caption_path=work/"captions"/f"{idx:03d}-{sid}.ass" if events else None
-        if caption_path: write_ass(caption_path,events)
-        if is_video:
-            start=float((scene.get("media") or {}).get("start_seconds",0.0)); _encode_video_evidence(frame,asset,norm,seg,dur,pad,start,caption_path)
-        else:
-            _encode_static_segment(frame,norm,seg,dur,pad,caption_path)
-        segment_paths.append(seg); transcript.append({"scene":sid,"narration":scene["narration"],"duration":dur})
-        manifest.append({
-            "scene":sid,"type":scene["type"],"asset_ref":aref,
-            "asset_sha256":evidence_item.get("sha256") if evidence_item else None,
-            "presentation":"video-fixed-frame" if is_video else "static-frame",
-            "frame":str(frame.relative_to(project_dir)),"duration":dur,
-            "captions":len(events),"media_start_seconds":start if is_video else None
-        })
+        with step(progress, f"Rendering scene {idx}/{len(episode['scenes'])}"):
+            sid=scene["id"]; aref=scene.get("asset_ref"); evidence_item=emap.get(aref) if aref else None; asset=resolve_evidence_path(evidence_item,project_dir) if evidence_item else None
+            visual_scene=_visual_scene(scene,presentation)
+            frame=frames/f"{idx:03d}-{sid}.png"
+            is_video=bool(asset and asset.suffix.lower() in VIDEO_EXTS and scene["type"] in EVIDENCE_TYPES)
+            captions_on=caption_enabled(scene,is_video,cfg)
+            if is_video: render_video_shell(visual_scene,frame,root,cfg,captions_on)
+            else: render_scene(visual_scene,asset,frame,root,cfg,evidence_item,captions_on,presentation)
+            raw=audio/f"{idx:03d}-{sid}-raw.wav"; norm=audio/f"{idx:03d}-{sid}.wav"
+            backend=render_scene_audio(scene["narration"],raw,norm,root,cfg,preview_espeak); backends.add(backend)
+            pad=float(scene.get("pad_after_seconds",0.5)); voice_duration=ffprobe_duration(norm); dur=voice_duration+pad; seg=segs/f"{idx:03d}-{sid}.mp4"
+            events=estimate_events(scene["narration"],voice_duration) if captions_on else []
+            caption_path=work/"captions"/f"{idx:03d}-{sid}.ass" if events else None
+            if caption_path: write_ass(caption_path,events)
+            if is_video:
+                start=float((scene.get("media") or {}).get("start_seconds",0.0)); _encode_video_evidence(frame,asset,norm,seg,dur,pad,start,caption_path)
+            else:
+                _encode_static_segment(frame,norm,seg,dur,pad,caption_path)
+            segment_paths.append(seg); transcript.append({"scene":sid,"narration":scene["narration"],"duration":dur})
+            manifest.append({
+                "scene":sid,"type":scene["type"],"asset_ref":aref,
+                "asset_sha256":evidence_item.get("sha256") if evidence_item else None,
+                "presentation":"video-fixed-frame" if is_video else "static-frame",
+                "frame":str(frame.relative_to(project_dir)),"duration":dur,
+                "captions":len(events),"media_start_seconds":start if is_video else None
+            })
     concat=work/"concat.txt"; concat.write_text("".join(f"file '{p.resolve()}'\n" for p in segment_paths))
     final=outdir/f"{episode.get('slug') or project_dir.name}.mp4"
-    run(["ffmpeg","-y","-loglevel","error","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",final])
+    with step(progress, "Assembling video"):
+        run(["ffmpeg","-y","-loglevel","error","-f","concat","-safe","0","-i",concat,"-c","copy","-movflags","+faststart",final])
     (outdir/"transcript.txt").write_text("\n\n".join(f"[{x['scene']}]\n{x['narration']}" for x in transcript)+"\n")
     final_sha=sha256_file(final)
     json_dump(outdir/"render-manifest.json",{"voice_backends":sorted(backends),"scenes":manifest,"final":final.name,"sha256":final_sha})

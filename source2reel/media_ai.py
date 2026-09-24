@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from PIL import Image
 from .providers import LLMProvider
+from .progress import Progress, step
 from .inventory import resolve_evidence_path
 from .util import json_dump
 
@@ -26,19 +27,20 @@ def _priority(e: dict[str,Any]):
     return bonus+area
 
 
-def enrich_media(provider: LLMProvider, inventory: dict[str,Any], project_dir: Path, max_items: int=40) -> dict[str,Any]:
+def enrich_media(provider: LLMProvider, inventory: dict[str,Any], project_dir: Path, max_items: int=40, progress: Progress|None=None) -> dict[str,Any]:
     media=sorted((e for e in inventory["evidence"] if e.get("kind")=="media"),key=_priority,reverse=True)[:max_items]
-    for e in media:
-        p=resolve_evidence_path(e,project_dir); tmp=tempfile.TemporaryDirectory(); img=Path(tmp.name)/"inspection.jpg"
-        try:
-            if p.suffix.lower() in {".mp4",".mov",".mkv",".webm"}: _video_keyframe(p,img)
-            elif p.suffix.lower()==".svg": continue
-            else: _bounded_image(p,img)
-            system=(project_dir.parents[1]/"prompts"/"media-inspection.txt").read_text()
-            r=provider.complete_json_with_image(system,"Inspect this project asset for later storyboard selection. Do not identify people. Return keys: category, caption, visible_text, evidence_value (high|medium|low), reasons.",img)
-            e["ai_media"]=r
-        except Exception as ex:
-            e["ai_media_error"]=str(ex)
-        finally: tmp.cleanup()
+    for index, e in enumerate(media, 1):
+        with step(progress, f"Visual evidence {index}/{len(media)}"):
+            p=resolve_evidence_path(e,project_dir); tmp=tempfile.TemporaryDirectory(); img=Path(tmp.name)/"inspection.jpg"
+            try:
+                if p.suffix.lower() in {".mp4",".mov",".mkv",".webm"}: _video_keyframe(p,img)
+                elif p.suffix.lower()==".svg": continue
+                else: _bounded_image(p,img)
+                system=(project_dir.parents[1]/"prompts"/"media-inspection.txt").read_text()
+                r=provider.complete_json_with_image(system,"Inspect this project asset for later storyboard selection. Do not identify people. Return keys: category, caption, visible_text, evidence_value (high|medium|low), reasons.",img)
+                e["ai_media"]=r
+            except Exception as ex:
+                e["ai_media_error"]=str(ex)
+            finally: tmp.cleanup()
     json_dump(project_dir/"manifests"/"evidence.json",inventory)
     return inventory

@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .chunking import checkpointed_complete_json, split_for_context
+from .progress import Progress, step
 from .providers import LLMProvider
 from .util import json_dump
 
@@ -151,6 +152,7 @@ def research(
     max_retries: int = 2,
     title_hint: str = "",
     instructions: str = "",
+    progress: Progress | None = None,
 ) -> dict[str, Any]:
     system = (project_dir.parents[1] / "prompts" / "research.txt").read_text()
     valid = {e["ref"] for e in inventory["evidence"]}
@@ -207,14 +209,15 @@ def research(
     for i, batch in enumerate(chunks, 1):
         checkpoint = part_dir / f"part-{i:03d}.json"
         used.add(checkpoint)
-        result = checkpointed_complete_json(
-            provider,
-            system,
-            make_payload(i, batch),
-            checkpoint,
-            normalize,
-            max_retries=max_retries,
-        )
+        with step(progress, f"Research batch {i}/{len(chunks)}"):
+            result = checkpointed_complete_json(
+                provider,
+                system,
+                make_payload(i, batch),
+                checkpoint,
+                normalize,
+                max_retries=max_retries,
+            )
         allfacts.extend(result["facts"])
         assets.extend(result["assets"])
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import io
 from pathlib import Path
 import tempfile
 import unittest
 
 from source2reel.chunking import checkpointed_complete_json, fits_context, split_for_context
 from source2reel.planner import _repair_episode_shape, plan
+from source2reel.progress import Progress
 from source2reel.research import research
 from source2reel.util import json_load
 
@@ -154,6 +156,7 @@ class ContextChunkingTests(unittest.TestCase):
 
     def test_research_auto_splits_and_resumes_saved_parts(self):
         provider = FakeProvider()
+        progress_output = io.StringIO()
         evidence = [
             {"ref": f"E{i:04d}", "kind": "document", "text": "x" * 1400}
             for i in range(1, 9)
@@ -167,9 +170,12 @@ class ContextChunkingTests(unittest.TestCase):
                 provider, {"evidence": evidence}, project,
                 max_chars=999999, context_size=2400,
                 output_reserve_tokens=500, safety_tokens=300,
+                progress=Progress(progress_output),
             )
             part_count = len(list((project / "manifests" / "research-parts").glob("part-*.json")))
             self.assertGreater(part_count, 1)
+            self.assertIn(f"Research batch 1/{part_count}", progress_output.getvalue())
+            self.assertIn(f"Research batch {part_count}/{part_count}", progress_output.getvalue())
             calls_after_first = provider.calls
             self.assertEqual(len(out["facts"]), part_count)
 
@@ -204,6 +210,7 @@ class ContextChunkingTests(unittest.TestCase):
             })
 
         with tempfile.TemporaryDirectory() as tmp:
+            progress_output = io.StringIO()
             root = Path(tmp)
             project = root / "projects" / "demo"
             (root / "prompts").mkdir(parents=True)
@@ -219,11 +226,32 @@ class ContextChunkingTests(unittest.TestCase):
                 context_size=4200,
                 output_reserve_tokens=1000,
                 safety_tokens=500,
+                progress=Progress(progress_output),
             )
             self.assertEqual(ep["version"], 1)
             manifest = json_load(project / "manifests" / "planner-evidence.json")
             self.assertEqual(manifest["strategy"], "map-reduce")
             self.assertTrue(list((project / "manifests" / "planner-compact-parts").glob("*.json")))
+            self.assertRegex(progress_output.getvalue(), r"Planning evidence — level 1, part 1/\d+")
+            self.assertIn("Generating storyboard", progress_output.getvalue())
+
+    def test_planner_direct_request_shows_storyboard_step(self):
+        provider = FakeProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "projects" / "demo"
+            (root / "prompts").mkdir()
+            (root / "prompts" / "storyboard.txt").write_text("storyboard")
+            progress_output = io.StringIO()
+            plan(
+                provider,
+                {"version": 1, "facts": [], "assets": []},
+                {"evidence": [{"ref": "E0001", "kind": "document", "relative_path": "proof.txt"}]},
+                project, "Demo", progress=Progress(progress_output),
+            )
+            self.assertIn("● Generating storyboard\n", progress_output.getvalue())
+            self.assertIn("Complete: Generating storyboard\n", progress_output.getvalue())
+            self.assertEqual(json_load(project / "manifests" / "planner-evidence.json")["strategy"], "direct")
 
 
 if __name__ == "__main__":

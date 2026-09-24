@@ -6,6 +6,7 @@ from .ingest import ingest
 from .inventory import build_inventory
 from .media_ai import enrich_media
 from .planner import plan
+from .progress import Progress, step
 from .providers import provider_from_config
 from .renderer import build_episode
 from .research import research
@@ -18,11 +19,13 @@ def project_title_from_source(source: str) -> str:
     return Path(source).name
 
 
-def _ingest_many(sources: list[str], pdir: Path, max_pages: int) -> list[Path]:
+def _ingest_many(sources: list[str], pdir: Path, max_pages: int, progress: Progress|None=None) -> list[Path]:
     roots=[]; records=[]
     for i,source in enumerate(sources,1):
         ns=f"source-{i:02d}"
-        root=ingest(source,pdir,max_pages=max_pages,namespace=ns); roots.append(root)
+        with step(progress, f"Ingesting source {i}/{len(sources)}"):
+            root=ingest(source,pdir,max_pages=max_pages,namespace=ns)
+        roots.append(root)
         detail=pdir/"sources"/ns/"source.json"
         rec=json_load(detail) if detail.exists() else {"source":source,"local_path":str(root)}
         rec["namespace"]=ns; records.append(rec)
@@ -40,27 +43,44 @@ def _context_options(cfg: dict) -> dict:
     }
 
 
-def create(root: Path, sources: list[str], slug: str|None, instructions: str, preview_espeak: bool, stop_after_storyboard: bool, cfg_path: Path|None=None) -> Path:
+def create(root: Path, sources: list[str], slug: str|None, instructions: str, preview_espeak: bool, stop_after_storyboard: bool, cfg_path: Path|None=None, progress: Progress|None=None) -> Path:
     if not sources: raise ValueError("At least one source is required")
     slug=slug or slugify(project_title_from_source(sources[0])); pdir=root/"projects"/slug; pdir.mkdir(parents=True,exist_ok=True)
     title_hint=project_title_from_source(sources[0])
     cfg=load_engine_config(root,cfg_path)
-    source_roots=_ingest_many(sources,pdir,int(cfg.get("ingest",{}).get("max_web_pages",12)))
-    inv=build_inventory(source_roots,pdir); provider=provider_from_config(cfg)
-    if cfg.get("vision",{}).get("enabled",False): inv=enrich_media(provider,inv,pdir,int(cfg.get("vision",{}).get("max_items",40)))
+    progress=progress or Progress()
+    source_roots=_ingest_many(sources,pdir,int(cfg.get("ingest",{}).get("max_web_pages",12)),progress)
+    with progress.step("Building evidence inventory"):
+        inv=build_inventory(source_roots,pdir)
+    provider=provider_from_config(cfg)
+    if cfg.get("vision",{}).get("enabled",False):
+        with progress.step("Inspecting visual evidence", heartbeat=False):
+            inv=enrich_media(provider,inv,pdir,int(cfg.get("vision",{}).get("max_items",40)),progress=progress)
     context = _context_options(cfg)
-    res=research(provider,inv,pdir,int(cfg["research"].get("batch_chars",45000)),
-                 title_hint=title_hint,instructions=instructions,**context)
-    ep=plan(
-        provider,res,inv,pdir,title_hint,instructions,
-        **context,
-        max_reduce_levels=int(cfg.get("chunking",{}).get("max_reduce_levels",4)),
-    )
-    if stop_after_storyboard: return pdir/"episode.json"
-    return build_episode(root,pdir,ep,inv,preview_espeak,cfg)
+    with progress.step("Researching evidence", heartbeat=False):
+        res=research(provider,inv,pdir,int(cfg["research"].get("batch_chars",45000)),
+                     title_hint=title_hint,instructions=instructions,progress=progress,**context)
+    with progress.step("Planning storyboard", heartbeat=False):
+        ep=plan(
+            provider,res,inv,pdir,title_hint,instructions,
+            **context,progress=progress,
+            max_reduce_levels=int(cfg.get("chunking",{}).get("max_reduce_levels",4)),
+        )
+    if stop_after_storyboard:
+        out=pdir/"episode.json"
+        progress.ready("Storyboard ready for review",out)
+        return out
+    with progress.step("Rendering episode", heartbeat=False):
+        out=build_episode(root,pdir,ep,inv,preview_espeak,cfg,progress=progress)
+    progress.ready("Episode ready",out)
+    return out
 
 
-def build_existing(root: Path, project: str, preview_espeak: bool=False, cfg_path: Path|None=None) -> Path:
+def build_existing(root: Path, project: str, preview_espeak: bool=False, cfg_path: Path|None=None, progress: Progress|None=None) -> Path:
+    progress=progress or Progress()
     pdir=root/"projects"/project; ep=json_load(pdir/"episode.json"); inv=json_load(pdir/"manifests"/"evidence.json")
     cfg=load_engine_config(root,cfg_path)
-    return build_episode(root,pdir,ep,inv,preview_espeak,cfg)
+    with progress.step("Rendering episode", heartbeat=False):
+        out=build_episode(root,pdir,ep,inv,preview_espeak,cfg,progress=progress)
+    progress.ready("Episode ready",out)
+    return out

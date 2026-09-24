@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, os, shutil
+import argparse, os, shutil, sys
 from pathlib import Path
 from .config import load_engine_config
 from .doctor import run_doctor
@@ -119,11 +119,20 @@ def main(argv=None):
             print(start(root,a.backend))
         return
     if a.cmd=="create":
-        out=create(root,a.sources,a.slug,a.instructions,a.preview_espeak,a.review,a.config)
-        print(out)
+        try:
+            out=create(root,a.sources,a.slug,a.instructions,a.preview_espeak,a.review,a.config)
+        except KeyboardInterrupt:
+            print("Interrupted.",file=sys.stderr,flush=True)
+            raise SystemExit(130)
+        print(out,flush=True)
         return
     if a.cmd=="build":
-        print(build_existing(root,a.project,a.preview_espeak,a.config))
+        try:
+            out=build_existing(root,a.project,a.preview_espeak,a.config)
+        except KeyboardInterrupt:
+            print("Interrupted.",file=sys.stderr,flush=True)
+            raise SystemExit(130)
+        print(out,flush=True)
         return
     if a.cmd=="inventory":
         pdir=root/"projects"/a.project

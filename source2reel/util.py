@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, os, re, subprocess
+import hashlib, json, os, re, subprocess, sys
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +37,7 @@ def json_load(path: Path) -> Any:
 
 def run(cmd: list[str | os.PathLike[str]], *, cwd: Path | None = None, capture: bool = False) -> subprocess.CompletedProcess[str]:
     strcmd = [str(x) for x in cmd]
-    print("+", " ".join(strcmd))
+    print("+", " ".join(strcmd), file=sys.stderr, flush=True)
     return subprocess.run(strcmd, cwd=cwd, check=True, text=True, capture_output=capture)
 
 
