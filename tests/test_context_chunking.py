@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from source2reel.chunking import checkpointed_complete_json, fits_context, split_for_context
-from source2reel.planner import plan
+from source2reel.planner import _repair_episode_shape, plan
 from source2reel.research import research
 from source2reel.util import json_load
 
@@ -98,6 +98,21 @@ class ContextChunkingTests(unittest.TestCase):
                 json.dumps(make_payload(i, chunk)),
                 2200, 500, 300,
             ))
+
+    def test_deterministic_episode_shape_repair(self):
+        repaired = _repair_episode_shape({
+            "episode": {
+                "title": "Demo",
+                "scenes": [{
+                    "type": "PROJECT_EVIDENCE",
+                    "narration": "Supported narration.",
+                    "evidence_refs": ["E0001"],
+                }],
+            }
+        })
+        self.assertEqual(repaired["version"], 1)
+        self.assertEqual(repaired["scenes"][0]["id"], "s001")
+        self.assertEqual(repaired["scenes"][0]["asset_ref"], "E0001")
 
     def test_checkpoint_reuses_identical_input_and_invalidates_changed_input(self):
         provider = FakeProvider()

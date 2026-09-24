@@ -210,6 +210,65 @@ def _capsules_to_research(capsules: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _repair_episode_shape(value: dict[str, Any]) -> dict[str, Any]:
+    """Apply only deterministic schema repairs; never invent editorial content."""
+    if not isinstance(value, dict):
+        raise ValueError("planner output must be a JSON object")
+    if isinstance(value.get("episode"), dict) and "scenes" not in value:
+        value = value["episode"]
+    ep = dict(value)
+    if ep.get("version") == "1" or ("version" not in ep and isinstance(ep.get("scenes"), list)):
+        ep["version"] = 1
+    scenes = ep.get("scenes")
+    if isinstance(scenes, list):
+        repaired = []
+        for index, raw_scene in enumerate(scenes, 1):
+            if not isinstance(raw_scene, dict):
+                repaired.append(raw_scene)
+                continue
+            scene = dict(raw_scene)
+            if not scene.get("id"):
+                scene["id"] = f"s{index:03d}"
+            refs = scene.get("evidence_refs")
+            if (
+                scene.get("type") in {"HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"}
+                and not scene.get("asset_ref")
+                and isinstance(refs, list)
+                and len(refs) == 1
+            ):
+                scene["asset_ref"] = refs[0]
+            repaired.append(scene)
+        ep["scenes"] = repaired
+    return ep
+
+
+def _complete_episode(
+    provider: LLMProvider,
+    system: str,
+    ask: dict[str, Any],
+    valid_refs: set[str],
+    max_retries: int,
+) -> dict[str, Any]:
+    last_error: Exception | None = None
+    attempts = max(1, max_retries + 1)
+    for attempt in range(attempts):
+        payload = dict(ask)
+        if last_error is not None:
+            payload["validation_feedback"] = (
+                "The previous storyboard response failed schema validation: "
+                f"{last_error}. Return the requested top-level episode object exactly."
+            )
+        raw = provider.complete_json(system, json.dumps(payload, ensure_ascii=False))
+        try:
+            episode = _repair_episode_shape(raw)
+            validate_episode(episode, valid_refs)
+            return episode
+        except (ValueError, TypeError) as exc:
+            last_error = exc
+    assert last_error is not None
+    raise ValueError(f"planner output invalid after {attempts} attempt(s): {last_error}")
+
+
 def plan(
     provider: LLMProvider,
     research: dict[str, Any],
@@ -240,8 +299,7 @@ def plan(
             "media_inventory": media,
             "evidence_index": evidence_index,
         })
-        ep = provider.complete_json(system, direct_user)
-        validate_episode(ep, valid)
+        ep = _complete_episode(provider, system, direct_ask, valid, max_retries)
         json_dump(project_dir / "episode.json", ep)
         return ep
 
@@ -299,8 +357,7 @@ def plan(
                 "media_inventory": compact_media,
                 "evidence_index": compact_index,
             })
-            ep = provider.complete_json(system, user)
-            validate_episode(ep, valid)
+            ep = _complete_episode(provider, system, ask, valid, max_retries)
             json_dump(project_dir / "episode.json", ep)
             return ep
 
