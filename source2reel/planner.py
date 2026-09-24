@@ -210,7 +210,10 @@ def _capsules_to_research(capsules: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _repair_episode_shape(value: dict[str, Any]) -> dict[str, Any]:
+def _repair_episode_shape(
+    value: dict[str, Any],
+    valid_refs: set[str] | None = None,
+) -> dict[str, Any]:
     """Apply only deterministic schema repairs; never invent editorial content."""
     if not isinstance(value, dict):
         raise ValueError("planner output must be a JSON object")
@@ -230,13 +233,24 @@ def _repair_episode_shape(value: dict[str, Any]) -> dict[str, Any]:
             if not scene.get("id"):
                 scene["id"] = f"s{index:03d}"
             refs = scene.get("evidence_refs")
-            if (
-                scene.get("type") in {"HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"}
-                and not scene.get("asset_ref")
-                and isinstance(refs, list)
-                and len(refs) == 1
-            ):
-                scene["asset_ref"] = refs[0]
+            evidence_scene = scene.get("type") in {
+                "HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"
+            }
+            if evidence_scene and isinstance(refs, list):
+                asset_ref = scene.get("asset_ref")
+                if not asset_ref and len(refs) == 1:
+                    scene["asset_ref"] = refs[0]
+                elif asset_ref and asset_ref not in refs:
+                    if valid_refs is None or asset_ref in valid_refs:
+                        scene["evidence_refs"] = refs + [asset_ref]
+                    elif valid_refs is not None:
+                        valid_scene_refs = [ref for ref in refs if ref in valid_refs]
+                        if len(valid_scene_refs) == 1:
+                            scene["asset_ref"] = valid_scene_refs[0]
+                if not refs and scene.get("asset_ref") and (
+                    valid_refs is None or scene["asset_ref"] in valid_refs
+                ):
+                    scene["evidence_refs"] = [scene["asset_ref"]]
             repaired.append(scene)
         ep["scenes"] = repaired
     return ep
@@ -260,7 +274,7 @@ def _complete_episode(
             )
         raw = provider.complete_json(system, json.dumps(payload, ensure_ascii=False))
         try:
-            episode = _repair_episode_shape(raw)
+            episode = _repair_episode_shape(raw, valid_refs)
             validate_episode(episode, valid_refs)
             return episode
         except (ValueError, TypeError) as exc:

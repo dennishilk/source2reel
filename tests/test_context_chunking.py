@@ -109,10 +109,36 @@ class ContextChunkingTests(unittest.TestCase):
                     "evidence_refs": ["E0001"],
                 }],
             }
-        })
+        }, {"E0001", "E0002"})
         self.assertEqual(repaired["version"], 1)
         self.assertEqual(repaired["scenes"][0]["id"], "s001")
         self.assertEqual(repaired["scenes"][0]["asset_ref"], "E0001")
+
+        mismatch = _repair_episode_shape({
+            "version": 1,
+            "title": "Demo",
+            "scenes": [{
+                "id": "s001",
+                "type": "PROJECT_EVIDENCE",
+                "narration": "Supported narration.",
+                "evidence_refs": ["E0001"],
+                "asset_ref": "E0002",
+            }],
+        }, {"E0001", "E0002"})
+        self.assertEqual(mismatch["scenes"][0]["evidence_refs"], ["E0001", "E0002"])
+
+        invalid_asset = _repair_episode_shape({
+            "version": 1,
+            "title": "Demo",
+            "scenes": [{
+                "id": "s001",
+                "type": "PROJECT_EVIDENCE",
+                "narration": "Supported narration.",
+                "evidence_refs": ["E0001"],
+                "asset_ref": "BAD",
+            }],
+        }, {"E0001"})
+        self.assertEqual(invalid_asset["scenes"][0]["asset_ref"], "E0001")
 
     def test_checkpoint_reuses_identical_input_and_invalidates_changed_input(self):
         provider = FakeProvider()
