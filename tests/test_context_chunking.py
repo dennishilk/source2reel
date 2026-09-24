@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from source2reel.chunking import checkpointed_complete_json, fits_context, split_for_context
 from source2reel.planner import _repair_episode_shape, plan
@@ -252,6 +253,52 @@ class ContextChunkingTests(unittest.TestCase):
             self.assertIn("● Generating storyboard\n", progress_output.getvalue())
             self.assertIn("Complete: Generating storyboard\n", progress_output.getvalue())
             self.assertEqual(json_load(project / "manifests" / "planner-evidence.json")["strategy"], "direct")
+
+    def test_compaction_ref_scope_is_specific_to_each_part(self):
+        class LeakyProvider(FakeProvider):
+            def complete_json(self, system, user):
+                if system != "compact":
+                    return super().complete_json(system, user)
+                part = json.loads(user)["part"]
+                return {"capsules": [{
+                    "claim": f"Grounded part {part}",
+                    "evidence_refs": ["E0001", "E0003"] if part == 1 else ["E0003", "E0002"],
+                    "media_refs": ["E0003"],
+                    "phase": "final", "confidence": "high",
+                }]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "projects" / "demo"
+            (root / "prompts").mkdir()
+            (root / "prompts" / "storyboard.txt").write_text("storyboard")
+            (root / "prompts" / "planner_compact.txt").write_text("compact")
+            inventory = {"evidence": [
+                {"ref": f"E{i:04d}", "kind": "document" if i <= 2 else "media",
+                 "relative_path": f"evidence-{i}.txt" if i <= 2 else f"evidence-{i}.png"}
+                for i in range(1, 5)
+            ]}
+            research_input = {"facts": [
+                {"claim": f"Primary fact {i}", "evidence_refs": [f"E{i:04d}"]}
+                for i in (1, 2)
+            ], "assets": []}
+            with patch("source2reel.planner.fits_context", side_effect=[False, True]), \
+                 patch("source2reel.planner.split_for_context", side_effect=lambda records, *args, **kwargs: [records[:2], records[2:]]):
+                plan(LeakyProvider(), research_input, inventory, project, "Demo")
+            parts = project / "manifests" / "planner-compact-parts"
+            first = json_load(parts / "level-01-part-001.json")["result"]["capsules"][0]
+            second = json_load(parts / "level-01-part-002.json")["result"]["capsules"][0]
+            self.assertEqual(first["evidence_refs"], ["E0001"])
+            self.assertEqual(first["media_refs"], [])
+            self.assertEqual(second["evidence_refs"], ["E0003"])
+            self.assertEqual(second["media_refs"], ["E0003"])
+
+    def test_carried_capsule_refs_remain_available_to_next_level(self):
+        from source2reel.planner import _part_refs
+        records = [{"kind": "capsule", "capsule": {
+            "evidence_refs": ["E0001", "E0003"], "media_refs": ["E0003"],
+        }}]
+        self.assertEqual(_part_refs(records), ({"E0001", "E0003"}, {"E0003"}))
 
 
 if __name__ == "__main__":

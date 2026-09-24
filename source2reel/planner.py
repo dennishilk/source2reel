@@ -150,6 +150,28 @@ def _compact_payload(level: int, part: int, records: list[dict[str, Any]], title
     }
 
 
+def _part_refs(records: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
+    """Refs actually supplied in one compaction request, including carried capsules."""
+    evidence: set[str] = set()
+    media: set[str] = set()
+    for record in records:
+        if record.get("kind") == "capsule":
+            capsule = record["capsule"]
+            evidence.update(capsule.get("evidence_refs", []))
+            media.update(capsule.get("media_refs", []))
+            continue
+        evidence.update(record.get("evidence_refs", []))
+        evidence.update(item["ref"] for item in record.get("evidence", []))
+        if record.get("asset"):
+            evidence.add(record["asset"]["evidence_ref"])
+        provided_media = record.get("media") or []
+        if isinstance(provided_media, dict):
+            provided_media = [provided_media]
+        media.update(item["ref"] for item in provided_media)
+    evidence.update(media)
+    return evidence, media
+
+
 def _normalize_capsules(
     result: dict[str, Any],
     valid_refs: set[str],
@@ -342,13 +364,16 @@ def plan(
                 project_dir / "manifests" / "planner-compact-parts"
                 / f"level-{level:02d}-part-{part:03d}.json"
             )
+            provided_refs, provided_media = _part_refs(batch)
             with step(progress, f"Planning evidence — level {level}, part {part}/{len(chunks)}"):
                 result = checkpointed_complete_json(
                     provider,
                     compact_system,
                     make_compact_payload(level, part, batch),
                     checkpoint,
-                    lambda value: _normalize_capsules(value, valid, media_ref_set),
+                    lambda value: _normalize_capsules(
+                        value, valid & provided_refs, media_ref_set & provided_media
+                    ),
                     max_retries=max_retries,
                 )
             capsules.extend(result["capsules"])

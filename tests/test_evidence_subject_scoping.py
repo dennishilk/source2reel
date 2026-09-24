@@ -11,7 +11,16 @@ from source2reel.chunking import fits_context
 from source2reel.inventory import build_inventory
 from source2reel.pipeline import create
 from source2reel.planner import _compact_payload, _evidence_index, _media_inventory
-from source2reel.research import _consolidate, research
+from source2reel.research import _consolidate, _reference_focus, research
+
+
+ROUND_3_INSTRUCTION = (
+    "Explain what Source2Reel is, why it exists, and how its evidence-first local "
+    "pipeline turns project sources into a finished technical explainer. Use only "
+    "repository evidence and do not invent capabilities. Clearly distinguish the "
+    "reusable Source2Reel engine from the Dennis Explainer production profile. "
+    "End with: “And yes — this video was made with the tool it just explained.”"
+)
 
 
 class RecordingProvider:
@@ -163,6 +172,70 @@ class EvidenceSubjectScopingTests(unittest.TestCase):
         roles = self.selected_roles(result, inventory)
         self.assertGreater(roles.count("generated_artifact"), 10)
         self.assertTrue(all(req["optional_instructions"] == instruction for _, req in provider.requests))
+
+    def test_round_3_evidence_path_does_not_trigger_reference_focus(self):
+        # The embedded path's `evidence` directory matched `evidence-first` in
+        # the first instruction sentence; the same sentence begins with Explain.
+        inventory = {"evidence": [
+            {"ref": "P1", "relative_path": "README.md", "evidence_role": "primary"},
+            {"ref": "E1", "relative_path": "projects/cisco-doom/assets/evidence/cisco_ohne_lan.webp",
+             "evidence_role": "embedded_reference"},
+        ]}
+        self.assertFalse(_reference_focus("source2reel", ROUND_3_INSTRUCTION, inventory))
+
+    def test_profile_distinction_and_blank_instructions_do_not_trigger_focus(self):
+        inventory = {"evidence": [
+            {"ref": "E1", "relative_path": "examples/demo-workshop/assets/evidence/screen.png",
+             "evidence_role": "embedded_reference"},
+        ]}
+        for instruction in (
+            "",
+            "Explain WidgetEngine and distinguish its engine from the Demo Workshop production profile.",
+            "Compare WidgetEngine with Demo Workshop and describe their relationship.",
+            "Explain WidgetEngine and mention its Demo Workshop reference project.",
+            "Focus on WidgetEngine and compare it with Demo Workshop.",
+            "Focus on reference documentation for WidgetEngine.",
+            "Focus on the demonstration, using Demo Workshop as an example.",
+        ):
+            with self.subTest(instruction=instruction):
+                self.assertFalse(_reference_focus("WidgetEngine", instruction, inventory))
+
+    def test_positive_embedded_subject_focus_is_preserved(self):
+        inventory = {"evidence": [
+            {"ref": "E1", "relative_path": "projects/cisco-doom/assets/evidence/proof.webp",
+             "evidence_role": "embedded_reference"},
+        ]}
+        for instruction in (
+            "Focus primarily on the Cisco DOOM reference project and explain how it was produced.",
+            "Center the episode on Cisco DOOM.",
+            "Primarily explain Cisco DOOM.",
+            "Make Cisco DOOM the main subject.",
+            "Showcase Cisco DOOM as the subject.",
+            "Focus on the reference project.",
+            "Focus on the embedded project.",
+        ):
+            with self.subTest(instruction=instruction):
+                self.assertTrue(_reference_focus("source2reel", instruction, inventory))
+
+    def test_round_3_instruction_keeps_large_generated_output_bounded(self):
+        inventory = {"evidence": [
+            *({"ref": f"P{i}", "evidence_role": "primary", "relative_path": f"docs/core-{i}.md"}
+              for i in range(4)),
+            {"ref": "E1", "evidence_role": "embedded_reference",
+             "relative_path": "projects/cisco-doom/assets/evidence/proof.webp"},
+            *({"ref": f"G{i}", "evidence_role": "generated_artifact",
+               "relative_path": "projects/cisco-doom-episode-001/manifests/research.json"}
+              for i in range(100)),
+        ]}
+        facts = ([{"claim": f"Core {i}", "evidence_refs": [f"P{i}"]} for i in range(4)]
+                 + [{"claim": "Embedded proof", "evidence_refs": ["E1"]}]
+                 + [{"claim": f"Generated {i}", "evidence_refs": [f"G{i}"]} for i in range(100)])
+        assets = ([{"evidence_ref": f"P{i}"} for i in range(4)]
+                  + [{"evidence_ref": f"G{i}"} for i in range(100)])
+        selected, kept_assets = _consolidate(facts, assets, inventory, "source2reel", ROUND_3_INSTRUCTION)
+        self.assertEqual(len([f for f in selected if f["evidence_refs"][0].startswith("P")]), 4)
+        self.assertLessEqual(len(selected), 6)
+        self.assertLessEqual(len(kept_assets), 6)
 
     def test_supporting_assets_respect_same_reference_budget(self):
         inventory = {"evidence": [

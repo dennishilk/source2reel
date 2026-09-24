@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .chunking import checkpointed_complete_json, split_for_context
+from .inventory import _EMBEDDED_ROOTS
 from .progress import Progress, step
 from .providers import LLMProvider
 from .util import json_dump
@@ -54,20 +55,47 @@ def _reference_focus(title_hint: str, instructions: str, inventory: dict[str, An
         if entry.get("evidence_role", "primary") == "primary":
             continue
         parts = Path(entry.get("relative_path", "")).parts
-        for part in parts[:-1]:
-            key = re.sub(r"[^a-z0-9]", "", part.casefold())
-            if len(key) >= 5 and key != title_key and key not in {
-                "examples", "samples", "projects", "references", "fixtures", "manifests",
-            }:
-                targets.add(key)
+        # Only the project immediately under an embedded root names a subject.
+        # Deeper generic directories (assets/evidence, manifests, etc.) do not.
+        for index, part in enumerate(parts[:-2]):
+            if part.casefold() in _EMBEDDED_ROOTS:
+                key = re.sub(r"[^a-z0-9]", "", parts[index + 1].casefold())
+                if len(key) >= 4 and key != title_key:
+                    targets.add(key)
+                break
+
+    focus_patterns = (
+        r"\b(?:focus|center|centre)\s+(?:(?:the|this)\s+(?:episode|video|story)\s+)?"
+        r"(?:(?:primarily|mainly)\s+)?(?:on|around)\s+(.+)",
+        r"\b(?:primarily|mainly)\s+(?:explain|explore|cover)\s+(.+)",
+        r"\bmake\s+(.+?)\s+the\s+(?:main|primary|central)\s+(?:subject|focus)\b",
+        r"\bshowcase\s+(.+?)\s+as\s+(?:the\s+)?(?:main\s+)?subject\b",
+    )
     for clause in re.split(r"[.!?;\n]", instructions.casefold()):
-        named = any(target in re.sub(r"[^a-z0-9]", "", clause) for target in targets)
-        generic = bool(re.search(r"\b(?:example|reference|demo|sample|fixture|case study)s?\b", clause))
-        directed = bool(re.search(r"\b(?:focus|center|centre|feature|highlight|prioritize|primarily)\b", clause))
-        if directed and (named or generic):
-            return True
-        if named and re.search(r"\b(?:explain|explore|about|showcase)\b", clause):
-            return True
+        for pattern in focus_patterns:
+            for match in re.finditer(pattern, clause):
+                # A later comparison or mention in the same sentence is not
+                # the object of the focus request.
+                subject = re.split(r",|\b(?:and|while|but|versus|vs|rather\s+than)\b",
+                                   match.group(1), maxsplit=1)[0].strip()
+                subject = re.sub(r"^(?:(?:the|a|an|our|your|this|that|its|included)\s+)+",
+                                 "", subject)
+                if re.match(
+                    r"^(?:(?:embedded\s+)?(?:example|demo|sample|fixture|case study)\b|"
+                    r"(?:embedded\s+)?reference\s+(?:project|case|example)\b|"
+                    r"embedded\s+project\b)", subject
+                ):
+                    return True
+                subject = re.sub(r"^(?:(?:embedded|project)\s+)+", "", subject)
+                words = re.findall(r"[a-z0-9]+", subject)
+                for target in targets:
+                    prefix = ""
+                    for word in words:
+                        prefix += word
+                        if prefix == target:
+                            return True
+                        if len(prefix) >= len(target):
+                            break
     return False
 
 
