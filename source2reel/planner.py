@@ -10,7 +10,7 @@ from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
 from .research import _consolidate, _reference_focus
-from .schema import SCENE_TYPES, validate_episode, validate_presentation
+from .schema import DIAGRAM_TYPES, EVIDENCE_TYPES, SCENE_TYPES, validate_episode, validate_presentation
 from .util import json_dump, json_load
 
 
@@ -473,7 +473,9 @@ _OUTLINE_SYSTEM = (
     "version, title, slug, summary, optional presentation, and an ordered "
     "scene_intents list. Choose the episode length editorially (1 to 32 scenes). "
     "Each intent needs type, purpose (at most 160 characters), and at most six "
-    "evidence_refs from the supplied planner evidence. Do not write scene narration yet. "
+    "evidence_refs from the supplied planner evidence. For each evidence scene "
+    "type, also choose one fixed asset_ref from that intent's evidence_refs; "
+    "other scene types do not need an asset_ref. Do not write scene narration yet. "
     "If you plan an OUTRO, supply presentation.outro with grounded headline and "
     "links; if no links are supported, finish with SUMMARY instead. Keep any "
     "requested final sentence for narration in the last scene."
@@ -481,7 +483,10 @@ _OUTLINE_SYSTEM = (
 _SCENES_SYSTEM = (
     "\n\nMultipart storyboard scenes: return only a JSON object with a scenes list, "
     "one full scene object per requested intent, in the exact requested order "
-    "and with its assigned id and type. Cite only the supplied part evidence. "
+    "and with its assigned id and type. Follow each scene's type-specific "
+    "required_output: preserve its fixed asset_ref for evidence scenes and "
+    "supply 2–8 labeled, evidence-grounded diagram nodes for diagram scenes. "
+    "Cite only the supplied part evidence. "
     "Preserve structured scene fields including media.start_seconds, captions, "
     "diagram nodes and annotations when appropriate. Keep narration concise. "
     "Only if this part contains the episode's last scene, satisfy any requested "
@@ -498,6 +503,10 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "research": ask["research"],
         "media_inventory": ask["media_inventory"],
         "evidence_index": ask["evidence_index"],
+        "scene_type_requirements": {
+            "asset_ref_required_types": sorted(EVIDENCE_TYPES),
+            "asset_ref": "For these types, choose one evidence_ref from the same intent as the fixed visual asset; omit for other types.",
+        },
         "required_output": {
             "version": 1, "title": "English title", "slug": "short-slug",
             "summary": "English summary",
@@ -506,6 +515,7 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
             "scene_intents": [{
                 "type": "one allowed scene type", "purpose": "brief editorial aim",
                 "evidence_refs": ["a supplied evidence ref"],
+                "asset_ref": "one of this intent's evidence_refs if type requires an asset_ref; omit otherwise",
             }],
         },
     }
@@ -539,8 +549,16 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str]) -> dict[str, An
         refs = list(dict.fromkeys(refs))
         if raw["type"] not in {"SECTION_TITLE", "OUTRO"} and not refs:
             raise StructuredOutputError(f"Storyboard intent {index} needs evidence refs")
-        intents.append({"id": f"s{index:03d}", "type": raw["type"],
-                        "purpose": purpose.strip(), "evidence_refs": refs})
+        intent = {"id": f"s{index:03d}", "type": raw["type"],
+                  "purpose": purpose.strip(), "evidence_refs": refs}
+        if raw["type"] in EVIDENCE_TYPES:
+            asset_ref = raw.get("asset_ref")
+            if not isinstance(asset_ref, str) or asset_ref not in refs or asset_ref not in allowed:
+                raise StructuredOutputError(
+                    f"Storyboard intent {index} asset_ref must be one of its scoped evidence_refs"
+                )
+            intent["asset_ref"] = asset_ref
+        intents.append(intent)
     outline["scene_intents"] = intents
     if "presentation" in value:
         outline["presentation"] = value["presentation"]
@@ -582,6 +600,20 @@ def _scene_part_payload(
             neighbors[key] = {name: neighbor[name] for name in ("id", "type", "purpose")}
     metadata = {key: outline[key] for key in ("version", "title", "slug", "summary", "presentation")
                 if key in outline}
+
+    def required_scene(intent: dict[str, Any]) -> dict[str, Any]:
+        scene = {"id": intent["id"], "type": intent["type"], "title": "on-screen title",
+                 "narration": "concise evidence-grounded narration",
+                 "evidence_refs": intent["evidence_refs"]}
+        if intent["type"] in EVIDENCE_TYPES:
+            scene["asset_ref"] = intent["asset_ref"]
+        if intent["type"] in DIAGRAM_TYPES:
+            scene["diagram"] = {"nodes": [
+                "first labeled relationship or step grounded in supplied evidence",
+                "second labeled relationship or step grounded in supplied evidence",
+            ]}
+        return scene
+
     return {
         "storyboard_mode": "scenes", "part_number": part_number, "part_count": part_count,
         "scope_sha256": scope_id,
@@ -596,12 +628,16 @@ def _scene_part_payload(
                      "facts": facts, "assets": assets},
         "media_inventory": media, "evidence_index": index,
         "optional_structured_scene_fields": ask["optional_structured_scene_fields"],
-        "required_output": {"scenes": [
-            {"id": intent["id"], "type": intent["type"], "title": "on-screen title",
-             "narration": "concise evidence-grounded narration",
-             "evidence_refs": intent["evidence_refs"]}
-            for intent in intents
-        ]},
+        "optional_scene_fields": {
+            "annotations": "optional evidence-grounded labels",
+            "notes": "optional production note",
+            "pad_after_seconds": "optional non-negative pause",
+        },
+        "scene_type_requirements": {
+            "fixed_asset_ref": "Evidence scenes must return the exact asset_ref selected in the outline and include it in evidence_refs.",
+            "diagram_nodes": "Diagram scenes require 2–8 explicit labeled nodes or steps grounded in the supplied part evidence.",
+        },
+        "required_output": {"scenes": [required_scene(intent) for intent in intents]},
     }
 
 
@@ -614,13 +650,34 @@ def _normalize_scene_part(
     scenes = value["scenes"]
     if not isinstance(scenes, list) or len(scenes) != len(intents):
         raise StructuredOutputError(f"Storyboard part requires exactly {len(intents)} scenes")
+    normalized_scenes = []
     for scene, intent in zip(scenes, intents):
         if not isinstance(scene, dict) or scene.get("id") != intent["id"] or scene.get("type") != intent["type"]:
             raise StructuredOutputError(f"Storyboard part scene order/id/type differs from {intent['id']}")
         refs = scene.get("evidence_refs", [])
         if not isinstance(refs, list) or any(not isinstance(ref, str) or ref not in allowed for ref in refs):
             raise StructuredOutputError(f"{intent['id']}: evidence refs outside this part's planner scope: {refs}")
-    partial = {"version": 1, "title": outline["title"], "scenes": scenes}
+        if intent["type"] in EVIDENCE_TYPES:
+            fixed = intent["asset_ref"]
+            if fixed not in allowed:
+                raise StructuredOutputError(f"{intent['id']}: fixed asset_ref outside this part's planner scope")
+            returned = scene.get("asset_ref")
+            if returned not in (None, ""):
+                if not isinstance(returned, str) or returned not in allowed:
+                    raise StructuredOutputError(f"{intent['id']}: asset_ref outside this part's planner scope")
+                if returned != fixed:
+                    raise StructuredOutputError(f"{intent['id']}: asset_ref differs from fixed outline choice {fixed}")
+            if fixed not in refs:
+                raise StructuredOutputError(f"{intent['id']}: asset_ref must appear in scene evidence_refs")
+            if returned in (None, ""):
+                scene = {**scene, "asset_ref": fixed}
+        if intent["type"] in DIAGRAM_TYPES:
+            diagram = scene.get("diagram")
+            nodes = (diagram.get("nodes") or diagram.get("steps")) if isinstance(diagram, dict) else None
+            if not isinstance(nodes, list) or not 2 <= len(nodes) <= 8:
+                raise StructuredOutputError(f"{intent['id']}: diagram nodes/steps require 2–8 labeled entries")
+        normalized_scenes.append(scene)
+    partial = {"version": 1, "title": outline["title"], "scenes": normalized_scenes}
     if "presentation" in outline:
         partial["presentation"] = outline["presentation"]
     try:

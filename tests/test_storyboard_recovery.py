@@ -1,6 +1,7 @@
 """Final storyboard output can outgrow one structured model response."""
 from __future__ import annotations
 
+import copy
 import io
 import json
 from pathlib import Path
@@ -41,6 +42,15 @@ def _source():
     return inventory, research
 
 
+def _source_with_two_ref_hero():
+    inventory, research = _source()
+    inventory["evidence"].append({"ref": "E0020", "kind": "document",
+                                  "relative_path": "second-proof.md", "evidence_role": "primary"})
+    research["facts"].append({"claim": "Grounded fact 20", "evidence_refs": ["E0020"],
+                              "phase": "final", "confidence": "high"})
+    return inventory, research
+
+
 def _project(root):
     project = root / "projects" / "demo"
     (root / "prompts").mkdir()
@@ -56,6 +66,7 @@ class StoryboardProvider:
         self.bad_part = None
         self.oversize_part = None
         self.full_error = OutputLimitExceeded
+        self.first_refs = None
 
     def complete_json(self, system, user):
         payload = json.loads(user)
@@ -64,12 +75,20 @@ class StoryboardProvider:
         if mode is None:
             raise self.full_error("complete output exceeds limit")
         if mode == "outline":
-            kinds = ["HERO", "CODE", "DATA_FLOW", "PROJECT_EVIDENCE", "TIMELINE", "SUMMARY", "OUTRO"]
-            refs = [["E0001"], ["E0003"], ["E0001", "E0003"], ["E0002"],
-                    ["E0004", "E0005"], ["E0001"], []]
-            intents = [{"type": kinds[i % len(kinds)], "purpose": f"Point {i+1}",
-                        "evidence_refs": refs[i % len(refs)]}
-                       for i in range(self.count)]
+            kinds = ["HERO", "CODE", "DATA_FLOW", "PROJECT_EVIDENCE", "TIMELINE",
+                     "ARCHITECTURE_DIAGRAM", "OUTRO"]
+            refs = [self.first_refs or ["E0001"], ["E0003"], ["E0001", "E0003"],
+                    ["E0002"], ["E0004", "E0005"], ["E0001", "E0003"], []]
+            requested_intent = payload["required_output"]["scene_intents"][0]
+            evidence_types = payload.get("scene_type_requirements", {}).get(
+                "asset_ref_required_types", ())
+            intents = []
+            for i in range(self.count):
+                intent = {"type": kinds[i % len(kinds)], "purpose": f"Point {i+1}",
+                          "evidence_refs": refs[i % len(refs)]}
+                if intent["type"] in evidence_types and "asset_ref" in requested_intent:
+                    intent["asset_ref"] = intent["evidence_refs"][-1]
+                intents.append(intent)
             return {"version": 1, "title": "Grounded project", "slug": "grounded-project",
                     "summary": "An evidence-first explanation.",
                     "presentation": {"outro": {
@@ -85,19 +104,26 @@ class StoryboardProvider:
             if self.oversize_part == part and len(intents) > 1:
                 raise OutputLimitExceeded("scene group too long")
             scenes = []
-            for intent in intents:
-                refs = intent["evidence_refs"]
-                scene = {"id": intent["id"], "type": intent["type"],
-                         "title": intent["purpose"], "narration": f"Narration {intent['id']}.",
-                         "evidence_refs": refs, "notes": "", "annotations": [],
-                         "pad_after_seconds": 0.5}
-                if scene["type"] in {"HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"}:
-                    scene["asset_ref"] = refs[0]
-                if scene["type"] in {"DATA_FLOW", "TIMELINE", "ARCHITECTURE_DIAGRAM"}:
-                    scene["diagram"] = {"nodes": ["Input", "Output"]}
-                if scene["type"] == "PROJECT_EVIDENCE":
+            for intent, requested in zip(intents, payload["required_output"]["scenes"]):
+                scene = copy.deepcopy(requested)
+                scene["title"] = intent["purpose"]
+                scene["narration"] = f"Narration {intent['id']}."
+                if "diagram" in scene:
+                    claims = [fact["claim"] for fact in payload["research"]["facts"]
+                              if set(fact["evidence_refs"]) & set(intent["evidence_refs"])]
+                    scene["diagram"]["nodes"] = claims[:2]
+                optional = payload.get("optional_scene_fields", {})
+                if "annotations" in optional:
+                    scene["annotations"] = []
+                if "notes" in optional:
+                    scene["notes"] = ""
+                if "pad_after_seconds" in optional:
+                    scene["pad_after_seconds"] = 0.5
+                if (scene.get("asset_ref") in {m["ref"] for m in payload["media_inventory"]} and
+                        "media.start_seconds" in payload["optional_structured_scene_fields"]):
                     scene["media"] = {"start_seconds": 2.5}
-                    scene["captions"] = {"enabled": False}
+                    if "captions.enabled" in payload["optional_structured_scene_fields"]:
+                        scene["captions"] = {"enabled": False}
                 if self.bad_part == part:
                     scene["evidence_refs"] = ["E0099"]  # Valid inventory ref, absent from this planner scope.
                 scenes.append(scene)
@@ -199,7 +225,11 @@ class StoryboardRecoveryTests(unittest.TestCase):
                              [f"Point {i}" for i in range(1, 8)])
             self.assertEqual(episode["scenes"][3]["media"]["start_seconds"], 2.5)
             self.assertIs(episode["scenes"][3]["captions"]["enabled"], False)
-            self.assertEqual(episode["scenes"][2]["diagram"]["nodes"], ["Input", "Output"])
+            self.assertEqual(episode["scenes"][2]["diagram"]["nodes"],
+                             ["Grounded fact 1", "Grounded fact 3"])
+            self.assertEqual(episode["scenes"][0]["annotations"], [])
+            self.assertEqual(episode["scenes"][0]["notes"], "")
+            self.assertEqual(episode["scenes"][0]["pad_after_seconds"], 0.5)
             self.assertEqual(episode["presentation"]["outro"]["headline"], ["The project"])
             self.assertEqual(episode["presentation"]["scene_titles"]["s001"], "Project begins")
             self.assertEqual(json_load(project / "episode.json"), episode)
@@ -218,6 +248,156 @@ class StoryboardRecoveryTests(unittest.TestCase):
                              [False, False, False, True])
             self.assertTrue(all("media.start_seconds" in p["optional_structured_scene_fields"]
                                 for p in scene_requests))
+
+    def test_contract_only_provider_recovers_multi_ref_hero_split_and_all_diagram_types(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _project(Path(tmp))
+            provider = StoryboardProvider()
+            provider.first_refs = ["E0001", "E0020"]
+            provider.oversize_part = 1
+            inventory, research = _source_with_two_ref_hero()
+            episode = plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
+                           max_retries=0)
+            self.assertEqual([s["id"] for s in episode["scenes"]],
+                             [f"s{i:03d}" for i in range(1, 8)])
+            self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0001", "E0020"])
+            self.assertEqual(episode["scenes"][0]["asset_ref"], "E0020")
+            self.assertEqual(episode["presentation"]["outro"]["headline"], ["The project"])
+            for scene in episode["scenes"]:
+                if "diagram" in scene:
+                    self.assertEqual(len(scene["diagram"]["nodes"]), 2)
+            validate_episode(episode, {f"E{i:04d}" for i in range(1, 7)} | {"E0020"},
+                             require_integrated_presentation=True)
+            requests = [call for call in provider.calls if call.get("storyboard_mode") == "scenes"]
+            self.assertGreaterEqual(len({r["part_number"] for r in requests}), 3)
+            parent, child = [r for r in requests if r["part_number"] == 1][:2]
+            self.assertEqual(len(parent["scene_intents"]), 2)
+            self.assertEqual(len(child["scene_intents"]), 1)
+            for request in (parent, child):
+                self.assertEqual(request["scene_intents"][0]["asset_ref"], "E0020")
+                self.assertEqual(request["required_output"]["scenes"][0]["asset_ref"], "E0020")
+                self.assertIn("E0020", {e["ref"] for e in request["evidence_index"]})
+            for request in requests:
+                for template in request["required_output"]["scenes"]:
+                    if template["type"] in {"DATA_FLOW", "TIMELINE", "ARCHITECTURE_DIAGRAM"}:
+                        self.assertEqual(len(template["diagram"]["nodes"]), 2)
+                        self.assertIn("2–8", request["scene_type_requirements"]["diagram_nodes"])
+                    elif template["type"] in {"CODE", "OUTRO"}:
+                        self.assertNotIn("diagram", template)
+                        self.assertNotIn("asset_ref", template)
+            part_dir = project / "manifests" / "storyboard-parts"
+            for filename in ("outline.json", "part-001-split.json", "part-001-a.json",
+                             "part-001-b.json", "part-002.json", "part-003.json"):
+                self.assertTrue((part_dir / filename).exists(), filename)
+            first_calls = len(provider.calls)
+            self.assertEqual(plan(provider, research, inventory, project, "DemoEngine",
+                                  INSTRUCTIONS, max_retries=0), episode)
+            self.assertEqual(len(provider.calls), first_calls)
+
+    def test_invalid_outline_asset_and_returned_asset_fail_precisely(self):
+        inventory, research = _source_with_two_ref_hero()
+
+        for bad in ("missing", "out_of_planner_scope", "not_in_intent_refs"):
+            with self.subTest(bad_outline=bad), tempfile.TemporaryDirectory() as tmp:
+                class BadOutline(StoryboardProvider):
+                    def complete_json(self, system, user):
+                        request = json.loads(user)
+                        result = super().complete_json(system, user)
+                        if request.get("storyboard_mode") == "outline":
+                            first = result["scene_intents"][0]
+                            if bad == "missing":
+                                first.pop("asset_ref", None)
+                            else:
+                                first["asset_ref"] = "E0099" if bad == "out_of_planner_scope" else "E0003"
+                        return result
+
+                provider = BadOutline(count=3)
+                provider.first_refs = ["E0001", "E0020"]
+                project = _project(Path(tmp))
+                with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+                    plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
+                         max_retries=0)
+                self.assertFalse((project / "episode.json").exists())
+
+        for bad in ("outside_part", "uncited", "different", "missing"):
+            with self.subTest(bad_scene=bad), tempfile.TemporaryDirectory() as tmp:
+                class BadScene(StoryboardProvider):
+                    def complete_json(self, system, user):
+                        request = json.loads(user)
+                        result = super().complete_json(system, user)
+                        if request.get("storyboard_mode") == "scenes" and request["part_number"] == 1:
+                            scene = result["scenes"][0]
+                            if bad == "outside_part":
+                                scene["asset_ref"] = "E0099"
+                            elif bad == "uncited":
+                                scene["evidence_refs"] = ["E0001"]
+                            elif bad == "different":
+                                scene["asset_ref"] = "E0001"
+                            else:
+                                scene.pop("asset_ref", None)
+                        return result
+
+                provider = BadScene(count=3)
+                provider.first_refs = ["E0001", "E0020"]
+                project = _project(Path(tmp))
+                if bad == "missing":
+                    episode = plan(provider, research, inventory, project, "DemoEngine",
+                                   INSTRUCTIONS, max_retries=0)
+                    self.assertEqual(episode["scenes"][0]["asset_ref"], "E0020")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "asset_ref"):
+                        plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
+                             max_retries=0)
+                    self.assertFalse((project / "episode.json").exists())
+
+    def test_malformed_diagram_is_rejected_before_assembly(self):
+        for bad in ("missing", "too_few_nodes", "unlabeled"):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as tmp:
+                class BadDiagram(StoryboardProvider):
+                    def complete_json(self, system, user):
+                        request = json.loads(user)
+                        result = super().complete_json(system, user)
+                        if request.get("storyboard_mode") == "scenes" and request["part_number"] == 2:
+                            for scene in result["scenes"]:
+                                if "diagram" in scene:
+                                    if bad == "missing":
+                                        del scene["diagram"]
+                                    elif bad == "too_few_nodes":
+                                        scene["diagram"]["nodes"] = ["one label"]
+                                    else:
+                                        scene["diagram"]["nodes"] = ["", "label"]
+                        return result
+
+                project = _project(Path(tmp))
+                inventory, research = _source()
+                with self.assertRaisesRegex(RuntimeError, "diagram nodes"):
+                    plan(BadDiagram(count=5), research, inventory, project,
+                         "DemoEngine", INSTRUCTIONS, max_retries=0)
+                self.assertFalse((project / "episode.json").exists())
+
+    def test_stale_multipart_contract_checkpoints_refresh_without_full_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _project(Path(tmp))
+            provider = StoryboardProvider(count=3)
+            inventory, research = _source()
+            episode = plan(provider, research, inventory, project, "DemoEngine",
+                           INSTRUCTIONS, max_retries=0)
+            part_dir = project / "manifests" / "storyboard-parts"
+            for name in ("outline.json", "part-001.json"):
+                path = part_dir / name
+                checkpoint = json_load(path)
+                checkpoint["input_sha256"] = "previous multipart contract"
+                path.write_text(json.dumps(checkpoint))
+            counts = lambda: (
+                len([p for p in provider.calls if "storyboard_mode" not in p]),
+                len([p for p in provider.calls if p.get("storyboard_mode") == "outline"]),
+                len([p for p in provider.calls if p.get("storyboard_mode") == "scenes"]),
+            )
+            self.assertEqual(counts(), (1, 1, 2))
+            self.assertEqual(plan(provider, research, inventory, project, "DemoEngine",
+                                  INSTRUCTIONS, max_retries=0), episode)
+            self.assertEqual(counts(), (1, 2, 3))
+            self.assertTrue((part_dir / "recovery.json").exists())
 
     def test_resumes_finished_parts_without_retrying_full_episode(self):
         with tempfile.TemporaryDirectory() as tmp:
