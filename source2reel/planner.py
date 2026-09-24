@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from .chunking import checkpointed_split_json, fits_context, split_for_context
+from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
 from .progress import Progress, step
-from .providers import LLMProvider
+from .providers import LLMProvider, StructuredOutputError
 from .research import _consolidate, _reference_focus
-from .schema import SCENE_TYPES, validate_episode
-from .util import json_dump
+from .schema import SCENE_TYPES, validate_episode, validate_presentation
+from .util import json_dump, json_load
 
 
 def _media_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
@@ -359,6 +360,10 @@ def _repair_episode_shape(
     return ep
 
 
+class _EpisodeValidationExhausted(ValueError):
+    """Full episode output stayed schema-invalid after bounded retries."""
+
+
 def _complete_episode(
     provider: LLMProvider,
     system: str,
@@ -383,7 +388,297 @@ def _complete_episode(
         except (ValueError, TypeError) as exc:
             last_error = exc
     assert last_error is not None
-    raise ValueError(f"planner output invalid after {attempts} attempt(s): {last_error}")
+    raise _EpisodeValidationExhausted(f"planner output invalid after {attempts} attempt(s): {last_error}")
+
+
+_MAX_STORYBOARD_SCENES = 32
+_SCENES_PER_PART = 2
+_OUTLINE_SYSTEM = (
+    "\n\nMultipart storyboard outline: return one compact JSON object containing "
+    "version, title, slug, summary, optional presentation, and an ordered "
+    "scene_intents list. Choose the episode length editorially (1 to 32 scenes). "
+    "Each intent needs type, purpose (at most 160 characters), and at most six "
+    "evidence_refs from the supplied planner evidence. Do not write scene narration yet. "
+    "If you plan an OUTRO, supply presentation.outro with grounded headline and "
+    "links; if no links are supported, finish with SUMMARY instead. Keep any "
+    "requested final sentence for narration in the last scene."
+)
+_SCENES_SYSTEM = (
+    "\n\nMultipart storyboard scenes: return only a JSON object with a scenes list, "
+    "one full scene object per requested intent, in the exact requested order "
+    "and with its assigned id and type. Cite only the supplied part evidence. "
+    "Preserve structured scene fields including media.start_seconds, captions, "
+    "diagram nodes and annotations when appropriate. Keep narration concise. "
+    "Only if this part contains the episode's last scene, satisfy any requested "
+    "final sentence in that scene's narration."
+)
+
+
+def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "storyboard_mode": "outline",
+        "project_title_hint": ask["project_title_hint"],
+        "optional_instructions": ask["optional_instructions"],
+        "allowed_scene_types": ask["allowed_scene_types"],
+        "research": ask["research"],
+        "media_inventory": ask["media_inventory"],
+        "evidence_index": ask["evidence_index"],
+        "required_output": {
+            "version": 1, "title": "English title", "slug": "short-slug",
+            "summary": "English summary",
+            "presentation": "optional episode presentation; OUTRO requires presentation.outro",
+            "scene_intents": [{
+                "type": "one allowed scene type", "purpose": "brief editorial aim",
+                "evidence_refs": ["a supplied evidence ref"],
+            }],
+        },
+    }
+
+
+def _normalize_outline(value: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("version") not in (1, "1"):
+        raise StructuredOutputError("Storyboard outline must have version 1")
+    outline = {"version": 1}
+    for key, limit in (("title", 240), ("slug", 100), ("summary", 1600)):
+        item = value.get(key)
+        if not isinstance(item, str) or not item.strip() or len(item) > limit:
+            raise StructuredOutputError(f"Storyboard outline requires a concise {key}")
+        outline[key] = item.strip()
+    raw_intents = value.get("scene_intents")
+    if not isinstance(raw_intents, list) or not 1 <= len(raw_intents) <= _MAX_STORYBOARD_SCENES:
+        raise StructuredOutputError(
+            f"Storyboard outline requires 1–{_MAX_STORYBOARD_SCENES} scene intents"
+        )
+    intents = []
+    for index, raw in enumerate(raw_intents, 1):
+        if not isinstance(raw, dict) or not isinstance(raw.get("type"), str) or raw["type"] not in SCENE_TYPES:
+            raise StructuredOutputError(f"Storyboard intent {index} has an invalid scene type")
+        purpose, refs = raw.get("purpose"), raw.get("evidence_refs", [])
+        if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 160:
+            raise StructuredOutputError(f"Storyboard intent {index} needs a short purpose")
+        if not isinstance(refs, list) or len(refs) > 6 or any(
+            not isinstance(ref, str) or ref not in allowed for ref in refs
+        ):
+            raise StructuredOutputError(f"Storyboard intent {index} cites evidence outside planner scope")
+        refs = list(dict.fromkeys(refs))
+        if raw["type"] not in {"SECTION_TITLE", "OUTRO"} and not refs:
+            raise StructuredOutputError(f"Storyboard intent {index} needs evidence refs")
+        intents.append({"id": f"s{index:03d}", "type": raw["type"],
+                        "purpose": purpose.strip(), "evidence_refs": refs})
+    outline["scene_intents"] = intents
+    if "presentation" in value:
+        outline["presentation"] = value["presentation"]
+    try:
+        validate_presentation(outline.get("presentation", {}),
+                              any(intent["type"] == "OUTRO" for intent in intents))
+        titles = outline.get("presentation", {}).get("scene_titles", {})
+        if any(scene_id not in {intent["id"] for intent in intents} for scene_id in titles):
+            raise ValueError("presentation.scene_titles references an unplanned scene")
+    except (ValueError, TypeError) as exc:
+        raise StructuredOutputError(f"Storyboard outline presentation invalid: {exc}") from exc
+    return outline
+
+
+def _scene_part_payload(
+    ask: dict[str, Any], outline: dict[str, Any], intents: list[dict[str, Any]],
+    part_number: int, part_count: int, scope_id: str,
+) -> dict[str, Any]:
+    scoped = {item["ref"] for item in ask["evidence_index"]}
+    requested = {ref for intent in intents for ref in intent["evidence_refs"]}
+    facts = [dict(fact) for fact in ask["research"].get("facts", [])
+             if any(ref in requested for ref in fact.get("evidence_refs", []))]
+    for fact in facts:
+        fact["evidence_refs"] = [ref for ref in fact.get("evidence_refs", []) if ref in scoped]
+    # A supporting fact may need two citations. Include its whole cited scope,
+    # while never expanding beyond the planner context used by the fast path.
+    supplied = requested | {ref for fact in facts for ref in fact["evidence_refs"]}
+    media = [item for item in ask["media_inventory"] if item["ref"] in supplied]
+    assets = [asset for asset in ask["research"].get("assets", [])
+              if asset.get("evidence_ref") in supplied]
+    index = [item for item in ask["evidence_index"] if item["ref"] in supplied]
+    all_intents = outline["scene_intents"]
+    first = int(intents[0]["id"][1:]) - 1
+    last = int(intents[-1]["id"][1:])
+    neighbors = {}
+    for key, offset in (("previous_intent", first - 1), ("next_intent", last)):
+        if 0 <= offset < len(all_intents):
+            neighbor = all_intents[offset]
+            neighbors[key] = {name: neighbor[name] for name in ("id", "type", "purpose")}
+    metadata = {key: outline[key] for key in ("version", "title", "slug", "summary", "presentation")
+                if key in outline}
+    return {
+        "storyboard_mode": "scenes", "part_number": part_number, "part_count": part_count,
+        "scope_sha256": scope_id,
+        "project_title_hint": ask["project_title_hint"],
+        "optional_instructions": ask["optional_instructions"],
+        "episode_metadata": metadata,
+        "total_scenes": len(all_intents),
+        "contains_final_scene": intents[-1]["id"] == all_intents[-1]["id"],
+        "scene_intents": intents,
+        **neighbors,
+        "research": {"version": ask["research"].get("version", 1),
+                     "facts": facts, "assets": assets},
+        "media_inventory": media, "evidence_index": index,
+        "optional_structured_scene_fields": ask["optional_structured_scene_fields"],
+        "required_output": {"scenes": [
+            {"id": intent["id"], "type": intent["type"], "title": "on-screen title",
+             "narration": "concise evidence-grounded narration",
+             "evidence_refs": intent["evidence_refs"]}
+            for intent in intents
+        ]},
+    }
+
+
+def _normalize_scene_part(
+    value: dict[str, Any], intents: list[dict[str, Any]],
+    allowed: set[str], outline: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"scenes"}:
+        raise StructuredOutputError("Storyboard part must contain only a scenes list")
+    scenes = value["scenes"]
+    if not isinstance(scenes, list) or len(scenes) != len(intents):
+        raise StructuredOutputError(f"Storyboard part requires exactly {len(intents)} scenes")
+    for scene, intent in zip(scenes, intents):
+        if not isinstance(scene, dict) or scene.get("id") != intent["id"] or scene.get("type") != intent["type"]:
+            raise StructuredOutputError(f"Storyboard part scene order/id/type differs from {intent['id']}")
+        refs = scene.get("evidence_refs", [])
+        if not isinstance(refs, list) or any(not isinstance(ref, str) or ref not in allowed for ref in refs):
+            raise StructuredOutputError(f"{intent['id']}: evidence refs outside this part's planner scope: {refs}")
+    partial = {"version": 1, "title": outline["title"], "scenes": scenes}
+    if "presentation" in outline:
+        partial["presentation"] = outline["presentation"]
+    try:
+        partial = _repair_episode_shape(partial, allowed)
+        validate_episode(partial, allowed)
+        validate_presentation(partial.get("presentation", {}),
+                              any(scene["type"] == "OUTRO" for scene in partial["scenes"]))
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
+    return {"scenes": partial["scenes"]}
+
+
+def _clean_storyboard_parts(part_dir: Path, used: set[Path]) -> None:
+    if not part_dir.exists():
+        return
+    for stale in part_dir.glob("part-*.json"):
+        if stale not in used:
+            stale.unlink()
+
+
+def _multipart_episode(
+    provider: LLMProvider, system: str, ask: dict[str, Any],
+    project_dir: Path, context_size: int, output_reserve_tokens: int,
+    safety_tokens: int, max_retries: int, progress: Progress | None,
+    scope_id: str,
+) -> dict[str, Any]:
+    part_dir = project_dir / "manifests" / "storyboard-parts"
+    allowed = {item["ref"] for item in ask["evidence_index"]}
+    outline_system = system + _OUTLINE_SYSTEM
+    outline_payload = _outline_payload(ask)
+    if not fits_context(outline_system, json.dumps(outline_payload, ensure_ascii=False),
+                        context_size, output_reserve_tokens, safety_tokens):
+        raise ValueError("Storyboard outline input exceeds the configured context budget")
+    with step(progress, "Planning storyboard parts"):
+        outline = checkpointed_complete_json(
+            provider, outline_system, outline_payload, part_dir / "outline.json",
+            lambda value: _normalize_outline(value, allowed), max_retries=max_retries,
+        )
+
+    scene_system = system + _SCENES_SYSTEM
+    intents = outline["scene_intents"]
+    groups = []
+    for offset in range(0, len(intents), _SCENES_PER_PART):
+        candidate = intents[offset:offset + _SCENES_PER_PART]
+        preview = _scene_part_payload(ask, outline, candidate,
+                                      _MAX_STORYBOARD_SCENES, _MAX_STORYBOARD_SCENES, scope_id)
+        if fits_context(scene_system, json.dumps(preview, ensure_ascii=False),
+                        context_size, output_reserve_tokens, safety_tokens):
+            groups.append(candidate)
+            continue
+        for intent in candidate:
+            single = _scene_part_payload(ask, outline, [intent],
+                                         _MAX_STORYBOARD_SCENES, _MAX_STORYBOARD_SCENES, scope_id)
+            if not fits_context(scene_system, json.dumps(single, ensure_ascii=False),
+                                context_size, output_reserve_tokens, safety_tokens):
+                raise ValueError(f"Storyboard scene {intent['id']} exceeds the configured input context budget")
+            groups.append([intent])
+
+    scenes = []
+    used: set[Path] = set()
+    for number, group in enumerate(groups, 1):
+        checkpoint = part_dir / f"part-{number:03d}.json"
+
+        def payload_for(items: list[dict[str, Any]]) -> dict[str, Any]:
+            return _scene_part_payload(ask, outline, items, number, len(groups), scope_id)
+
+        def normalize_for(value: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+            part_allowed = {entry["ref"] for entry in payload_for(items)["evidence_index"]}
+            return _normalize_scene_part(value, items, part_allowed, outline)
+
+        results = checkpointed_split_json(
+            provider, scene_system, group, payload_for, checkpoint, normalize_for,
+            max_retries=max_retries, progress=progress,
+            label=f"Storyboard part {number}/{len(groups)}", used=used,
+        )
+        for result in results:
+            scenes.extend(result["scenes"])
+
+    if [scene["id"] for scene in scenes] != [intent["id"] for intent in intents]:
+        raise ValueError("Storyboard parts are missing or out of order")
+    episode = {key: outline[key] for key in ("version", "title", "slug", "summary", "presentation")
+               if key in outline}
+    episode["scenes"] = scenes
+    episode = _repair_episode_shape(episode, allowed)
+    validate_episode(episode, allowed)
+    validate_presentation(episode.get("presentation", {}),
+                          any(scene["type"] == "OUTRO" for scene in scenes))
+    _clean_storyboard_parts(part_dir, used)
+    return episode
+
+
+def _generate_episode(
+    provider: LLMProvider, system: str, ask: dict[str, Any], project_dir: Path,
+    context_size: int, output_reserve_tokens: int, safety_tokens: int,
+    max_retries: int, progress: Progress | None,
+) -> dict[str, Any]:
+    # The manifest's final evidence index, not every ref in the repository,
+    # bounds both the full-response fast path and all fallback scene requests.
+    allowed = {entry["ref"] for entry in ask["evidence_index"]}
+    scope_id = hashlib.sha256(json.dumps({
+        "system": system, "ask": ask, "output_reserve_tokens": output_reserve_tokens,
+        "provider_type": type(provider).__name__, "model": getattr(provider, "model", None),
+    }, ensure_ascii=False).encode("utf-8")).hexdigest()
+    part_dir = project_dir / "manifests" / "storyboard-parts"
+    marker = part_dir / "recovery.json"
+    recovering = False
+    if marker.exists():
+        try:
+            cached = json_load(marker)
+            recovering = isinstance(cached, dict) and cached.get("input_sha256") == scope_id \
+                and cached.get("mode") == "multipart"
+        except (OSError, ValueError, TypeError):
+            pass
+    if not recovering:
+        try:
+            with step(progress, "Generating storyboard"):
+                episode = _complete_episode(provider, system, ask, allowed, max_retries)
+        except (StructuredOutputError, json.JSONDecodeError, _EpisodeValidationExhausted) as exc:
+            json_dump(marker, {"version": 1, "input_sha256": scope_id,
+                               "mode": "multipart", "reason": str(exc)})
+            if progress is not None:
+                progress.note("Storyboard output incomplete; continuing in bounded parts")
+        else:
+            _clean_storyboard_parts(part_dir, set())
+            for stale in (part_dir / "outline.json", marker):
+                if stale.exists():
+                    stale.unlink()
+            return episode
+    elif progress is not None:
+        progress.note("Resuming storyboard in bounded parts")
+    return _multipart_episode(
+        provider, system, ask, project_dir, context_size, output_reserve_tokens,
+        safety_tokens, max_retries, progress, scope_id,
+    )
 
 
 def plan(
@@ -418,8 +713,10 @@ def plan(
             "evidence_index": evidence_index,
             "evidence_scope": _evidence_scope(evidence_index),
         })
-        with step(progress, "Generating storyboard"):
-            ep = _complete_episode(provider, system, direct_ask, valid, max_retries)
+        ep = _generate_episode(
+            provider, system, direct_ask, project_dir, context_size,
+            output_reserve_tokens, safety_tokens, max_retries, progress,
+        )
         json_dump(project_dir / "episode.json", ep)
         return ep
 
@@ -488,8 +785,10 @@ def plan(
                 "evidence_index": compact_index,
                 "evidence_scope": _evidence_scope(compact_index),
             })
-            with step(progress, "Generating storyboard"):
-                ep = _complete_episode(provider, system, ask, valid, max_retries)
+            ep = _generate_episode(
+                provider, system, ask, project_dir, context_size,
+                output_reserve_tokens, safety_tokens, max_retries, progress,
+            )
             json_dump(project_dir / "episode.json", ep)
             return ep
 

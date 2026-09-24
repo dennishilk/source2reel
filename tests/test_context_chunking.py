@@ -246,7 +246,8 @@ class ContextChunkingTests(unittest.TestCase):
             progress_output = io.StringIO()
             plan(
                 provider,
-                {"version": 1, "facts": [], "assets": []},
+                {"version": 1, "facts": [{"claim": "Grounded proof", "evidence_refs": ["E0001"]}],
+                 "assets": []},
                 {"evidence": [{"ref": "E0001", "kind": "document", "relative_path": "proof.txt"}]},
                 project, "Demo", progress=Progress(progress_output),
             )
