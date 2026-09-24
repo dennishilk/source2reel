@@ -37,6 +37,15 @@ source ingestion
 → transcript + storyboard + evidence + provenance artifacts
 ```
 
+## Context-safe local AI passes
+
+Source2Reel budgets requests against `local_ai.context_size` instead of assuming
+one large prompt will fit. Oversized research input is split automatically into
+checkpointed parts, and oversized planner input uses evidence-grounded map/reduce
+compaction before the final storyboard request. Completed parts are input-hashed
+under `projects/<episode>/manifests/`, so reruns reuse valid work and retry only
+the missing or changed part.
+
 ## Core commands
 
 ```bash

@@ -28,7 +28,16 @@ max_items = 40
 # second provider later without changing episode files.
 
 [research]
+# Legacy/hard batching ceiling. The context-safe splitter may choose smaller
+# requests automatically from local_ai.context_size.
 batch_chars = 45000
+
+[chunking]
+# Keep enough room for structured model output and tokenizer-estimation error.
+output_reserve_tokens = 4096
+safety_tokens = 1024
+max_retries = 2
+max_reduce_levels = 4
 
 [ingest]
 max_web_pages = 12

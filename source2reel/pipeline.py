@@ -30,6 +30,16 @@ def _ingest_many(sources: list[str], pdir: Path, max_pages: int) -> list[Path]:
     return roots
 
 
+def _context_options(cfg: dict) -> dict:
+    chunking = cfg.get("chunking", {})
+    return {
+        "context_size": int(cfg.get("local_ai", {}).get("context_size", 32768)),
+        "output_reserve_tokens": int(chunking.get("output_reserve_tokens", 4096)),
+        "safety_tokens": int(chunking.get("safety_tokens", 1024)),
+        "max_retries": int(chunking.get("max_retries", 2)),
+    }
+
+
 def create(root: Path, sources: list[str], slug: str|None, instructions: str, preview_espeak: bool, stop_after_storyboard: bool, cfg_path: Path|None=None) -> Path:
     if not sources: raise ValueError("At least one source is required")
     slug=slug or slugify(project_title_from_source(sources[0])); pdir=root/"projects"/slug; pdir.mkdir(parents=True,exist_ok=True)
@@ -37,8 +47,13 @@ def create(root: Path, sources: list[str], slug: str|None, instructions: str, pr
     source_roots=_ingest_many(sources,pdir,int(cfg.get("ingest",{}).get("max_web_pages",12)))
     inv=build_inventory(source_roots,pdir); provider=provider_from_config(cfg)
     if cfg.get("vision",{}).get("enabled",False): inv=enrich_media(provider,inv,pdir,int(cfg.get("vision",{}).get("max_items",40)))
-    res=research(provider,inv,pdir,int(cfg["research"].get("batch_chars",45000)))
-    ep=plan(provider,res,inv,pdir,project_title_from_source(sources[0]),instructions)
+    context = _context_options(cfg)
+    res=research(provider,inv,pdir,int(cfg["research"].get("batch_chars",45000)),**context)
+    ep=plan(
+        provider,res,inv,pdir,project_title_from_source(sources[0]),instructions,
+        **context,
+        max_reduce_levels=int(cfg.get("chunking",{}).get("max_reduce_levels",4)),
+    )
     if stop_after_storyboard: return pdir/"episode.json"
     return build_episode(root,pdir,ep,inv,preview_espeak,cfg)
 
