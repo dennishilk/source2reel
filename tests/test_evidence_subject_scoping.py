@@ -11,7 +11,7 @@ from source2reel.chunking import fits_context
 from source2reel.inventory import build_inventory
 from source2reel.pipeline import create
 from source2reel.planner import _compact_payload, _evidence_index, _media_inventory
-from source2reel.research import research
+from source2reel.research import _consolidate, research
 
 
 class RecordingProvider:
@@ -52,6 +52,23 @@ class EvidenceSubjectScopingTests(unittest.TestCase):
             json.dumps({"facts": ["SpaceGame runs on a toaster"] * 1200}, indent=2)
         )
         return build_inventory(source, self.project, max_file_bytes=50000, chunk_chars=1400)
+
+    def flooded_inventory(self):
+        source = self.root / "flooded-source"
+        embedded = source / "examples" / "space-game"
+        (embedded / "manifests").mkdir(parents=True)
+        for filename in ("README.md", "ARCHITECTURE.md", "API.md", "DESIGN.md"):
+            (source / filename).write_text(f"WidgetEngine core: {filename} describes its rendering pipeline.\n")
+        (embedded / "README.md").write_text("SpaceGame demonstrates WidgetEngine in use.\n")
+        (embedded / "manifests" / "research.json").write_text(
+            json.dumps({"facts": ["SpaceGame runs on a toaster"] * 1500}, indent=2)
+        )
+        return build_inventory(source, self.project, max_file_bytes=50000, chunk_chars=500)
+
+    @staticmethod
+    def selected_roles(result, inventory):
+        roles = {e["ref"]: e["evidence_role"] for e in inventory["evidence"]}
+        return [roles[ref] for fact in result["facts"] for ref in fact["evidence_refs"]]
 
     def test_primary_reference_and_generated_roles_remain_in_inventory(self):
         inventory = self.synthetic_inventory()
@@ -120,6 +137,78 @@ class EvidenceSubjectScopingTests(unittest.TestCase):
         reference_refs = {e["ref"] for e in inventory["evidence"] if e["evidence_role"] != "primary"}
         cited_refs = {r for fact in result["facts"] for r in fact["evidence_refs"]}
         self.assertTrue(reference_refs & cited_refs)
+
+    def test_repetitive_generated_facts_cannot_outvote_primary_evidence(self):
+        inventory = self.flooded_inventory()
+        self.assertGreater(sum(e["evidence_role"] == "generated_artifact"
+                               for e in inventory["evidence"]), 50)
+        provider = RecordingProvider()
+        result = research(provider, inventory, self.project, max_chars=6000,
+                          context_size=3000, output_reserve_tokens=600, safety_tokens=400,
+                          title_hint="WidgetEngine", instructions="")
+        roles = self.selected_roles(result, inventory)
+        self.assertEqual(roles.count("primary"), 4)
+        self.assertEqual(roles.count("embedded_reference"), 1)
+        self.assertEqual(roles.count("generated_artifact"), 1)
+        valid_refs = {e["ref"] for e in inventory["evidence"]}
+        self.assertTrue(all(ref in valid_refs for fact in result["facts"] for ref in fact["evidence_refs"]))
+
+    def test_explicit_example_focus_preserves_secondary_facts(self):
+        inventory = self.flooded_inventory()
+        provider = RecordingProvider()
+        instruction = "Focus on SpaceGame as the reference project."
+        result = research(provider, inventory, self.project, max_chars=6000,
+                          context_size=3000, output_reserve_tokens=600, safety_tokens=400,
+                          title_hint="WidgetEngine", instructions=instruction)
+        roles = self.selected_roles(result, inventory)
+        self.assertGreater(roles.count("generated_artifact"), 10)
+        self.assertTrue(all(req["optional_instructions"] == instruction for _, req in provider.requests))
+
+    def test_supporting_assets_respect_same_reference_budget(self):
+        inventory = {"evidence": [
+            *({"ref": f"P{i}", "evidence_role": "primary"} for i in range(4)),
+            *({"ref": f"G{i}", "evidence_role": "generated_artifact"} for i in range(50)),
+        ]}
+        facts = [{"claim": f"Primary {i}", "evidence_refs": [f"P{i}"]} for i in range(4)]
+        assets = [{"evidence_ref": f"G{i}", "purpose": f"Visual {i}"} for i in range(50)]
+        selected_facts, selected_assets = _consolidate(facts, assets, inventory, "WidgetEngine", "")
+        self.assertEqual(selected_facts, facts)
+        self.assertEqual(len(selected_assets), 2)
+
+    def test_primary_facts_from_multiple_sources_are_all_retained(self):
+        inventory = {"evidence": [
+            *({"ref": f"P{i}", "evidence_role": "primary",
+               "relative_path": f"source-{1 + i // 2:02d}/README-{i}.md"} for i in range(4)),
+            {"ref": "E1", "evidence_role": "embedded_reference",
+             "relative_path": "source-02/examples/demo/README.md"},
+            {"ref": "G1", "evidence_role": "generated_artifact",
+             "relative_path": "source-01/examples/demo/manifests/research.json"},
+        ]}
+        facts = ([{"claim": f"Core {i}", "evidence_refs": [f"P{i}"]} for i in range(4)]
+                 + [{"claim": "Example", "evidence_refs": ["E1"]},
+                    {"claim": "Derived example", "evidence_refs": ["G1"]}])
+        selected, _ = _consolidate(facts, [], inventory, "WidgetEngine", "")
+        self.assertEqual({f["evidence_refs"][0] for f in selected},
+                         {"P0", "P1", "P2", "P3", "E1", "G1"})
+
+    def test_generic_explicit_reference_focus_lifts_default_quota(self):
+        inventory = {"evidence": [
+            {"ref": "P0", "evidence_role": "primary"},
+            *({"ref": f"G{i}", "evidence_role": "generated_artifact",
+               "relative_path": "examples/demo/manifests/evidence.json"} for i in range(10)),
+        ]}
+        facts = ([{"claim": "Core", "evidence_refs": ["P0"]}]
+                 + [{"claim": f"Example {i}", "evidence_refs": [f"G{i}"]} for i in range(10)])
+        selected, _ = _consolidate(facts, [], inventory, "WidgetEngine",
+                                   "Focus on the reference project.")
+        self.assertEqual(selected, facts)
+
+    def test_without_primary_facts_supporting_evidence_is_not_silenced(self):
+        inventory = {"evidence": [{"ref": f"G{i}", "evidence_role": "generated_artifact"}
+                                  for i in range(5)]}
+        facts = [{"claim": f"Example {i}", "evidence_refs": [f"G{i}"]} for i in range(5)]
+        selected, _ = _consolidate(facts, [], inventory, "WidgetEngine", "")
+        self.assertEqual(selected, facts)
 
     def test_changed_subject_or_instructions_invalidates_research_checkpoints(self):
         inventory = {"evidence": [{"ref": "E0001", "kind": "document", "excerpt": "WidgetEngine."}]}

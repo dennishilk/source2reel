@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from .chunking import checkpointed_complete_json, split_for_context
@@ -40,6 +41,103 @@ def _dedupe(items: list[dict[str, Any]], key) -> list[dict[str, Any]]:
         seen.add(marker)
         out.append(item)
     return out
+
+
+def _reference_focus(title_hint: str, instructions: str, inventory: dict[str, Any]) -> bool:
+    """Recognize an explicit request to make an embedded example the subject."""
+    if not instructions.strip():
+        return False
+    title_key = re.sub(r"[^a-z0-9]", "", title_hint.casefold())
+    targets = set()
+    for entry in inventory["evidence"]:
+        if entry.get("evidence_role", "primary") == "primary":
+            continue
+        parts = Path(entry.get("relative_path", "")).parts
+        for part in parts[:-1]:
+            key = re.sub(r"[^a-z0-9]", "", part.casefold())
+            if len(key) >= 5 and key != title_key and key not in {
+                "examples", "samples", "projects", "references", "fixtures", "manifests",
+            }:
+                targets.add(key)
+    for clause in re.split(r"[.!?;\n]", instructions.casefold()):
+        named = any(target in re.sub(r"[^a-z0-9]", "", clause) for target in targets)
+        generic = bool(re.search(r"\b(?:example|reference|demo|sample|fixture|case study)s?\b", clause))
+        directed = bool(re.search(r"\b(?:focus|center|centre|feature|highlight|prioritize|primarily)\b", clause))
+        if directed and (named or generic):
+            return True
+        if named and re.search(r"\b(?:explain|explore|about|showcase)\b", clause):
+            return True
+    return False
+
+
+def _consolidate(
+    facts: list[dict[str, Any]],
+    assets: list[dict[str, Any]],
+    inventory: dict[str, Any],
+    title_hint: str,
+    instructions: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Cap supporting facts and distinct refs at half the primary counts (min 1)."""
+    roles = {e["ref"]: e.get("evidence_role", "primary") for e in inventory["evidence"]}
+    rank = {"primary": 0, "embedded_reference": 1, "generated_artifact": 2}
+    def role(ref: str) -> str:
+        value = roles.get(ref, "primary")
+        return value if value in rank else "primary"
+    fact_role = lambda fact: max((role(ref) for ref in fact["evidence_refs"]), key=lambda r: rank.get(r, 0))
+    primary = [fact for fact in facts if fact_role(fact) == "primary"]
+    # When the request really targets an embedded project, or there is no
+    # primary research to form a backbone, do not impose the default quota.
+    if not primary or _reference_focus(title_hint, instructions, inventory):
+        return facts, assets
+
+    primary_refs = {ref for fact in primary for ref in fact["evidence_refs"]}
+    fact_limit = max(1, len(primary) // 2)
+    ref_limit = max(1, len(primary_refs) // 2)
+    groups = {
+        secondary_role: [f for f in facts if fact_role(f) == secondary_role]
+        for secondary_role in ("embedded_reference", "generated_artifact")
+    }
+    selected: list[dict[str, Any]] = []
+    supporting_refs: set[str] = set()
+    seen_claims = {f["claim"].casefold() for f in primary}
+
+    def select(fact: dict[str, Any], secondary_role: str) -> None:
+        if len(selected) >= fact_limit or fact["claim"].casefold() in seen_claims:
+            return
+        # Retain primary citations on mixed facts, plus one secondary proof.
+        proof = next((r for r in fact["evidence_refs"] if role(r) == secondary_role), None)
+        if proof is None or (proof not in supporting_refs and len(supporting_refs) >= ref_limit):
+            return
+        refs = [r for r in fact["evidence_refs"] if role(r) == "primary"]
+        if proof not in refs:
+            refs.append(proof)
+        selected.append({**fact, "evidence_refs": refs})
+        supporting_refs.add(proof)
+        seen_claims.add(fact["claim"].casefold())
+
+    embedded = groups["embedded_reference"]
+    generated = groups["generated_artifact"]
+    # With room for two examples, reserve one place for each kind of proof.
+    if embedded and generated and fact_limit >= 2 and ref_limit >= 2:
+        select(embedded[0], "embedded_reference")
+        select(generated[0], "generated_artifact")
+    for secondary_role, candidates in groups.items():
+        for fact in candidates:
+            select(fact, secondary_role)
+
+    kept_assets = [asset for asset in assets if role(asset["evidence_ref"]) == "primary"]
+    seen_asset_refs: set[str] = set()
+    for secondary_role in ("embedded_reference", "generated_artifact"):
+        for asset in assets:
+            ref = asset["evidence_ref"]
+            if role(ref) != secondary_role or ref in seen_asset_refs:
+                continue
+            if ref not in supporting_refs and len(supporting_refs) >= ref_limit:
+                continue
+            kept_assets.append(asset)
+            supporting_refs.add(ref)
+            seen_asset_refs.add(ref)
+    return primary + selected, kept_assets
 
 
 def research(
@@ -140,6 +238,8 @@ def research(
             str(a.get("purpose", "")).casefold(),
         ),
     )
+
+    allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)
 
     out = {"version": 1, "facts": allfacts, "assets": assets}
     json_dump(project_dir / "manifests" / "research.json", out)

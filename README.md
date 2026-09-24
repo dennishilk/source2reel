@@ -39,7 +39,10 @@ source ingestion
 
 Research receives the requested project subject and marks likely embedded
 examples and generated artifacts as supporting evidence. These files remain
-available to cite, while their path role helps keep the main project in focus.
+available to cite. When primary research exists, a deterministic budget limits
+supporting facts and refs passed to the planner so repeated generated text
+cannot win by volume. An explicit request to focus on an embedded example
+removes that default limit.
 This is a research hint, not a guarantee about an AI-generated storyboard.
 
 ## Context-safe local AI passes
