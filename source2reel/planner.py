@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .chunking import checkpointed_complete_json, fits_context, split_for_context
+from .chunking import checkpointed_split_json, fits_context, split_for_context
 from .progress import Progress, step
 from .providers import LLMProvider
 from .schema import SCENE_TYPES, validate_episode
@@ -364,19 +364,19 @@ def plan(
                 project_dir / "manifests" / "planner-compact-parts"
                 / f"level-{level:02d}-part-{part:03d}.json"
             )
-            provided_refs, provided_media = _part_refs(batch)
-            with step(progress, f"Planning evidence — level {level}, part {part}/{len(chunks)}"):
-                result = checkpointed_complete_json(
-                    provider,
-                    compact_system,
-                    make_compact_payload(level, part, batch),
-                    checkpoint,
-                    lambda value: _normalize_capsules(
-                        value, valid & provided_refs, media_ref_set & provided_media
-                    ),
-                    max_retries=max_retries,
-                )
-            capsules.extend(result["capsules"])
+            def normalize_part(value: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+                provided_refs, provided_media = _part_refs(items)
+                return _normalize_capsules(value, valid & provided_refs, media_ref_set & provided_media)
+
+            results = checkpointed_split_json(
+                provider, compact_system, batch,
+                lambda items: make_compact_payload(level, part, items),
+                checkpoint, normalize_part,
+                max_retries=max_retries, progress=progress,
+                label=f"Planning evidence — level {level}, part {part}/{len(chunks)}",
+            )
+            for result in results:
+                capsules.extend(result["capsules"])
 
         capsules = _dedupe_capsules(capsules)
         if not capsules:

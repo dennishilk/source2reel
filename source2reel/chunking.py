@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .providers import LLMProvider
+from .providers import StructuredOutputError
+from .progress import Progress, step
 from .util import json_dump, json_load
 
 
 Normalizer = Callable[[dict[str, Any]], dict[str, Any]]
 PayloadBuilder = Callable[[int, list[Any]], dict[str, Any]]
+MAX_SPLIT_DEPTH = 6
 
 
 def estimate_tokens(value: Any) -> int:
@@ -133,3 +136,109 @@ def checkpointed_complete_json(
 
     assert last_error is not None
     raise last_error
+
+
+def _record_refs(record: Any) -> str:
+    """Identify an unsplittable record without requiring a particular payload shape."""
+    if not isinstance(record, dict):
+        return repr(record)[:120]
+    refs = record.get("ref") or record.get("evidence_refs")
+    if refs is None and isinstance(record.get("asset"), dict):
+        refs = record["asset"].get("evidence_ref")
+    if refs is None and isinstance(record.get("capsule"), dict):
+        refs = record["capsule"].get("evidence_refs")
+    if refs is None and isinstance(record.get("media"), dict):
+        refs = record["media"].get("ref")
+    return str(refs if refs is not None else record.get("kind", "unknown record"))
+
+
+def checkpointed_split_json(
+    provider: LLMProvider,
+    system: str,
+    items: list[Any],
+    make_payload: Callable[[list[Any]], dict[str, Any]],
+    checkpoint: Path,
+    normalize_batch: Callable[[dict[str, Any], list[Any]], dict[str, Any]],
+    *,
+    max_retries: int = 2,
+    progress: Progress | None = None,
+    label: str = "Structured request",
+    used: set[Path] | None = None,
+    max_split_depth: int = MAX_SPLIT_DEPTH,
+) -> list[dict[str, Any]]:
+    """Retry a part, then split only malformed structured output; cache each child."""
+    if max_split_depth < 0:
+        raise ValueError("max_split_depth must be non-negative")
+    if not items:
+        raise ValueError("Cannot split an empty structured request")
+    used = used if used is not None else set()
+
+    def run(batch: list[Any], path: Path, depth: int, suffix: str) -> list[dict[str, Any]]:
+        used.add(path)
+        payload = make_payload(batch)
+        user = json.dumps(payload, ensure_ascii=False)
+        digest = hashlib.sha256((system + "\0" + user).encode("utf-8")).hexdigest()
+        marker = path.with_name(f"{path.stem}-split{path.suffix}")
+        current_label = label if not suffix else f"{label} — split {suffix} ({'1' if suffix.endswith('a') else '2'}/2)"
+
+        # A split marker is routing metadata, not a successful model result.
+        # Reuse it only for identical input, and always prefer a valid parent.
+        cached_parent = False
+        if path.exists():
+            try:
+                cached = json_load(path)
+                cached_parent = cached.get("input_sha256") == digest and isinstance(cached.get("result"), dict)
+            except (OSError, ValueError, TypeError):
+                pass
+        split_known = False
+        saved_reason = ""
+        if not cached_parent and marker.exists():
+            try:
+                saved = json_load(marker)
+                split_known = saved.get("input_sha256") == digest and saved.get("split") is True
+                if split_known:
+                    saved_reason = str(saved.get("reason") or "")
+            except (OSError, ValueError, TypeError):
+                pass
+
+        if not split_known:
+            try:
+                with step(progress, current_label):
+                    return [checkpointed_complete_json(
+                        provider, system, payload, path,
+                        lambda value: normalize_batch(value, batch), max_retries=max_retries,
+                    )]
+            except (StructuredOutputError, json.JSONDecodeError) as exc:
+                failure = exc
+        else:
+            failure = None
+        reason = str(failure) if failure is not None else saved_reason or "model output was incomplete"
+
+        if len(batch) == 1:
+            raise RuntimeError(
+                f"{current_label}: invalid structured output for single record "
+                f"{_record_refs(batch[0])} ({reason}); check the model output budget "
+                "or split the source record"
+            ) from failure
+        if depth >= max_split_depth:
+            raise RuntimeError(
+                f"{current_label}: structured output still invalid at maximum split depth "
+                f"{max_split_depth}; refs: {', '.join(_record_refs(item) for item in batch)}; "
+                f"reason: {reason}"
+            ) from failure
+
+        used.add(marker)
+        if not split_known:
+            json_dump(marker, {"version": 1, "input_sha256": digest, "split": True,
+                               "reason": reason})
+        if progress is not None:
+            progress.note(f"{current_label}: malformed or truncated structured output; processing smaller parts"
+                          if not split_known else f"{current_label}: resuming smaller parts")
+        midpoint = len(batch) // 2
+        first = path.with_name(f"{path.stem}-a{path.suffix}")
+        second = path.with_name(f"{path.stem}-b{path.suffix}")
+        return run(batch[:midpoint], first, depth + 1, suffix + "a") + run(
+            batch[midpoint:], second, depth + 1, suffix + "b"
+        )
+
+    return run(items, checkpoint, 0, "")

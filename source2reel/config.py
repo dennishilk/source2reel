@@ -3,6 +3,16 @@ import os, tomllib
 from pathlib import Path
 from typing import Any
 
+DEFAULT_OUTPUT_RESERVE_TOKENS = 4096
+
+
+def output_reserve_tokens(cfg: dict[str, Any]) -> int:
+    """One configured limit for input headroom and provider generation."""
+    value = int(cfg.get("chunking", {}).get("output_reserve_tokens", DEFAULT_OUTPUT_RESERVE_TOKENS))
+    if value <= 0:
+        raise ValueError("chunking.output_reserve_tokens must be positive")
+    return value
+
 
 def load_toml(path: Path) -> dict[str, Any]:
     return tomllib.loads(path.read_text())

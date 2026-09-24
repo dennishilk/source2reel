@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlparse
-from .config import load_engine_config
+from .config import load_engine_config, output_reserve_tokens
 from .ingest import ingest
 from .inventory import build_inventory
 from .media_ai import enrich_media
@@ -37,7 +37,7 @@ def _context_options(cfg: dict) -> dict:
     chunking = cfg.get("chunking", {})
     return {
         "context_size": int(cfg.get("local_ai", {}).get("context_size", 32768)),
-        "output_reserve_tokens": int(chunking.get("output_reserve_tokens", 4096)),
+        "output_reserve_tokens": output_reserve_tokens(cfg),
         "safety_tokens": int(chunking.get("safety_tokens", 1024)),
         "max_retries": int(chunking.get("max_retries", 2)),
     }

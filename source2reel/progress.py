@@ -57,6 +57,10 @@ class Progress:
     def ready(self, label: str, path: object) -> None:
         self._write(f"{label}: {path}\n")
 
+    def note(self, message: str) -> None:
+        """Report an event such as bounded recovery without a periodic log line."""
+        self._write(("\r\033[K" if self.tty else "") + f"{message}\n")
+
 
 @contextmanager
 def step(progress: Progress | None, label: str):

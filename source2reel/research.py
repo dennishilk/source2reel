@@ -4,9 +4,9 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .chunking import checkpointed_complete_json, split_for_context
+from .chunking import checkpointed_split_json, split_for_context
 from .inventory import _EMBEDDED_ROOTS
-from .progress import Progress, step
+from .progress import Progress
 from .providers import LLMProvider
 from .util import json_dump
 
@@ -236,18 +236,15 @@ def research(
 
     for i, batch in enumerate(chunks, 1):
         checkpoint = part_dir / f"part-{i:03d}.json"
-        used.add(checkpoint)
-        with step(progress, f"Research batch {i}/{len(chunks)}"):
-            result = checkpointed_complete_json(
-                provider,
-                system,
-                make_payload(i, batch),
-                checkpoint,
-                normalize,
-                max_retries=max_retries,
-            )
-        allfacts.extend(result["facts"])
-        assets.extend(result["assets"])
+        results = checkpointed_split_json(
+            provider, system, batch, lambda items: make_payload(i, items),
+            checkpoint, lambda value, items: normalize(value),
+            max_retries=max_retries, progress=progress,
+            label=f"Research batch {i}/{len(chunks)}", used=used,
+        )
+        for result in results:
+            allfacts.extend(result["facts"])
+            assets.extend(result["assets"])
 
     if part_dir.exists():
         for stale in part_dir.glob("part-*.json"):
