@@ -8,6 +8,9 @@ Rules:
 - Retain visually useful authentic media when it materially helps explain the project.
 - Each capsule must be traceable to the records in this request.
 - Prefer fewer, stronger capsules over repetition.
+- Preserve distinct, subject-relevant primary facts: a concise overview or documented normal sequence must not disappear behind repetitive implementation details merely because those details occupy more files.
+- Keep normal, optional, revision, maintenance, setup and testing flows distinct. Preserve the source's qualifiers; do not promote an auxiliary path to a mandatory normal step.
+- Favor high-confidence final facts when evidence competes for space, while retaining relevant development facts with their phase labels.
 - Keep primary project evidence prominent; use embedded references and generated artifacts as supporting proof unless optional_instructions explicitly requests that focus.
 - Merge duplicates and near-duplicates.
 - Do not turn "detected", "possible", "unknown", or "insufficient evidence" into a stronger claim.

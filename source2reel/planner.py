@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,10 @@ def _make_ask(
             "title": "English title",
             "slug": "short-slug",
             "summary": "English summary",
+            "presentation": {"outro": {
+                "headline": ["1–3 evidence-supported lines"],
+                "links": [{"label": "supported resource", "url": ["supported URL"]}],
+            }},
             "scenes": [{
                 "id": "s001",
                 "type": "HERO",
@@ -76,6 +81,11 @@ def _make_ask(
                 "notes": "",
             }],
         },
+        "presentation_requirement": (
+            "For an OUTRO, include episode.presentation.outro with 1–3 grounded "
+            "headline lines and 1–3 supported link labels/URLs. If links are "
+            "unsupported, use SUMMARY instead. Other scenes need no outro."
+        ),
         "optional_structured_scene_fields": {
             "media.start_seconds": "non-negative seconds into an authentic video, when evidence calls for an offset",
             "captions.enabled": "boolean scene override; static and video evidence scenes default on",
@@ -220,10 +230,27 @@ def _dedupe_capsules(capsules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+_PRIMARY_ANCHOR_LIMIT = 10
+_PRIMARY_ANCHOR_BYTE_BUDGET = 2600
+_PRIMARY_ANCHOR_REF_BUDGET = 20
+_TOPIC_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
+    "in", "into", "is", "it", "of", "on", "or", "the", "their", "this", "to",
+    "what", "when", "where", "which", "why", "with", "your", "explain",
+    "describe", "show", "project", "subject", "episode", "video",
+}
+
+
+def _topic_words(text: str) -> set[str]:
+    return {word for word in re.findall(r"[^\W_]+", text.casefold())
+            if (len(word) > 2 or word.isdigit()) and word not in _TOPIC_STOPWORDS}
+
+
 def _primary_anchors(
     research: dict[str, Any], inventory: dict[str, Any], media_refs: set[str],
+    title_hint: str = "", instructions: str = "",
 ) -> list[dict[str, Any]]:
-    """Carry a small, diverse set of original primary facts across reductions."""
+    """Carry a bounded set of distinct, subject-relevant original primary facts."""
     entries = {entry["ref"]: entry for entry in inventory["evidence"]}
     primary_refs = {
         ref for ref in (_research_refs(research) | media_refs)
@@ -254,25 +281,71 @@ def _primary_anchors(
         } for entry in inventory["evidence"] if entry["ref"] in primary_refs]
 
     candidates = _dedupe_capsules(candidates)
-    if len(candidates) <= 4:
-        return candidates
+    subject = _topic_words(title_hint)
+    subject_key = "".join(re.findall(r"[^\W_]+", title_hint.casefold()))
+    requested = _topic_words(instructions) - subject
+    profiles = []
+    for index, candidate in enumerate(candidates):
+        claim = candidate["claim"]
+        path = str(entries[candidate["evidence_refs"][0]].get("relative_path", ""))
+        path_parts = Path(path).parts
+        words = _topic_words(claim)
+        claim_key = "".join(re.findall(r"[^\W_]+", claim.casefold()))
+        title_score = 5 if len(subject_key) >= 4 and subject_key in claim_key else 1.5 * len(subject & words)
+        confidence_score = {"high": 2, "medium": 1}.get(candidate["confidence"], 0)
+        phase_score = 2 if candidate["phase"] == "final" else 0
+        # Shallow original documents often state what the project does before
+        # implementation files name it repeatedly. This is a modest source
+        # signal, never a fixed filename or a replacement for claim relevance.
+        overview_score = max(0, 2 - (len(path_parts) - 1)) * 2.5
+        if Path(path).suffix.casefold() in {".md", ".rst", ".txt", ".adoc"}:
+            overview_score += 1.5
+        base = (title_score + 0.8 * min(4, len(requested & words)) +
+                confidence_score + phase_score + overview_score)
+        profiles.append((index, candidate, path, path_parts[0] if path_parts else "", words - subject, base))
 
-    def spread(items: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
-        return [items[i * (len(items) - 1) // (count - 1)] for i in range(count)]
-
-    # Diversify by source file first; spread across the input when many files
-    # exist, so later top-level sources are also represented.
-    by_path: dict[str, dict[str, Any]] = {}
-    for candidate in candidates:
-        ref = candidate["evidence_refs"][0]
-        by_path.setdefault(str(entries[ref].get("relative_path", ref)), candidate)
-    unique = list(by_path.values())
-    selected = spread(unique, 4) if len(unique) >= 4 else unique + spread(candidates, 4)
-    for candidate in candidates:
-        if len(_dedupe_capsules(selected)) >= 4:
+    selected: list[tuple[int, dict[str, Any], str, str, set[str], float]] = []
+    remaining = profiles[:]
+    used_bytes = 0
+    used_refs: set[str] = set()
+    while remaining and len(selected) < _PRIMARY_ANCHOR_LIMIT:
+        ranked = []
+        for profile in remaining:
+            index, candidate, path, root, words, base = profile
+            refs = set(candidate["evidence_refs"])
+            if (used_bytes + len(candidate["claim"].encode("utf-8")) > _PRIMARY_ANCHOR_BYTE_BUDGET or
+                    len(used_refs | refs) > _PRIMARY_ANCHOR_REF_BUDGET):
+                continue
+            similarities = [len(words & prior[4]) / max(1, len(words | prior[4]))
+                            for prior in selected]
+            similarity = max(similarities, default=0)
+            # Preserve different measured values even when the wording is
+            # similar; a repeated paraphrase alone adds little information.
+            if any(sim >= 0.7 and {w for w in words if any(ch.isdigit() for ch in w)} ==
+                   {w for w in prior[4] if any(ch.isdigit() for ch in w)}
+                   for sim, prior in zip(similarities, selected)):
+                continue
+            root_bonus = 2 if root and all(root != prior[3] for prior in selected) else 0
+            path_bonus = 0.5 if path and all(path != prior[2] for prior in selected) else 0
+            ranked.append((base + root_bonus + path_bonus - 7 * similarity, -index, profile))
+        if not ranked:
             break
-        selected.append(candidate)
-    return _dedupe_capsules(selected)[:4]
+        best = max(ranked)
+        profile = best[2]
+        selected.append(profile)
+        used_bytes += len(profile[1]["claim"].encode("utf-8"))
+        used_refs.update(profile[1]["evidence_refs"])
+        remaining.remove(profile)
+    if selected:
+        return [profile[1] for profile in selected]
+    # A huge research claim can exceed the anchor budget. Keep at least one
+    # modest, provable primary-source pointer so role scoping stays active.
+    for entry in inventory["evidence"]:
+        if entry["ref"] in primary_refs:
+            return [{"claim": f"Primary source: {entry.get('relative_path', entry['ref'])}",
+                     "evidence_refs": [entry["ref"]], "media_refs": [],
+                     "phase": "unknown", "confidence": "high", "visual_purpose": ""}]
+    return []
 
 
 def _scope_capsules(
@@ -280,7 +353,9 @@ def _scope_capsules(
     inventory: dict[str, Any], title_hint: str, instructions: str,
 ) -> list[dict[str, Any]]:
     """Apply the existing research fact/ref quota at each planner level."""
-    candidates = _dedupe_capsules(capsules + anchors)
+    # Put original, source-grounded primary coverage first in the next level
+    # and final storyboard request, even if local compaction omitted it.
+    candidates = _dedupe_capsules(anchors + capsules)
     if not anchors:
         return candidates
     bounded, _ = _consolidate(candidates, [], inventory, title_hint, instructions)
@@ -383,7 +458,7 @@ def _complete_episode(
         raw = provider.complete_json(system, json.dumps(payload, ensure_ascii=False))
         try:
             episode = _repair_episode_shape(raw, valid_refs)
-            validate_episode(episode, valid_refs)
+            validate_episode(episode, valid_refs, require_integrated_presentation=True)
             return episode
         except (ValueError, TypeError) as exc:
             last_error = exc
@@ -426,7 +501,8 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "required_output": {
             "version": 1, "title": "English title", "slug": "short-slug",
             "summary": "English summary",
-            "presentation": "optional episode presentation; OUTRO requires presentation.outro",
+            "presentation": ask["output_contract"]["presentation"],
+            "presentation_requirement": ask["presentation_requirement"],
             "scene_intents": [{
                 "type": "one allowed scene type", "purpose": "brief editorial aim",
                 "evidence_refs": ["a supplied evidence ref"],
@@ -549,9 +625,7 @@ def _normalize_scene_part(
         partial["presentation"] = outline["presentation"]
     try:
         partial = _repair_episode_shape(partial, allowed)
-        validate_episode(partial, allowed)
-        validate_presentation(partial.get("presentation", {}),
-                              any(scene["type"] == "OUTRO" for scene in partial["scenes"]))
+        validate_episode(partial, allowed, require_integrated_presentation=True)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
     return {"scenes": partial["scenes"]}
@@ -629,9 +703,7 @@ def _multipart_episode(
                if key in outline}
     episode["scenes"] = scenes
     episode = _repair_episode_shape(episode, allowed)
-    validate_episode(episode, allowed)
-    validate_presentation(episode.get("presentation", {}),
-                          any(scene["type"] == "OUTRO" for scene in scenes))
+    validate_episode(episode, allowed, require_integrated_presentation=True)
     _clean_storyboard_parts(part_dir, used)
     return episode
 
@@ -726,7 +798,7 @@ def plan(
     roles = {e["ref"]: e.get("evidence_role") or "primary" for e in inventory["evidence"]}
     anchors = (
         [] if _reference_focus(title_hint, instructions, inventory)
-        else _primary_anchors(research, inventory, media_ref_set)
+        else _primary_anchors(research, inventory, media_ref_set, title_hint, instructions)
     )
     make_compact_payload = lambda level, part, batch: _compact_payload(level, part, batch, title_hint, instructions)
 

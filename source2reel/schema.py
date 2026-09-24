@@ -32,7 +32,10 @@ def validate_presentation(presentation: dict, has_outro: bool) -> None:
             raise ValueError("OUTRO link requires 1–3 URL lines")
 
 
-def validate_episode(ep: dict[str, Any], evidence_refs: set[str] | None = None) -> None:
+def validate_episode(
+    ep: dict[str, Any], evidence_refs: set[str] | None = None,
+    *, require_integrated_presentation: bool = False,
+) -> None:
     if ep.get("version") != 1: raise ValueError("episode.version must be 1")
     if not isinstance(ep.get("title"),str) or not ep["title"].strip(): raise ValueError("episode.title missing")
     scenes=ep.get("scenes")
@@ -79,3 +82,9 @@ def validate_episode(ep: dict[str, Any], evidence_refs: set[str] | None = None) 
                 for n in nodes
             ):
                 raise ValueError(f"{sid}: {s['type']} requires 2–8 explicit, labeled diagram nodes")
+    # Newly planned episodes must carry their own OUTRO metadata. Existing
+    # frozen episodes may instead supply it through presentation.json at build
+    # time; the renderer validates the merged presentation separately.
+    if require_integrated_presentation:
+        validate_presentation(ep.get("presentation", {}),
+                              any(scene["type"] == "OUTRO" for scene in scenes))
