@@ -7,6 +7,7 @@ from typing import Any
 from .chunking import checkpointed_split_json, fits_context, split_for_context
 from .progress import Progress, step
 from .providers import LLMProvider
+from .research import _consolidate, _reference_focus
 from .schema import SCENE_TYPES, validate_episode
 from .util import json_dump
 
@@ -218,6 +219,83 @@ def _dedupe_capsules(capsules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _primary_anchors(
+    research: dict[str, Any], inventory: dict[str, Any], media_refs: set[str],
+) -> list[dict[str, Any]]:
+    """Carry a small, diverse set of original primary facts across reductions."""
+    entries = {entry["ref"]: entry for entry in inventory["evidence"]}
+    primary_refs = {
+        ref for ref in (_research_refs(research) | media_refs)
+        if ref in entries and (entries[ref].get("evidence_role") or "primary") == "primary"
+    }
+    candidates = []
+    for fact in research.get("facts", []):
+        refs = [r for r in fact.get("evidence_refs", []) if r in entries]
+        claim = str(fact.get("claim", "")).strip()
+        if not claim or not refs or any(r not in primary_refs for r in refs):
+            continue
+        candidates.append({
+            "claim": claim, "evidence_refs": list(dict.fromkeys(refs)),
+            "media_refs": [r for r in refs if r in media_refs],
+            "phase": fact.get("phase", "unknown"),
+            "confidence": fact.get("confidence", "low"), "visual_purpose": "",
+        })
+
+    # If research supplied no primary-only claim, the existence and path of a
+    # cited primary source remain safe, modest fallback facts; do not promote a
+    # mixed embedded claim to a primary fact.
+    if not candidates:
+        candidates = [{
+            "claim": f"Primary source: {entry.get('relative_path', entry['ref'])}",
+            "evidence_refs": [entry["ref"]],
+            "media_refs": [entry["ref"]] if entry["ref"] in media_refs else [],
+            "phase": "unknown", "confidence": "high", "visual_purpose": "",
+        } for entry in inventory["evidence"] if entry["ref"] in primary_refs]
+
+    candidates = _dedupe_capsules(candidates)
+    if len(candidates) <= 4:
+        return candidates
+
+    def spread(items: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
+        return [items[i * (len(items) - 1) // (count - 1)] for i in range(count)]
+
+    # Diversify by source file first; spread across the input when many files
+    # exist, so later top-level sources are also represented.
+    by_path: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        ref = candidate["evidence_refs"][0]
+        by_path.setdefault(str(entries[ref].get("relative_path", ref)), candidate)
+    unique = list(by_path.values())
+    selected = spread(unique, 4) if len(unique) >= 4 else unique + spread(candidates, 4)
+    for candidate in candidates:
+        if len(_dedupe_capsules(selected)) >= 4:
+            break
+        selected.append(candidate)
+    return _dedupe_capsules(selected)[:4]
+
+
+def _scope_capsules(
+    capsules: list[dict[str, Any]], anchors: list[dict[str, Any]],
+    inventory: dict[str, Any], title_hint: str, instructions: str,
+) -> list[dict[str, Any]]:
+    """Apply the existing research fact/ref quota at each planner level."""
+    candidates = _dedupe_capsules(capsules + anchors)
+    if not anchors:
+        return candidates
+    bounded, _ = _consolidate(candidates, [], inventory, title_hint, instructions)
+    return [{**capsule, "media_refs": [r for r in capsule["media_refs"]
+                                       if r in capsule["evidence_refs"]]}
+            for capsule in bounded]
+
+
+def _evidence_scope(index: list[dict[str, Any]]) -> dict[str, list[str]]:
+    scope = {"primary": [], "embedded_reference": [], "generated_artifact": []}
+    for item in index:
+        role = item.get("evidence_role") or "primary"
+        scope[role if role in scope else "primary"].append(item["ref"])
+    return scope
+
+
 def _capsules_to_research(capsules: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "version": 1,
@@ -338,6 +416,7 @@ def plan(
             "research": research,
             "media_inventory": media,
             "evidence_index": evidence_index,
+            "evidence_scope": _evidence_scope(evidence_index),
         })
         with step(progress, "Generating storyboard"):
             ep = _complete_episode(provider, system, direct_ask, valid, max_retries)
@@ -347,6 +426,11 @@ def plan(
     compact_system = (project_dir.parents[1] / "prompts" / "planner_compact.txt").read_text()
     records = _planner_records(research, media, evidence_index)
     media_ref_set = {m["ref"] for m in media}
+    roles = {e["ref"]: e.get("evidence_role") or "primary" for e in inventory["evidence"]}
+    anchors = (
+        [] if _reference_focus(title_hint, instructions, inventory)
+        else _primary_anchors(research, inventory, media_ref_set)
+    )
     make_compact_payload = lambda level, part, batch: _compact_payload(level, part, batch, title_hint, instructions)
 
     for level in range(1, max(1, max_reduce_levels) + 1):
@@ -378,7 +462,7 @@ def plan(
             for result in results:
                 capsules.extend(result["capsules"])
 
-        capsules = _dedupe_capsules(capsules)
+        capsules = _scope_capsules(capsules, anchors, inventory, title_hint, instructions)
         if not capsules:
             raise RuntimeError("Planner compaction returned no evidence-grounded capsules")
 
@@ -402,13 +486,17 @@ def plan(
                 "research": compact_research,
                 "media_inventory": compact_media,
                 "evidence_index": compact_index,
+                "evidence_scope": _evidence_scope(compact_index),
             })
             with step(progress, "Generating storyboard"):
                 ep = _complete_episode(provider, system, ask, valid, max_retries)
             json_dump(project_dir / "episode.json", ep)
             return ep
 
-        records = [{"kind": "capsule", "capsule": capsule} for capsule in capsules]
+        records = [{
+            "kind": "capsule", "capsule": capsule,
+            "evidence_roles": {ref: roles[ref] for ref in capsule["evidence_refs"]},
+        } for capsule in capsules]
 
     raise RuntimeError(
         "Planner payload still exceeds the configured context budget after "

@@ -185,12 +185,15 @@ def research(
     system = (project_dir.parents[1] / "prompts" / "research.txt").read_text()
     valid = {e["ref"] for e in inventory["evidence"]}
 
-    def normalize(result: dict[str, Any]) -> dict[str, Any]:
+    def normalize(result: dict[str, Any], batch: list[dict[str, Any]]) -> dict[str, Any]:
+        # A ref must be in this exact request, including after a failed part
+        # splits into children. Global validity alone does not prove provenance.
+        supplied = valid & {entry["ref"] for entry in batch}
         facts = []
         for fact in result.get("facts", []):
             if not isinstance(fact, dict) or not str(fact.get("claim", "")).strip():
                 continue
-            refs = [r for r in fact.get("evidence_refs", []) if r in valid]
+            refs = [r for r in fact.get("evidence_refs", []) if r in supplied]
             if not refs:
                 continue
             clean = dict(fact)
@@ -204,7 +207,7 @@ def research(
 
         assets = []
         for asset in result.get("assets", []):
-            if not isinstance(asset, dict) or asset.get("evidence_ref") not in valid:
+            if not isinstance(asset, dict) or asset.get("evidence_ref") not in supplied:
                 continue
             clean = dict(asset)
             clean["purpose"] = str(clean.get("purpose", "")).strip()
@@ -238,7 +241,7 @@ def research(
         checkpoint = part_dir / f"part-{i:03d}.json"
         results = checkpointed_split_json(
             provider, system, batch, lambda items: make_payload(i, items),
-            checkpoint, lambda value, items: normalize(value),
+            checkpoint, normalize,
             max_retries=max_retries, progress=progress,
             label=f"Research batch {i}/{len(chunks)}", used=used,
         )
