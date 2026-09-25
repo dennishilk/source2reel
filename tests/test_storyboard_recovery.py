@@ -36,6 +36,7 @@ def _source():
           "evidence_role": "primary"}]}
     research = {"version": 1, "facts": [
         {"claim": f"Grounded fact {i}", "evidence_refs": [f"E{i:04d}"],
+         "support": [{"evidence_ref": f"E{i:04d}", "text": f"Grounded fact {i}"}],
          "phase": "final", "confidence": "high"}
         for i in range(1, 7)
     ], "assets": []}
@@ -47,6 +48,7 @@ def _source_with_two_ref_hero():
     inventory["evidence"].append({"ref": "E0020", "kind": "document",
                                   "relative_path": "second-proof.md", "evidence_role": "primary"})
     research["facts"].append({"claim": "Grounded fact 20", "evidence_refs": ["E0020"],
+                              "support": [{"evidence_ref": "E0020", "text": "Grounded fact 20"}],
                               "phase": "final", "confidence": "high"})
     return inventory, research
 
@@ -117,7 +119,9 @@ class StoryboardProvider:
             for intent, requested in zip(intents, payload["required_output"]["scenes"]):
                 scene = copy.deepcopy(requested)
                 scene["title"] = intent["purpose"]
-                scene["narration"] = f"Narration {intent['id']}."
+                chosen = {fact["fact_id"]: fact["claim"] for fact in payload["research"]["facts"]}
+                scene["narration"] = (" ".join(chosen[fact_id] for fact_id in intent["fact_ids"])
+                                      or "Closing.")
                 if payload["contains_final_scene"] and intent == intents[-1] and payload["required_narration_suffix"]:
                     scene["narration"] += " " + payload["required_narration_suffix"]
                 if "diagram" in scene:
@@ -208,7 +212,8 @@ class StoryboardRecoveryTests(unittest.TestCase):
                 self.calls.append(request)
                 return {"version": 1, "title": "Fast", "slug": "fast", "summary": "Fast",
                         "scenes": [{"id": "s001", "type": "HERO", "title": "Proof",
-                                    "narration": "Proven. " + request["required_narration_suffix"],
+                                    "narration": request["research"]["facts"][0]["claim"] + " " +
+                                                 request["required_narration_suffix"],
                                     "fact_ids": [request["research"]["facts"][0]["fact_id"]],
                                     "evidence_refs": ["E0001"],
                                     "asset_ref": "E0001"}]}
@@ -465,7 +470,8 @@ class StoryboardRecoveryTests(unittest.TestCase):
             prior = len(second)
             inventory["evidence"].append({"ref": "E0007", "kind": "document",
                                           "relative_path": "new-primary.md", "evidence_role": "primary"})
-            research["facts"].append({"claim": "New source", "evidence_refs": ["E0007"]})
+            research["facts"].append({"claim": "New source", "evidence_refs": ["E0007"],
+                                      "support": [{"evidence_ref": "E0007", "text": "New source"}]})
             plan(provider, research, inventory, project, "DemoEngine", changed, max_retries=0)
             self.assertGreater(len([p for p in provider.calls if p.get("storyboard_mode") == "scenes"]), prior)
 

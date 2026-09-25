@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from source2reel import cli, pipeline
+from source2reel.grounding import GroundingError
 from source2reel.progress import Progress
 from source2reel.util import run
 
@@ -159,6 +160,18 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 130)
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "Interrupted.\n")
+
+    def test_cli_grounding_failure_is_one_concise_diagnostic(self):
+        out, err = RecordingStream(), RecordingStream()
+        message = "Storyboard grounding failed: narration adds an unsupported factual proposition"
+        with patch.object(cli, "root_from_here", return_value=Path("/tmp")), \
+             patch.object(cli, "create", side_effect=GroundingError(message)), \
+             redirect_stdout(out), redirect_stderr(err):
+            with self.assertRaises(SystemExit) as raised:
+                cli.main(["create", "source", "--review"])
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), message + "\n")
 
     def test_process_command_diagnostic_goes_to_stderr(self):
         out, err = RecordingStream(), RecordingStream()

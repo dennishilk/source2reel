@@ -16,7 +16,11 @@ class FixedProvider:
         self.requests = []
 
     def complete_json(self, system, user):
-        self.requests.append((system, json.loads(user)))
+        request = json.loads(user)
+        self.requests.append((system, request))
+        if "checks" in request:
+            return {"decisions": [{"id": check["id"], "supported": True}
+                                  for check in request["checks"]]}
         return {"facts": self.facts, "assets": []}
 
 
@@ -30,6 +34,11 @@ class ResearchGroundingTests(unittest.TestCase):
         self.project = root / "projects" / "widget"
 
     def run_research(self, evidence, facts, instructions=""):
+        by_ref = {entry["ref"]: entry.get("excerpt", "") for entry in evidence}
+        facts = [{**fact, "support": fact.get("support", [
+            {"evidence_ref": ref, "text": by_ref[ref][:320]}
+            for ref in fact.get("evidence_refs", []) if len(by_ref.get(ref, "")) >= 12
+        ])} for fact in facts]
         provider = FixedProvider(facts)
         result = research(provider, {"evidence": evidence}, self.project,
                           title_hint="WidgetEngine", instructions=instructions)

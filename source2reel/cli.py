@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse, os, shutil, sys
 from pathlib import Path
 from .config import load_engine_config
+from .grounding import GroundingError
 from .doctor import run_doctor
 from .ingest import ingest
 from .inventory import build_inventory
@@ -121,6 +122,9 @@ def main(argv=None):
     if a.cmd=="create":
         try:
             out=create(root,a.sources,a.slug,a.instructions,a.preview_espeak,a.review,a.config)
+        except GroundingError as exc:
+            print(str(exc), file=sys.stderr, flush=True)
+            raise SystemExit(1) from None
         except KeyboardInterrupt:
             print("Interrupted.",file=sys.stderr,flush=True)
             raise SystemExit(130)

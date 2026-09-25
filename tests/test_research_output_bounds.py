@@ -234,17 +234,17 @@ class ResearchOutputBoundsTests(unittest.TestCase):
         self.assertEqual(provider.calls, 7)
 
     def test_output_caps_apply_even_when_provider_ignores_contract(self):
-        record = self.record(4)
+        record = self.record(25)
 
         class Provider:
             def complete_json(self, system, user):
                 request = json.loads(user)
                 self.system = system
                 self.request = request
-                facts = [{"claim": f"WidgetEngine documented detail {i:02d} remains available.",
+                facts = [{"claim": request["evidence"][0]["excerpt"].splitlines()[i],
                           "evidence_refs": ["E0103"], "support": [
                               {"evidence_ref": "E0103", "text": request["evidence"][0]["excerpt"]
-                               .splitlines()[0]}]} for i in range(25)]
+                               .splitlines()[i]}]} for i in range(25)]
                 assets = [{"evidence_ref": "E0103", "purpose": f"Visual {i}"}
                           for i in range(25)]
                 return {"facts": facts, "assets": assets}
@@ -263,14 +263,16 @@ class ResearchOutputBoundsTests(unittest.TestCase):
         self.assertIn("6 assets per request", provider.system)
 
     def test_distinct_records_share_request_cap_and_keep_batch_local_refs(self):
-        records = [self.record(2), {**self.record(2), "ref": "E0104",
+        records = [self.record(20), {**self.record(20), "ref": "E0104",
                                      "relative_path": "docs/SECOND.md"}]
 
         class Provider:
             def complete_json(self, system, user):
                 supplied = json.loads(user)["evidence"]
-                return {"facts": [{"claim": f"Claim {entry['ref']} {i}",
-                                   "evidence_refs": [entry["ref"]]}
+                return {"facts": [{"claim": entry["excerpt"].splitlines()[i],
+                                   "evidence_refs": [entry["ref"]], "support": [
+                                       {"evidence_ref": entry["ref"],
+                                        "text": entry["excerpt"].splitlines()[i]}]}
                                   for entry in supplied for i in range(20)],
                         "assets": [{"evidence_ref": entry["ref"], "purpose": f"Asset {i}"}
                                    for entry in supplied for i in range(20)]}
@@ -295,7 +297,9 @@ class ResearchOutputBoundsTests(unittest.TestCase):
                 if item["ref"] == "E0103" and len(item["excerpt"].splitlines()) > 4:
                     raise OutputLimitExceeded("output token limit")
                 return {"facts": [{"claim": item["excerpt"].splitlines()[0],
-                                   "evidence_refs": [item["ref"]]}], "assets": []}
+                                   "evidence_refs": [item["ref"]], "support": [{
+                                       "evidence_ref": item["ref"],
+                                       "text": item["excerpt"].splitlines()[0]}]}], "assets": []}
 
         provider = Provider()
         with patch("source2reel.research.split_for_context", return_value=[[first], [second]]):

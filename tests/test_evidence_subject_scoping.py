@@ -32,9 +32,11 @@ class RecordingProvider:
         self.requests.append((system, request))
         return {
             "facts": [
-                {"claim": f"Statement from {e['ref']}", "evidence_refs": [e["ref"]],
+                {"claim": e["excerpt"].strip()[:120], "evidence_refs": [e["ref"]],
+                 "support": [{"evidence_ref": e["ref"], "text": e["excerpt"].strip()[:120]}],
                  "phase": "final", "confidence": "high"}
                 for e in request["evidence"]
+                if len(e.get("excerpt", "").strip()) >= 12
             ],
             "assets": [],
         }

@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
+from .grounding import GROUNDING_CONTRACT, GroundingError, verify_claims
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
 from .research import _consolidate, _fact_scope, _reference_focus
@@ -44,6 +46,33 @@ def _research_refs(research: dict[str, Any]) -> set[str]:
         if isinstance(asset, dict) and isinstance(asset.get("evidence_ref"), str)
     )
     return refs
+
+
+def _supported_research(research: dict[str, Any], inventory: dict[str, Any]) -> dict[str, Any]:
+    """Planner facts must still point to the research stage's exact quotations."""
+    entries = {entry["ref"]: entry for entry in inventory["evidence"]}
+    kept = []
+    for fact in research.get("facts", []):
+        if not isinstance(fact, dict):
+            continue
+        refs = fact.get("evidence_refs")
+        spans = fact.get("support")
+        if (not isinstance(refs, list) or not refs or not all(
+            isinstance(ref, str) and ref in entries for ref in refs
+        ) or not isinstance(spans, list) or not spans):
+            continue
+        if any(not isinstance(span, dict) or span.get("evidence_ref") not in refs or
+               not isinstance(span.get("text"), str) or not span["text"].strip() or
+               (isinstance(entries[span["evidence_ref"]].get("excerpt"), str) and
+                span["text"] not in entries[span["evidence_ref"]]["excerpt"])
+               for span in spans):
+            continue
+        if any(not any(span["evidence_ref"] == ref for span in spans) for ref in refs):
+            continue
+        kept.append(fact)
+    if not kept:
+        raise RuntimeError("Planner has no research facts with exact supporting spans")
+    return {**research, "facts": kept}
 
 
 def _authoritative_resource_urls(project_dir: Path) -> list[str]:
@@ -103,6 +132,7 @@ def _identified_research(research: dict[str, Any], evidence_index: list[dict[str
     roles = {e["ref"]: e.get("evidence_role") or "primary" for e in evidence_index}
     return {**research, "facts": [
         {**fact, "fact_id": f"F{index:04d}",
+         "source_fact_id": fact.get("source_fact_id", f"R{index:04d}"),
          "subject_scope": _fact_scope(fact.get("evidence_refs", []), roles)}
         for index, fact in enumerate(research.get("facts", []), 1)
     ]}
@@ -116,11 +146,28 @@ def _make_ask(
     instructions: str,
     resource_urls: list[str] | None = None,
 ) -> dict[str, Any]:
+    identified = _identified_research(research, evidence_index)
+    roles = {entry["ref"]: entry.get("evidence_role") or "primary" for entry in evidence_index}
+    requested = _explicit_topic_words(instructions) - _topic_words(title_hint)
+    ranked = sorted((
+        (len(requested & _topic_words(fact["claim"])), index, fact["fact_id"])
+        for index, fact in enumerate(identified["facts"])
+        if fact.get("phase") == "final" and fact.get("confidence") == "high" and
+        _fact_scope(fact["evidence_refs"], roles) == "main_subject"
+    ), reverse=True)
+    priorities = [fact_id for score, _index, fact_id in ranked if score >= 1][:12]
     return {
+        "grounding_contract": GROUNDING_CONTRACT,
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
         "allowed_scene_types": sorted(SCENE_TYPES),
-        "research": _identified_research(research, evidence_index),
+        "research": identified,
+        "priority_fact_ids": priorities,
+        "priority_requirement": (
+            "If priority_fact_ids contains at least two original, final primary facts, "
+            "ground at least half of factual scenes in one or more of these directly "
+            "requested facts. If no requested fact exists, omit that topic."
+        ),
         "media_inventory": media,
         "evidence_index": evidence_index,
         "authoritative_resource_urls": resource_urls or [],
@@ -183,13 +230,15 @@ def _planner_records(
     records: list[dict[str, Any]] = []
     referenced_media: set[str] = set()
 
-    for fact in research.get("facts", []):
+    for number, fact in enumerate(research.get("facts", []), 1):
         refs = [r for r in fact.get("evidence_refs", []) if r in evidence_by_ref]
         fact_media = [media_by_ref[r] for r in refs if r in media_by_ref]
         referenced_media.update(m["ref"] for m in fact_media)
         records.append({
             "kind": "fact",
+            "source_fact_id": fact.get("source_fact_id", f"R{number:04d}"),
             "claim": fact.get("claim", ""),
+            "support": fact.get("support", []),
             "phase": fact.get("phase", "unknown"),
             "confidence": fact.get("confidence", "low"),
             "subject_scope": _fact_scope(refs, {ref: evidence_by_ref[ref].get("evidence_role") or "primary"
@@ -225,6 +274,7 @@ def _planner_records(
 
 def _compact_payload(level: int, part: int, records: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
     return {
+        "grounding_contract": GROUNDING_CONTRACT,
         "level": level,
         "part": part,
         "project_title_hint": title_hint,
@@ -232,7 +282,8 @@ def _compact_payload(level: int, part: int, records: list[dict[str, Any]], title
         "records": records,
         "required_output": {
             "capsules": [{
-                "claim": "one concise evidence-grounded planning fact or visual observation",
+                "source_fact_id": "R0001: select exactly one supplied source fact; do not rewrite its claim",
+                "claim": "optional label; the original source fact claim is authoritative",
                 "evidence_refs": ["E0001"],
                 "media_refs": ["E0002"],
                 "phase": "development|final|background|unknown",
@@ -269,32 +320,62 @@ def _normalize_capsules(
     result: dict[str, Any],
     valid_refs: set[str],
     media_refs: set[str],
+    records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    source_facts = []
+    for record in records or []:
+        source = record.get("capsule", {}) if record.get("kind") == "capsule" else record
+        if source.get("kind", record.get("kind")) == "asset":
+            continue
+        if source.get("source_fact_id") and source.get("claim") and source.get("evidence_refs"):
+            source_facts.append(source)
+    by_id = {item["source_fact_id"]: item for item in source_facts}
     capsules = []
-    for capsule in result.get("capsules", []):
+    returned = result.get("capsules", []) if isinstance(result, dict) else []
+    for capsule in returned if isinstance(returned, list) else []:
         if not isinstance(capsule, dict):
             continue
-        claim = str(capsule.get("claim", "")).strip()
-        if not claim:
+        raw_media = capsule.get("media_refs", [])
+        raw_refs = capsule.get("evidence_refs", [])
+        mrefs = [r for r in raw_media if isinstance(r, str) and r in media_refs] \
+            if isinstance(raw_media, list) else []
+        refs = [r for r in raw_refs if isinstance(r, str) and r in valid_refs] \
+            if isinstance(raw_refs, list) else []
+        refs = list(dict.fromkeys(refs))
+        if not refs and not mrefs:
             continue
-        mrefs = [r for r in capsule.get("media_refs", []) if r in media_refs]
-        refs = [r for r in capsule.get("evidence_refs", []) if r in valid_refs]
-        refs = list(dict.fromkeys(refs + mrefs))
-        if not refs:
+        source_id = capsule.get("source_fact_id")
+        source = by_id.get(source_id) if isinstance(source_id, str) else None
+        if source is not None and not set(source["evidence_refs"]) & set(refs):
+            source = None
+        if source is None:
+            # Legacy compaction responses can still select an unambiguous
+            # source by ref. The model's own claim is NEVER promoted.
+            matches = [item for item in source_facts if set(item["evidence_refs"]) & set(refs)]
+            exact = [item for item in matches if item["claim"].casefold() == str(
+                capsule.get("claim", "")
+            ).strip().casefold()]
+            options = exact or matches
+            source = options[0] if len(options) == 1 else None
+        if source is None:
+            if mrefs:
+                capsules.append({"kind": "asset", "claim": "", "evidence_refs": list(dict.fromkeys(mrefs)),
+                                 "media_refs": list(dict.fromkeys(mrefs)), "visual_purpose": str(
+                                     capsule.get("visual_purpose", "")
+                                 ).strip()[:160], "phase": "unknown", "confidence": "low"})
             continue
-        phase = capsule.get("phase", "unknown")
-        if phase not in {"development", "final", "background", "unknown"}:
-            phase = "unknown"
-        confidence = capsule.get("confidence", "low")
-        if confidence not in {"high", "medium", "low"}:
-            confidence = "low"
+        source_refs = [ref for ref in source["evidence_refs"] if ref in valid_refs]
+        if len(source_refs) != len(source["evidence_refs"]):
+            continue
         capsules.append({
-            "claim": claim,
-            "evidence_refs": refs,
+            "kind": "fact", "claim": source["claim"],
+            "source_fact_id": source["source_fact_id"],
+            "support": source.get("support", []),
+            "evidence_refs": source_refs,
             "media_refs": list(dict.fromkeys(mrefs)),
-            "phase": phase,
-            "confidence": confidence,
-            "visual_purpose": str(capsule.get("visual_purpose", "")).strip(),
+            "phase": source.get("phase", "unknown"),
+            "confidence": source.get("confidence", "low"),
+            "visual_purpose": str(capsule.get("visual_purpose", "")).strip()[:160],
         })
     return {"capsules": capsules}
 
@@ -303,7 +384,8 @@ def _dedupe_capsules(capsules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen = set()
     out = []
     for capsule in capsules:
-        marker = (capsule["claim"].casefold(), tuple(capsule["evidence_refs"]))
+        marker = (capsule.get("source_fact_id"), capsule["claim"].casefold(),
+                  tuple(capsule["evidence_refs"]))
         if marker in seen:
             continue
         seen.add(marker)
@@ -327,6 +409,28 @@ def _topic_words(text: str) -> set[str]:
             if (len(word) > 2 or word.isdigit()) and word not in _TOPIC_STOPWORDS}
 
 
+def _explicit_topic_words(instructions: str) -> set[str]:
+    """Extract user focus, ignoring citation rules and a quoted closing line."""
+    subjects = []
+    for clause in re.split(r"[.!?;\n]", instructions):
+        if re.search(r"\b(?:explain|describe|cover|focus|explore|showcase|"
+                     r"distinguish|compare|how|why|what)\b", clause, re.I):
+            subjects.append(clause)
+    return _topic_words(" ".join(subjects))
+
+
+def _validate_focus_coverage(scenes: list[dict[str, Any]], ask: dict[str, Any]) -> None:
+    priorities = set(ask["priority_fact_ids"])
+    if len(priorities) < 2:
+        return
+    factual = [scene for scene in scenes if scene["type"] not in {"SECTION_TITLE", "OUTRO"}]
+    if len(factual) < 3:
+        return
+    direct = sum(bool(priorities & set(scene.get("fact_ids", []))) for scene in factual)
+    if direct * 2 < len(factual):
+        raise ValueError("Storyboard needs more scenes grounded in explicitly requested facts")
+
+
 def _primary_anchors(
     research: dict[str, Any], inventory: dict[str, Any], media_refs: set[str],
     title_hint: str = "", instructions: str = "",
@@ -338,28 +442,22 @@ def _primary_anchors(
         if ref in entries and (entries[ref].get("evidence_role") or "primary") == "primary"
     }
     candidates = []
-    for fact in research.get("facts", []):
+    for number, fact in enumerate(research.get("facts", []), 1):
         refs = [r for r in fact.get("evidence_refs", []) if r in entries]
         claim = str(fact.get("claim", "")).strip()
         if not claim or not refs or any(r not in primary_refs for r in refs):
             continue
         candidates.append({
-            "claim": claim, "evidence_refs": list(dict.fromkeys(refs)),
+            "kind": "fact", "claim": claim, "evidence_refs": list(dict.fromkeys(refs)),
+            "source_fact_id": fact.get("source_fact_id", f"R{number:04d}"),
+            "support": fact.get("support", []),
             "media_refs": [r for r in refs if r in media_refs],
             "phase": fact.get("phase", "unknown"),
             "confidence": fact.get("confidence", "low"), "visual_purpose": "",
         })
 
-    # If research supplied no primary-only claim, the existence and path of a
-    # cited primary source remain safe, modest fallback facts; do not promote a
-    # mixed embedded claim to a primary fact.
     if not candidates:
-        candidates = [{
-            "claim": f"Primary source: {entry.get('relative_path', entry['ref'])}",
-            "evidence_refs": [entry["ref"]],
-            "media_refs": [entry["ref"]] if entry["ref"] in media_refs else [],
-            "phase": "unknown", "confidence": "high", "visual_purpose": "",
-        } for entry in inventory["evidence"] if entry["ref"] in primary_refs]
+        return []
 
     candidates = _dedupe_capsules(candidates)
     subject = _topic_words(title_hint)
@@ -381,7 +479,9 @@ def _primary_anchors(
         overview_score = max(0, 2 - (len(path_parts) - 1)) * 2.5
         if Path(path).suffix.casefold() in {".md", ".rst", ".txt", ".adoc"}:
             overview_score += 1.5
-        base = (title_score + 0.8 * min(4, len(requested & words)) +
+        # Explicitly requested concepts outweigh filesystem depth and the
+        # number of interesting but tangential implementation facts.
+        base = (title_score + 7 * min(5, len(requested & words)) +
                 confidence_score + phase_score + overview_score)
         profiles.append((index, candidate, path, path_parts[0] if path_parts else "", words - subject, base))
 
@@ -394,7 +494,10 @@ def _primary_anchors(
         for profile in remaining:
             index, candidate, path, root, words, base = profile
             refs = set(candidate["evidence_refs"])
-            if (used_bytes + len(candidate["claim"].encode("utf-8")) > _PRIMARY_ANCHOR_BYTE_BUDGET or
+            size = len(candidate["claim"].encode("utf-8")) + sum(
+                len(item.get("text", "").encode("utf-8")) for item in candidate["support"]
+            )
+            if (used_bytes + size > _PRIMARY_ANCHOR_BYTE_BUDGET or
                     len(used_refs | refs) > _PRIMARY_ANCHOR_REF_BUDGET):
                 continue
             similarities = [len(words & prior[4]) / max(1, len(words | prior[4]))
@@ -414,18 +517,14 @@ def _primary_anchors(
         best = max(ranked)
         profile = best[2]
         selected.append(profile)
-        used_bytes += len(profile[1]["claim"].encode("utf-8"))
+        used_bytes += len(profile[1]["claim"].encode("utf-8")) + sum(
+            len(item.get("text", "").encode("utf-8")) for item in profile[1]["support"]
+        )
         used_refs.update(profile[1]["evidence_refs"])
         remaining.remove(profile)
     if selected:
         return [profile[1] for profile in selected]
-    # A huge research claim can exceed the anchor budget. Keep at least one
-    # modest, provable primary-source pointer so role scoping stays active.
-    for entry in inventory["evidence"]:
-        if entry["ref"] in primary_refs:
-            return [{"claim": f"Primary source: {entry.get('relative_path', entry['ref'])}",
-                     "evidence_refs": [entry["ref"]], "media_refs": [],
-                     "phase": "unknown", "confidence": "high", "visual_purpose": ""}]
+    # Do not synthesize a source-path claim without a supporting quotation.
     return []
 
 
@@ -436,13 +535,18 @@ def _scope_capsules(
     """Apply the existing research fact/ref quota at each planner level."""
     # Put original, source-grounded primary coverage first in the next level
     # and final storyboard request, even if local compaction omitted it.
-    candidates = _dedupe_capsules(anchors + capsules)
+    assets = [c for c in capsules if c.get("kind") == "asset"]
+    candidates = _dedupe_capsules(anchors + [c for c in capsules if c.get("kind") != "asset"])
     if not anchors:
-        return candidates
+        return candidates + assets
     bounded, _ = _consolidate(candidates, [], inventory, title_hint, instructions)
+    allowed = {ref for c in bounded for ref in c["evidence_refs"]}
+    roles = {e["ref"]: e.get("evidence_role") or "primary" for e in inventory["evidence"]}
     return [{**capsule, "media_refs": [r for r in capsule["media_refs"]
                                        if r in capsule["evidence_refs"]]}
-            for capsule in bounded]
+            for capsule in bounded] + [asset for asset in assets if any(
+                r in allowed or roles.get(r) == "primary" for r in asset["media_refs"]
+            )]
 
 
 def _evidence_scope(index: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -459,9 +563,11 @@ def _capsules_to_research(capsules: list[dict[str, Any]]) -> dict[str, Any]:
         "facts": [{
             "claim": c["claim"],
             "evidence_refs": c["evidence_refs"],
+            "source_fact_id": c["source_fact_id"],
+            "support": c["support"],
             "phase": c["phase"],
             "confidence": c["confidence"],
-        } for c in capsules],
+        } for c in capsules if c.get("kind") != "asset"],
         "assets": [{
             "evidence_ref": ref,
             "purpose": c["visual_purpose"],
@@ -539,6 +645,50 @@ def _validate_scene_facts(scene: dict[str, Any], ask: dict[str, Any],
         raise ValueError(f"{scene.get('id', 'Scene')}: evidence_refs must come from selected fact_ids or selected asset_ref")
 
 
+def _validate_narration_grounding(
+    provider: LLMProvider, scenes: list[dict[str, Any]], ask: dict[str, Any],
+    project_dir: Path | None, progress: Progress | None = None,
+) -> None:
+    """Check actual narration against just the scene's selected source facts."""
+    known = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    checks = []
+    for scene in scenes:
+        selected = [known[ref] for ref in scene.get("fact_ids", [])]
+        for fact in selected:
+            if not fact.get("support") or any(
+                span.get("evidence_ref") not in fact["evidence_refs"] or
+                not isinstance(span.get("text"), str) or not span["text"].strip()
+                for span in fact["support"]
+            ):
+                raise ValueError(f"{scene['id']}: selected fact lacks exact evidence support")
+        narration = scene["narration"].strip()
+        if len(narration) > 1200:
+            raise ValueError(f"{scene['id']}: narration exceeds the bounded grounding check")
+        if (scene == scenes[-1] and ask["required_narration_suffix"] and
+                narration.endswith(ask["required_narration_suffix"])):
+            narration = narration[:-len(ask["required_narration_suffix"])].strip()
+        if not narration:
+            continue
+        if not selected and re.fullmatch(
+            r"(?:closing|thank you(?: for watching)?|thanks(?: for watching)?|the end)\W*",
+            narration, re.I,
+        ):
+            continue
+        checks.append({"id": scene["id"], "claim": narration, "facts": [{
+            "claim": fact["claim"], "support": fact["support"]
+        } for fact in selected]})
+    if not checks:
+        return
+    if project_dir is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            verified = verify_claims(provider, checks, Path(tmp), "scene", progress)
+    else:
+        verified = verify_claims(provider, checks, project_dir, "scene", progress)
+    for item in checks:
+        if item["id"] not in verified:
+            raise ValueError(f"{item['id']}: narration introduces an unsupported factual proposition")
+
+
 def _validate_resource_links(presentation: Any, ask: dict[str, Any]) -> None:
     outro = presentation.get("outro") if isinstance(presentation, dict) else None
     if not isinstance(outro, dict):
@@ -569,6 +719,7 @@ def _complete_episode(
     ask: dict[str, Any],
     valid_refs: set[str],
     max_retries: int,
+    *, project_dir: Path | None = None, progress: Progress | None = None,
 ) -> dict[str, Any]:
     last_error: Exception | None = None
     attempts = max(1, max_retries + 1)
@@ -585,8 +736,10 @@ def _complete_episode(
             validate_episode(episode, valid_refs, require_integrated_presentation=True)
             for scene in episode["scenes"]:
                 _validate_scene_facts(scene, ask)
+            _validate_focus_coverage(episode["scenes"], ask)
             _validate_resource_links(episode.get("presentation", {}), ask)
             _validate_final_narration(episode, ask)
+            _validate_narration_grounding(provider, episode["scenes"], ask, project_dir, progress)
             return episode
         except (ValueError, TypeError) as exc:
             last_error = exc
@@ -641,6 +794,8 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "authoritative_resource_urls": ask["authoritative_resource_urls"],
         "required_narration_suffix": ask["required_narration_suffix"],
         "fact_selection_requirement": ask["fact_selection_requirement"],
+        "priority_fact_ids": ask["priority_fact_ids"],
+        "priority_requirement": ask["priority_requirement"],
         "scene_type_requirements": {
             "asset_ref_required_types": sorted(EVIDENCE_TYPES),
             "asset_ref": "For these types, choose one evidence_ref from the same intent as the fixed visual asset; omit for other types.",
@@ -717,6 +872,10 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
             raise StructuredOutputError(f"Storyboard intent {index} invalid: {exc}") from exc
         intents.append(intent)
     outline["scene_intents"] = intents
+    try:
+        _validate_focus_coverage(intents, ask)
+    except ValueError as exc:
+        raise StructuredOutputError(f"Storyboard outline focus invalid: {exc}") from exc
     if "presentation" in value:
         outline["presentation"] = value["presentation"]
     try:
@@ -810,6 +969,8 @@ def _scene_part_payload(
 def _normalize_scene_part(
     value: dict[str, Any], intents: list[dict[str, Any]],
     allowed: set[str], outline: dict[str, Any], ask: dict[str, Any],
+    provider: LLMProvider | None = None, project_dir: Path | None = None,
+    progress: Progress | None = None,
 ) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {"scenes"}:
         raise StructuredOutputError("Storyboard part must contain only a scenes list")
@@ -858,6 +1019,8 @@ def _normalize_scene_part(
         validate_episode(partial, allowed, require_integrated_presentation=True)
         if intents[-1]["id"] == outline["scene_intents"][-1]["id"]:
             _validate_final_narration(partial, ask)
+        if provider is not None:
+            _validate_narration_grounding(provider, partial["scenes"], ask, project_dir, progress)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
     return {"scenes": partial["scenes"]}
@@ -919,13 +1082,22 @@ def _multipart_episode(
 
         def normalize_for(value: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
             part_allowed = {entry["ref"] for entry in payload_for(items)["evidence_index"]}
-            return _normalize_scene_part(value, items, part_allowed, outline, ask)
+            return _normalize_scene_part(value, items, part_allowed, outline, ask,
+                                         provider, project_dir, progress)
 
-        results = checkpointed_split_json(
-            provider, scene_system, group, payload_for, checkpoint, normalize_for,
-            max_retries=max_retries, progress=progress,
-            label=f"Storyboard part {number}/{len(groups)}", used=used,
-        )
+        try:
+            results = checkpointed_split_json(
+                provider, scene_system, group, payload_for, checkpoint, normalize_for,
+                max_retries=max_retries, progress=progress,
+                label=f"Storyboard part {number}/{len(groups)}", used=used,
+            )
+        except RuntimeError as exc:
+            if "narration introduces an unsupported factual proposition" in str(exc):
+                raise GroundingError(
+                    f"Storyboard grounding failed in part {number}: "
+                    "a scene narration adds an unsupported factual proposition"
+                ) from None
+            raise
         for result in results:
             scenes.extend(result["scenes"])
 
@@ -967,8 +1139,17 @@ def _generate_episode(
     if not recovering:
         try:
             with step(progress, "Generating storyboard"):
-                episode = _complete_episode(provider, system, ask, allowed, max_retries)
+                episode = _complete_episode(provider, system, ask, allowed, max_retries,
+                                            project_dir=project_dir, progress=progress)
         except (StructuredOutputError, json.JSONDecodeError, _EpisodeValidationExhausted) as exc:
+            if isinstance(exc, _EpisodeValidationExhausted) and (
+                "unsupported factual proposition" in str(exc) or
+                "selected fact lacks exact evidence support" in str(exc)
+            ):
+                raise GroundingError(
+                    "Storyboard grounding failed: narration adds an unsupported "
+                    "factual proposition after bounded retries"
+                ) from None
             json_dump(marker, {"version": 1, "input_sha256": scope_id,
                                "mode": "multipart", "reason": str(exc)})
             if progress is not None:
@@ -1001,6 +1182,7 @@ def plan(
     max_reduce_levels: int = 4,
     progress: Progress | None = None,
 ) -> dict[str, Any]:
+    research = _supported_research(research, inventory)
     valid = {e["ref"] for e in inventory["evidence"]}
     media = _media_inventory(inventory)
 
@@ -1054,7 +1236,7 @@ def plan(
             )
             def normalize_part(value: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
                 provided_refs, provided_media = _part_refs(items)
-                return _normalize_capsules(value, valid & provided_refs, media_ref_set & provided_media)
+                return _normalize_capsules(value, valid & provided_refs, media_ref_set & provided_media, items)
 
             results = checkpointed_split_json(
                 provider, compact_system, batch,

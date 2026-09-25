@@ -21,7 +21,8 @@ from source2reel.util import json_load
 
 
 def _refs(count: int) -> list[dict[str, str]]:
-    return [{"ref": f"E{i:04d}", "kind": "document", "relative_path": f"doc-{i}.txt"}
+    return [{"ref": f"E{i:04d}", "kind": "document", "relative_path": f"doc-{i}.txt",
+             "excerpt": f"Grounded E{i:04d} is established. Fact E{i:04d} is recorded."}
             for i in range(1, count + 1)]
 
 
@@ -103,7 +104,9 @@ class SplitRecoveryTests(unittest.TestCase):
                 self.requests.append(refs)
                 if refs in (("E0003", "E0004", "E0005", "E0006"), ("E0005", "E0006")):
                     raise StructuredOutputError("response truncated")
-                return {"facts": [{"claim": f"Grounded {ref}", "evidence_refs": [ref]}
+                return {"facts": [{"claim": f"Grounded {ref}", "evidence_refs": [ref],
+                                   "support": [{"evidence_ref": ref,
+                                                "text": f"Grounded {ref} is established."}]}
                                   for ref in refs], "assets": []}
 
         provider = SelectiveProvider()
@@ -282,7 +285,9 @@ class SplitRecoveryTests(unittest.TestCase):
                                if "E0001" in fact["evidence_refs"])
                 return {"version": 1, "title": "Title", "slug": "title", "summary": "Summary",
                         "scenes": [{"id": "s001", "type": "PROJECT_EVIDENCE", "title": "Proof",
-                                    "narration": "Grounded proof.", "evidence_refs": ["E0001"],
+                                    "narration": next(f["claim"] for f in payload["research"]["facts"]
+                                                      if f["fact_id"] == fact_id),
+                                    "evidence_refs": ["E0001"],
                                     "fact_ids": [fact_id], "asset_ref": "E0001", "annotations": [],
                                     "pad_after_seconds": 0.5, "diagram": {}, "notes": ""}]}
 
@@ -292,7 +297,10 @@ class SplitRecoveryTests(unittest.TestCase):
             (root / "prompts").mkdir()
             (root / "prompts" / "storyboard.txt").write_text("storyboard")
             (root / "prompts" / "planner_compact.txt").write_text("compact")
-            research_input = {"facts": [{"claim": "Fact", "evidence_refs": [e["ref"]]}
+            research_input = {"facts": [{"claim": f"Grounded {e['ref']}",
+                                         "evidence_refs": [e["ref"]], "support": [{
+                                             "evidence_ref": e["ref"],
+                                             "text": f"Grounded {e['ref']} is established."}]}
                                         for e in _refs(2)], "assets": []}
             with patch("source2reel.planner.fits_context", side_effect=[False, True, True]), \
                  patch("source2reel.planner.split_for_context", side_effect=lambda records, *args, **kwargs: [records]):

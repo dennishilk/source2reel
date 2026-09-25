@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .chunking import checkpointed_split_json, split_for_context
+from .grounding import GROUNDING_CONTRACT, verify_claims
 from .inventory import _EMBEDDED_ROOTS
 from .progress import Progress
 from .providers import LLMProvider
@@ -29,6 +30,7 @@ def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str,
             "assets_per_ref": MAX_ASSETS_PER_REF,
             "assets_per_request": MAX_ASSETS_PER_REQUEST,
         },
+        "grounding_contract": GROUNDING_CONTRACT,
         "required_output": {
             "facts": [{
                 "claim": "...",
@@ -254,15 +256,15 @@ def _consolidate(
     def select(fact: dict[str, Any], secondary_role: str) -> None:
         if len(selected) >= fact_limit or fact["claim"].casefold() in seen_claims:
             return
-        # Retain primary citations on mixed facts, plus one secondary proof.
-        proof = next((r for r in fact["evidence_refs"] if role(r) == secondary_role), None)
-        if proof is None or (proof not in supporting_refs and len(supporting_refs) >= ref_limit):
+        # A compound fact can need every cited source. Never discard one of
+        # its refs while leaving a claim or quoted support behind.
+        secondary = {ref for ref in fact["evidence_refs"] if role(ref) != "primary"}
+        if not any(role(ref) == secondary_role for ref in secondary) or len(
+            supporting_refs | secondary
+        ) > ref_limit:
             return
-        refs = [r for r in fact["evidence_refs"] if role(r) == "primary"]
-        if proof not in refs:
-            refs.append(proof)
-        selected.append({**fact, "evidence_refs": refs})
-        supporting_refs.add(proof)
+        selected.append(fact)
+        supporting_refs.update(secondary)
         seen_claims.add(fact["claim"].casefold())
 
     embedded = groups["embedded_reference"]
@@ -313,15 +315,22 @@ def research(
         # splits into children. Global validity alone does not prove provenance.
         supplied = valid & {entry["ref"] for entry in batch}
         by_ref = {entry["ref"]: entry for entry in batch if entry["ref"] in supplied}
-        facts = []
-        facts_per_ref: dict[str, int] = {}
-        for fact in result.get("facts", []):
-            if len(facts) >= MAX_FACTS_PER_REQUEST:
+        candidates = []
+        candidate_count: dict[str, int] = {}
+        returned_facts = result.get("facts", [])
+        for fact in returned_facts if isinstance(returned_facts, list) else []:
+            if len(candidates) >= 2 * MAX_FACTS_PER_REQUEST:
                 break
-            if not isinstance(fact, dict) or not str(fact.get("claim", "")).strip():
+            if (not isinstance(fact, dict) or not isinstance(fact.get("claim"), str) or
+                    not fact["claim"].strip() or len(fact["claim"]) > 360):
                 continue
-            refs = [r for r in fact.get("evidence_refs", []) if r in supplied]
-            if not refs or any(facts_per_ref.get(ref, 0) >= MAX_FACTS_PER_REF for ref in set(refs)):
+            raw_refs = fact.get("evidence_refs")
+            if not isinstance(raw_refs, list):
+                continue
+            refs = [r for r in raw_refs if isinstance(r, str) and r in supplied]
+            if not refs:
+                continue
+            if any(candidate_count.get(ref, 0) >= 2 * MAX_FACTS_PER_REF for ref in set(refs)):
                 continue
             claim = str(fact["claim"]).strip()
             scope = _fact_scope(refs, roles)
@@ -349,7 +358,9 @@ def research(
                     invalid_support = True
                     break
                 support.append({"evidence_ref": ref, "text": span})
-            if invalid_support:
+            if invalid_support or not support or any(
+                not any(item["evidence_ref"] == ref for item in support) for ref in refs
+            ):
                 continue
             if (scope == "mixed" and _starts_with_subject(claim, title_hint) and
                     not _primary_supports_main_predicate(claim, support, roles, title_hint)):
@@ -361,25 +372,46 @@ def research(
                 _ORDER_SOURCE.search(item["text"]) for item in support
             ):
                 continue
-            clean = dict(fact)
-            clean["claim"] = claim
-            clean["evidence_refs"] = list(dict.fromkeys(refs))
-            clean["subject_scope"] = scope
-            clean["support"] = _dedupe(support, lambda item: (item["evidence_ref"], item["text"]))
-            if clean.get("phase") not in {"development", "final", "background", "unknown"}:
-                clean["phase"] = "unknown"
-            if clean.get("confidence") not in {"high", "medium", "low"}:
-                clean["confidence"] = "low"
-            facts.append(clean)
+            clean = {
+                "claim": claim,
+                "evidence_refs": list(dict.fromkeys(refs)),
+                "subject_scope": scope,
+                "support": _dedupe(support, lambda item: (item["evidence_ref"], item["text"])),
+                "phase": (fact["phase"] if isinstance(fact.get("phase"), str) and fact["phase"] in
+                          {"development", "final", "background", "unknown"} else "unknown"),
+                "confidence": (fact["confidence"] if isinstance(fact.get("confidence"), str) and fact["confidence"] in
+                               {"high", "medium", "low"} else "low"),
+            }
+            candidates.append(clean)
             for ref in set(refs):
+                candidate_count[ref] = candidate_count.get(ref, 0) + 1
+
+        verdicts = verify_claims(provider, [{
+            "id": f"C{index:04d}", "claim": candidate["claim"],
+            "support": [item["text"] for item in candidate["support"]],
+        } for index, candidate in enumerate(candidates, 1)], project_dir, "research", progress)
+        facts = []
+        facts_per_ref: dict[str, int] = {}
+        for index, candidate in enumerate(candidates, 1):
+            if f"C{index:04d}" not in verdicts:
+                continue
+            refs = set(candidate["evidence_refs"])
+            if (len(facts) >= MAX_FACTS_PER_REQUEST or any(
+                facts_per_ref.get(ref, 0) >= MAX_FACTS_PER_REF for ref in refs
+            )):
+                continue
+            facts.append(candidate)
+            for ref in refs:
                 facts_per_ref[ref] = facts_per_ref.get(ref, 0) + 1
 
         assets = []
         assets_per_ref: dict[str, int] = {}
-        for asset in result.get("assets", []):
+        returned_assets = result.get("assets", [])
+        for asset in returned_assets if isinstance(returned_assets, list) else []:
             if len(assets) >= MAX_ASSETS_PER_REQUEST:
                 break
-            if (not isinstance(asset, dict) or asset.get("evidence_ref") not in supplied or
+            if (not isinstance(asset, dict) or not isinstance(asset.get("evidence_ref"), str) or
+                    asset["evidence_ref"] not in supplied or
                     assets_per_ref.get(asset["evidence_ref"], 0) >= MAX_ASSETS_PER_REF):
                 continue
             clean = dict(asset)

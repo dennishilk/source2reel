@@ -63,11 +63,13 @@ def _primary_input():
         entries.append({"ref": ref, "kind": "document", "relative_path": path,
                         "evidence_role": "primary"})
         facts.append({"claim": claim, "evidence_refs": [ref],
+                      "support": [{"evidence_ref": ref, "text": claim}],
                       "phase": "final", "confidence": "high"})
     ref = "E0051"
     entries.append({"ref": ref, "kind": "document", "relative_path": "ops/maintenance.md",
                     "evidence_role": "primary"})
     facts.append({"claim": OPTIONAL_FLOW, "evidence_refs": [ref],
+                  "support": [{"evidence_ref": ref, "text": OPTIONAL_FLOW}],
                   "phase": "final", "confidence": "high"})
     for i in range(101, 141):
         ref = f"E{i:04d}"
@@ -75,6 +77,8 @@ def _primary_input():
                         "relative_path": f"artifacts/report-{i}.json",
                         "evidence_role": "generated_artifact"})
         facts.append({"claim": f"Generated report {i} records an implementation detail.",
+                      "support": [{"evidence_ref": ref,
+                                   "text": f"Generated report {i} records an implementation detail."}],
                       "evidence_refs": [ref], "phase": "unknown", "confidence": "medium"})
     return {"evidence": entries}, {"version": 1, "facts": facts, "assets": []}
 
@@ -104,12 +108,12 @@ class PrimaryCoverageTests(unittest.TestCase):
                         for ref in refs if roles[ref] != "primary"
                     ]}
                 ref = request["evidence_index"][0]["ref"]
-                fact_id = next(fact["fact_id"] for fact in request["research"]["facts"]
-                               if ref in fact["evidence_refs"])
+                selected = next(fact for fact in request["research"]["facts"]
+                                if ref in fact["evidence_refs"])
                 return {"version": 1, "title": "WidgetEngine", "slug": "widget-engine",
                         "summary": "Evidence-backed summary", "scenes": [{
-                            "id": "s001", "type": "HERO", "narration": "The documented source.",
-                            "fact_ids": [fact_id], "evidence_refs": [ref], "asset_ref": ref,
+                            "id": "s001", "type": "HERO", "narration": selected["claim"],
+                            "fact_ids": [selected["fact_id"]], "evidence_refs": [ref], "asset_ref": ref,
                         }]}
 
         provider = OmittingProvider()
@@ -205,7 +209,7 @@ class IntegratedOutroTests(unittest.TestCase):
     def _episode(presentation=None, kind="OUTRO"):
         episode = {"version": 1, "title": "Grounded result", "slug": "grounded-result",
                    "summary": "Only supported claims", "scenes": [{
-                       "id": "s001", "type": kind, "narration": "A supported closing line.",
+                   "id": "s001", "type": kind, "narration": "Closing.",
                        "evidence_refs": [] if kind == "OUTRO" else ["E0001"],
                    }]}
         if presentation is not None:
@@ -248,7 +252,9 @@ class IntegratedOutroTests(unittest.TestCase):
         inventory = {"evidence": [{"ref": "E0001", "kind": "document",
                                   "relative_path": "overview.md", "evidence_role": "primary"}]}
         research = {"version": 1, "facts": [{"claim": "Documented subject",
-                                                 "evidence_refs": ["E0001"]}], "assets": []}
+                                                 "evidence_refs": ["E0001"],
+                                                 "support": [{"evidence_ref": "E0001",
+                                                              "text": "Documented subject"}]}], "assets": []}
 
         class EndingProvider:
             def __init__(self, *, full_error=None, bad_outline=False):

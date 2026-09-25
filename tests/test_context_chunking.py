@@ -23,10 +23,12 @@ class FakeProvider:
         payload = json.loads(user)
         if system == "research":
             ref = payload["evidence"][0]["ref"]
+            span = payload["evidence"][0]["excerpt"]
             return {
                 "facts": [{
-                    "claim": f"Supported fact for {ref}",
+                    "claim": span,
                     "evidence_refs": [ref],
+                    "support": [{"evidence_ref": ref, "text": span}],
                     "phase": "final",
                     "confidence": "high",
                 }],
@@ -52,10 +54,14 @@ class FakeProvider:
                         refs.append(asset.get("evidence_ref"))
             refs = [r for r in dict.fromkeys(refs) if r]
             media_refs = [r for r in dict.fromkeys(media_refs) if r]
-            chosen = refs[:2] or media_refs[:1] or ["E0001"]
+            chosen = refs[:1] or media_refs[:1] or ["E0001"]
+            fact = next((record.get("capsule", record) for record in payload["records"]
+                         if record.get("source_fact_id") or
+                         record.get("capsule", {}).get("source_fact_id")), {})
             return {
                 "capsules": [{
-                    "claim": "Compact supported capsule.",
+                    "claim": fact.get("claim", ""),
+                    "source_fact_id": fact.get("source_fact_id"),
                     "evidence_refs": chosen,
                     "media_refs": media_refs[:1],
                     "phase": "final",
@@ -76,7 +82,7 @@ class FakeProvider:
                     "id": "s001",
                     "type": "PROJECT_EVIDENCE",
                     "title": "Proof",
-                    "narration": "Evidence-grounded narration.",
+                    "narration": fact["claim"],
                     "fact_ids": [fact["fact_id"]],
                     "evidence_refs": [ref],
                     "asset_ref": ref,
@@ -163,7 +169,8 @@ class ContextChunkingTests(unittest.TestCase):
         provider = FakeProvider()
         progress_output = io.StringIO()
         evidence = [
-            {"ref": f"E{i:04d}", "kind": "document", "text": "x" * 1400}
+            {"ref": f"E{i:04d}", "kind": "document", "text": "x" * 1400,
+             "excerpt": f"Supported fact for E{i:04d} is documented."}
             for i in range(1, 9)
         ]
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,6 +217,8 @@ class ContextChunkingTests(unittest.TestCase):
             facts.append({
                 "claim": f"Supported fact {i}: " + ("detail " * 90),
                 "evidence_refs": [ref],
+                "support": [{"evidence_ref": ref,
+                             "text": f"Supported fact {i}: " + ("detail " * 90)}],
                 "phase": "final",
                 "confidence": "high",
             })
@@ -250,7 +259,9 @@ class ContextChunkingTests(unittest.TestCase):
             progress_output = io.StringIO()
             plan(
                 provider,
-                {"version": 1, "facts": [{"claim": "Grounded proof", "evidence_refs": ["E0001"]}],
+                {"version": 1, "facts": [{"claim": "Grounded proof", "evidence_refs": ["E0001"],
+                                          "support": [{"evidence_ref": "E0001",
+                                                       "text": "Grounded proof"}]}],
                  "assets": []},
                 {"evidence": [{"ref": "E0001", "kind": "document", "relative_path": "proof.txt"}]},
                 project, "Demo", progress=Progress(progress_output),
@@ -284,7 +295,8 @@ class ContextChunkingTests(unittest.TestCase):
                 for i in range(1, 5)
             ]}
             research_input = {"facts": [
-                {"claim": f"Primary fact {i}", "evidence_refs": [f"E{i:04d}"]}
+                {"claim": f"Primary fact {i}", "evidence_refs": [f"E{i:04d}"],
+                 "support": [{"evidence_ref": f"E{i:04d}", "text": f"Primary fact {i}"}]}
                 for i in (1, 2)
             ], "assets": []}
             with patch("source2reel.planner.fits_context", side_effect=[False, True, True]), \

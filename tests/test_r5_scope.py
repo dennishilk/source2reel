@@ -24,15 +24,15 @@ def _project(root: Path) -> Path:
 def _evidence() -> list[dict]:
     return [
         {"ref": f"E{i:04d}", "kind": "document", "relative_path": f"core-{i}.md",
-         "evidence_role": "primary"}
+         "evidence_role": "primary", "excerpt": f"Core E{i:04d}, Own E{i:04d}, Fact E{i:04d} are documented."}
         for i in range(1, 5)
     ] + [
         {"ref": "E0005", "kind": "document", "relative_path": "examples/space-game/README.md",
-         "evidence_role": "embedded_reference"}
+         "evidence_role": "embedded_reference", "excerpt": "SpaceGame is documented."}
     ] + [
         {"ref": f"E{i:04d}", "kind": "document",
          "relative_path": "examples/space-game/manifests/research.json",
-         "evidence_role": "generated_artifact"}
+         "evidence_role": "generated_artifact", "excerpt": f"Embedded claim E{i:04d} is documented."}
         for i in range(6, 36)
     ]
 
@@ -48,7 +48,9 @@ class ResearchProvenanceTests(unittest.TestCase):
             def complete_json(self, system, user):
                 self.calls += 1
                 ref = json.loads(user)["evidence"][0]["ref"]
-                return {"facts": [{"claim": f"Own {ref}", "evidence_refs": [ref]}], "assets": []}
+                return {"facts": [{"claim": f"Own {ref}", "evidence_refs": [ref],
+                                   "support": [{"evidence_ref": ref,
+                                                "text": f"Core {ref}, Own {ref}, Fact {ref} are documented."}]}], "assets": []}
 
         provider = Provider()
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,7 +80,8 @@ class ResearchProvenanceTests(unittest.TestCase):
                 supplied = json.loads(user)["evidence"]
                 if supplied[0]["evidence_role"] == "primary":
                     return {"facts": [{"claim": f"Core {e['ref']}",
-                                       "evidence_refs": [e["ref"]]}
+                                       "evidence_refs": [e["ref"]], "support": [{
+                                           "evidence_ref": e["ref"], "text": e["excerpt"]}]}
                                       for e in supplied], "assets": []}
                 return {"facts": [{"claim": f"Embedded claim {e['ref']}",
                                    "evidence_refs": ["E0001"]} for e in supplied],
@@ -102,7 +105,8 @@ class ResearchProvenanceTests(unittest.TestCase):
                 supplied = json.loads(user)["evidence"]
                 own = supplied[0]["ref"]
                 foreign = "E0003" if own == "E0001" else "E0001"
-                return {"facts": [{"claim": f"Own {own}", "evidence_refs": [own, foreign]},
+                return {"facts": [{"claim": f"Own {own}", "evidence_refs": [own, foreign],
+                                   "support": [{"evidence_ref": own, "text": supplied[0]["excerpt"]}]},
                                   {"claim": "Foreign claim", "evidence_refs": [foreign]}],
                         "assets": [{"evidence_ref": own, "purpose": "own"},
                                    {"evidence_ref": foreign, "purpose": "foreign"}]}
@@ -132,7 +136,8 @@ class ResearchProvenanceTests(unittest.TestCase):
                     raise StructuredOutputError("too long")
                 own = supplied[0]["ref"]
                 other = "E0002" if own == "E0001" else "E0001"
-                return {"facts": [{"claim": f"Fact {own}", "evidence_refs": [own, other]}],
+                return {"facts": [{"claim": f"Fact {own}", "evidence_refs": [own, other],
+                                   "support": [{"evidence_ref": own, "text": supplied[0]["excerpt"]}]}],
                         "assets": [{"evidence_ref": own}, {"evidence_ref": other}]}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,11 +158,14 @@ class ResearchProvenanceTests(unittest.TestCase):
 
 class PlannerRoleTests(unittest.TestCase):
     def _run_plan(self, root: Path, instructions: str, entries=None):
-        entries = entries if entries is not None else _evidence()
+        entries = [{**item, "excerpt": f"Grounded point from {item['relative_path']} ({item['ref']})"}
+                   for item in (entries if entries is not None else _evidence())]
         roles = {item["ref"]: item["evidence_role"] for item in entries}
         research_input = {"facts": [
             {"claim": f"Grounded point from {item['relative_path']} ({item['ref']})",
-             "evidence_refs": [item["ref"]], "phase": "final", "confidence": "high"}
+             "evidence_refs": [item["ref"]], "phase": "final", "confidence": "high",
+             "support": [{"evidence_ref": item["ref"],
+                          "text": f"Grounded point from {item['relative_path']} ({item['ref']})"}]}
             for item in entries
         ], "assets": []}
 
@@ -176,14 +184,21 @@ class PlannerRoleTests(unittest.TestCase):
                     if payload["level"] == 1:
                         refs = [r for r in refs if roles[r] != "primary"]
                         return {"capsules": [self.capsule([r], f"Reference {r}") for r in refs]}
-                    return {"capsules": [self.capsule(refs, "One broad mixed capsule")]}
+                    # Reject the model's invented mixed claim, while retaining
+                    # original facts explicitly selected from this level.
+                    selected = [record.get("capsule", record) for record in payload["records"]]
+                    return {"capsules": [self.capsule(refs, "One broad mixed capsule"), *[
+                        {**self.capsule(fact["evidence_refs"], fact["claim"]),
+                         "source_fact_id": fact["source_fact_id"]}
+                        for fact in selected if fact.get("source_fact_id")
+                    ]]}
                 first = payload["evidence_index"][0]["ref"]
-                fact_id = next(fact["fact_id"] for fact in payload["research"]["facts"]
-                               if first in fact["evidence_refs"])
+                selected = next(fact for fact in payload["research"]["facts"]
+                                if first in fact["evidence_refs"])
                 return {"version": 1, "title": "Demo", "slug": "demo", "summary": "Demo",
                         "scenes": [{"id": "s001", "type": "PROJECT_EVIDENCE", "title": "Proof",
-                                    "narration": "A grounded observation.", "evidence_refs": [first],
-                                    "fact_ids": [fact_id], "asset_ref": first,
+                                    "narration": selected["claim"], "evidence_refs": [first],
+                                    "fact_ids": [selected["fact_id"]], "asset_ref": first,
                                     "annotations": [], "pad_after_seconds": 0.5,
                                     "diagram": {}, "notes": ""}]}
 

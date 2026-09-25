@@ -6,7 +6,7 @@ Rules:
 - Preserve exact evidence refs from the supplied records.
 - Preserve development/final/background distinctions.
 - Retain visually useful authentic media when it materially helps explain the project.
-- Each capsule must be traceable to the records in this request.
+- Each factual capsule SELECTS exactly one source_fact_id from the records in this request. Carry source facts through later levels; do not combine or rewrite their claims. The pipeline replaces your claim with that exact source fact and its original exact support spans. Select media as visual hints; do not invent a factual claim about media without a source fact.
 - Prefer fewer, stronger capsules over repetition.
 - Preserve distinct, subject-relevant primary facts: a concise overview or documented normal sequence must not disappear behind repetitive implementation details merely because those details occupy more files.
 - Keep normal, optional, revision, maintenance, setup and testing flows distinct. Preserve the source's qualifiers; do not promote an auxiliary path to a mandatory normal step.
