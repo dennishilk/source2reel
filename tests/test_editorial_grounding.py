@@ -10,6 +10,7 @@ import unittest
 from source2reel.planner import (
     _authoritative_resource_urls, _complete_episode, _final_narration_suffix,
     _final_requests_fit, _make_ask, _normalize_outline, _normalize_scene_part,
+    _validate_outline_grounding,
     _scene_part_payload, plan,
 )
 from source2reel.chunking import fits_context
@@ -89,22 +90,22 @@ class GroundedProvider:
             ids = [fact["fact_id"] for fact in facts]
             refs = [fact["evidence_refs"] for fact in facts]
             intents = [
-                {"type": "HERO", "purpose": "Introduces the engine", "fact_ids": [ids[0]],
+                {"type": "HERO", "purpose": facts[0]["claim"], "fact_ids": [ids[0]],
                  "evidence_refs": refs[0]},
-                {"type": "DATA_FLOW", "purpose": "Normal workflow", "fact_ids": [ids[0], ids[3]],
+                {"type": "DATA_FLOW", "purpose": facts[0]["claim"], "fact_ids": [ids[0], ids[3]],
                  "evidence_refs": refs[0] + refs[3]},
-                {"type": "CODE", "purpose": "Profile responsibility", "fact_ids": [ids[2]],
+                {"type": "CODE", "purpose": facts[2]["claim"], "fact_ids": [ids[2]],
                  "evidence_refs": refs[2]},
-                {"type": "SUMMARY", "purpose": "Optional maintenance", "fact_ids": [ids[1]],
+                {"type": "SUMMARY", "purpose": facts[1]["claim"], "fact_ids": [ids[1]],
                  "evidence_refs": refs[1]},
             ]
             if ("asset_ref" in request["required_output"]["scene_intents"][0] and
                     intents[0]["type"] in request["scene_type_requirements"]["asset_ref_required_types"]):
                 intents[0]["asset_ref"] = refs[0][0]
             output = {"version": 1, "title": "Widget", "slug": "widget",
-                      "summary": "Source to output", "scene_intents": intents}
+                      "summary": facts[0]["claim"], "scene_intents": intents}
             if request["authoritative_resource_urls"]:
-                intents.append({"type": "OUTRO", "purpose": "Close", "fact_ids": [],
+                intents.append({"type": "OUTRO", "purpose": "Closing", "fact_ids": [],
                                 "evidence_refs": []})
                 output["presentation"] = {"outro": {
                     "headline": ["Documented project"],
@@ -128,6 +129,56 @@ class GroundedProvider:
 
 
 class EditorialGroundingTests(unittest.TestCase):
+    def test_outline_summary_and_purpose_must_follow_their_scoped_facts(self):
+        definition = "WidgetEngine is a reusable evidence-first explainer engine."
+        rendering = "The normal workflow renders planned output with local tools."
+        facts = [definition, rendering]
+        evidence = [{"ref": f"E{i:04d}", "evidence_role": "primary"}
+                    for i in (1, 2)]
+        research = {"facts": [{"claim": claim, "evidence_refs": [f"E{i:04d}"],
+                               "support": [{"evidence_ref": f"E{i:04d}", "text": claim}]}
+                              for i, claim in enumerate(facts, 1)], "assets": []}
+        ask = _make_ask(research, [], evidence, "WidgetEngine", "Explain what it does.")
+
+        class NoVerifier:
+            def complete_json(self, _system, _user):
+                raise AssertionError("These exact or obviously unsupported checks need no model")
+
+        def outline(summary, purpose, ids):
+            return _normalize_outline({"version": 1, "title": "WidgetEngine", "slug": "widget",
+                                       "summary": summary, "scene_intents": [{
+                                           "type": "SUMMARY", "purpose": purpose,
+                                           "fact_ids": ids, "evidence_refs": ["E0001"],
+                                       }]}, {"E0001", "E0002"}, ask)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            provider, root = NoVerifier(), Path(tmp)
+            clean = outline(definition,
+                            "Introduce WidgetEngine as a reusable evidence-first explainer engine.",
+                            ["F0001"])
+            _validate_outline_grounding(provider, clean, ask, root)
+            for summary, purpose, ids, expected in (
+                (definition, "Turn project sources into finished technical documentaries.",
+                 ["F0001"], "outline-s001"),
+                (definition, "Show source → evidence → AI enrichment → rendering → output.",
+                 ["F0001", "F0002"], "outline-s001"),
+                ("WidgetEngine uses AI enrichment.", definition, ["F0001"],
+                 "outline-summary"),
+                (definition, rendering, ["F0001"], "outline-s001"),
+            ):
+                with self.subTest(expected=expected, purpose=purpose, summary=summary):
+                    with self.assertRaisesRegex(StructuredOutputError, expected):
+                        _validate_outline_grounding(provider, outline(summary, purpose, ids),
+                                                    ask, root)
+
+            scene = {"id": "s001", "type": "SUMMARY", "narration":
+                     "WidgetEngine guarantees fully autonomous video production.",
+                     "fact_ids": ["F0001"], "evidence_refs": ["E0001"]}
+            with self.assertRaisesRegex(StructuredOutputError,
+                                        "narration introduces an unsupported factual proposition"):
+                _normalize_scene_part({"scenes": [scene]}, clean["scene_intents"],
+                                      {"E0001"}, clean, ask, provider, root)
+
     def test_fact_ids_follow_final_research_order_and_are_stable(self):
         inventory, research = _evidence()
         first = _make_ask(research, [], inventory["evidence"], "Widget", "")

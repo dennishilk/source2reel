@@ -84,6 +84,38 @@ def _primary_input():
 
 
 class PrimaryCoverageTests(unittest.TestCase):
+    def test_requested_purpose_survives_bounded_primary_selection_only_when_sourced(self):
+        inventory, research = _primary_input()
+        purpose = ("WidgetEngine exists to turn authoritative project sources into "
+                   "evidence-grounded technical explainers through a local production pipeline.")
+        instructions = "Explain what WidgetEngine is, why it exists, and how it works."
+        inventory["evidence"].extend([
+            {"ref": "E0052", "kind": "document", "relative_path": "README.md",
+             "evidence_role": "primary"},
+            {"ref": "E0200", "kind": "document", "relative_path": "tests/test_config.py",
+             "evidence_role": "embedded_reference"},
+        ])
+        research["facts"].extend([
+            {"claim": purpose, "evidence_refs": ["E0052"],
+             "support": [{"evidence_ref": "E0052", "text": purpose}],
+             "phase": "final", "confidence": "high"},
+            {"claim": "The configuration uses [profile] with name = widget-series.",
+             "evidence_refs": ["E0200"], "support": [{"evidence_ref": "E0200",
+             "text": "The configuration uses [profile] with name = widget-series."}],
+             "phase": "final", "confidence": "high"},
+        ])
+        anchors = _primary_anchors(research, inventory, set(), "WidgetEngine", instructions)
+        self.assertLessEqual(len(anchors), 10)
+        self.assertIn(purpose, [item["claim"] for item in anchors])
+        self.assertNotIn("widget-series", " ".join(item["claim"] for item in anchors))
+        ask = _make_ask(research, [], inventory["evidence"], "WidgetEngine", instructions)
+        purpose_id = next(item["fact_id"] for item in ask["research"]["facts"]
+                          if item["claim"] == purpose)
+        self.assertIn(purpose_id, ask["priority_fact_ids"])
+        without_purpose = {**research, "facts": research["facts"][:-2] + research["facts"][-1:]}
+        self.assertNotIn(purpose, [item["claim"] for item in _primary_anchors(
+            without_purpose, inventory, set(), "WidgetEngine", instructions)])
+
     def test_canonical_primary_claims_survive_two_compaction_levels_with_secondary_quota(self):
         inventory, research = _primary_input()
         roles = {entry["ref"]: entry["evidence_role"] for entry in inventory["evidence"]}
@@ -272,8 +304,8 @@ class IntegratedOutroTests(unittest.TestCase):
                     return IntegratedOutroTests._episode(PRESENTATION)
                 if mode == "outline":
                     outline = {"version": 1, "title": "Grounded result", "slug": "grounded-result",
-                               "summary": "Only supported claims", "scene_intents": [{
-                                   "type": "OUTRO", "purpose": "Grounded closing",
+                               "summary": "Documented subject", "scene_intents": [{
+                                   "type": "OUTRO", "purpose": "Closing",
                                    "evidence_refs": [],
                                }]}
                     if not self.bad_outline:

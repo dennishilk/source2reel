@@ -10,7 +10,7 @@ from unittest.mock import patch
 from source2reel.chunking import fits_context
 from source2reel.inventory import build_inventory
 from source2reel.pipeline import create
-from source2reel.planner import _compact_payload, _evidence_index, _media_inventory
+from source2reel.planner import _compact_payload, _evidence_index, _media_inventory, _primary_anchors
 from source2reel.research import _consolidate, _reference_focus, research
 
 
@@ -98,6 +98,43 @@ class EvidenceSubjectScopingTests(unittest.TestCase):
         (source / "examples" / "one" / "README.md").write_text("This is the requested source.\n")
         inventory = build_inventory(source, self.project)
         self.assertEqual(inventory["evidence"][0]["evidence_role"], "primary")
+
+    def test_top_level_tests_are_citable_supporting_evidence(self):
+        source = self.root / "source-with-tests"
+        (source / "source").mkdir(parents=True)
+        (source / "tests").mkdir()
+        (source / "README.md").write_text("WidgetEngine uses the Production profile.\n")
+        (source / "source" / "package.py").write_text("# WidgetEngine renders explainers.\n")
+        (source / "tests" / "test_product.py").write_text(
+            "The configuration uses [profile] with name = widget-series.\n"
+        )
+        inventory = build_inventory(source, self.project)
+        roles = {item["relative_path"]: item["evidence_role"] for item in inventory["evidence"]}
+        self.assertEqual(roles, {
+            "README.md": "primary", "source/package.py": "primary",
+            "tests/test_product.py": "embedded_reference",
+        })
+        provider = RecordingProvider()
+        findings = research(provider, inventory, self.project, title_hint="WidgetEngine",
+                            instructions="Explain its production profile.")
+        fixture = next(fact for fact in findings["facts"] if "widget-series" in fact["claim"])
+        self.assertEqual(fixture["subject_scope"], "supporting_only")
+        anchors = _primary_anchors(findings, inventory, set(), "WidgetEngine",
+                                   "Explain its production profile.")
+        self.assertTrue(any("Production profile" in item["claim"] for item in anchors))
+        self.assertFalse(any("widget-series" in item["claim"] for item in anchors))
+
+    def test_test_only_source_remains_primary_and_researchable(self):
+        source = self.root / "test-only-source"
+        (source / "tests").mkdir(parents=True)
+        (source / "tests" / "test_product.py").write_text(
+            "The test suite itself is the requested subject.\n"
+        )
+        inventory = build_inventory(source, self.project)
+        self.assertEqual(inventory["evidence"][0]["evidence_role"], "primary")
+        findings = research(RecordingProvider(), inventory, self.project,
+                            title_hint="Test suite")
+        self.assertTrue(findings["facts"])
 
     def test_single_line_generated_artifact_stays_context_safe(self):
         source = self.root / "minified-source"

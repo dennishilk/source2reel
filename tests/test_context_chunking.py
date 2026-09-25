@@ -11,6 +11,7 @@ from source2reel.chunking import checkpointed_complete_json, fits_context, split
 from source2reel.planner import _repair_episode_shape, plan
 from source2reel.progress import Progress
 from source2reel.research import research
+from source2reel.schema import validate_episode
 from source2reel.util import json_load
 
 
@@ -151,7 +152,9 @@ class ContextChunkingTests(unittest.TestCase):
                 "asset_ref": "BAD",
             }],
         }, {"E0001"})
-        self.assertEqual(invalid_asset["scenes"][0]["asset_ref"], "E0001")
+        self.assertEqual(invalid_asset["scenes"][0]["asset_ref"], "BAD")
+        with self.assertRaisesRegex(ValueError, "asset_ref"):
+            validate_episode(invalid_asset, {"E0001"})
 
     def test_checkpoint_reuses_identical_input_and_invalidates_changed_input(self):
         provider = FakeProvider()

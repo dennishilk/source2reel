@@ -283,8 +283,8 @@ class GroundingRegressions(unittest.TestCase):
                     raise OutputLimitExceeded('single storyboard output limit')
                 if mode == 'outline':
                     return {'version': 1, 'title': 'Engine', 'slug': 'engine',
-                            'summary': 'Grounded story', 'scene_intents': [{
-                                'type': 'SUMMARY', 'purpose': 'CPU placement',
+                            'summary': claim, 'scene_intents': [{
+                                'type': 'SUMMARY', 'purpose': claim,
                                 'fact_ids': ['F0001'], 'evidence_refs': ['E0001']}]}
                 return {'scenes': [{'id': 's001', 'type': 'SUMMARY', 'title': 'CPU',
                                     'narration': claim + (

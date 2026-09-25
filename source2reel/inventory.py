@@ -11,6 +11,7 @@ from .util import json_dump, read_text_lossy, sha256_file
 _EMBEDDED_ROOTS = {
     "example", "examples", "sample", "samples", "demo", "demos",
     "fixture", "fixtures", "reference", "references", "test-projects", "projects",
+    "test", "tests",
 }
 _GENERATED_FILES = {
     "episode.json", "research.json", "research-compact.json",

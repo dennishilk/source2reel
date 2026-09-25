@@ -91,8 +91,11 @@ class StoryboardProvider:
             supplied_facts = payload["research"]["facts"]
             intents = []
             for i in range(self.count):
-                intent = {"type": kinds[i % len(kinds)], "purpose": f"Point {i+1}",
-                          "evidence_refs": refs[i % len(refs)]}
+                chosen_refs = refs[i % len(refs)]
+                purpose = next((fact["claim"] for fact in supplied_facts
+                                if set(fact["evidence_refs"]) & set(chosen_refs)), "Closing")
+                intent = {"type": kinds[i % len(kinds)], "purpose": purpose,
+                          "evidence_refs": chosen_refs}
                 if "fact_ids" in requested_intent:
                     intent["fact_ids"] = [fact["fact_id"] for fact in supplied_facts
                                           if set(fact["evidence_refs"]) & set(intent["evidence_refs"])]
@@ -106,7 +109,7 @@ class StoryboardProvider:
                     "links": [{"label": "Project", "url": [payload["authoritative_resource_urls"][0]]}]
                 }
             return {"version": 1, "title": "Grounded project", "slug": "grounded-project",
-                    "summary": "An evidence-first explanation.", "presentation": presentation,
+                    "summary": supplied_facts[0]["claim"], "presentation": presentation,
                     "scene_intents": intents}
         if mode == "scenes":
             part = payload["part_number"]
@@ -118,7 +121,7 @@ class StoryboardProvider:
             scenes = []
             for intent, requested in zip(intents, payload["required_output"]["scenes"]):
                 scene = copy.deepcopy(requested)
-                scene["title"] = intent["purpose"]
+                scene["title"] = f"Point {int(intent['id'][1:])}"
                 chosen = {fact["fact_id"]: fact["claim"] for fact in payload["research"]["facts"]}
                 scene["narration"] = (" ".join(chosen[fact_id] for fact_id in intent["fact_ids"])
                                       or "Closing.")
@@ -148,6 +151,104 @@ class StoryboardProvider:
 
 
 class StoryboardRecoveryTests(unittest.TestCase):
+    def test_full_episode_repairs_only_selected_asset_ref_relationship(self):
+        inventory, research = _source()
+        ask = planner._make_ask(research, [], inventory["evidence"], "DemoEngine", "")
+
+        class FullProvider:
+            def __init__(self, refs, asset="E0001", fact_ids=None):
+                self.refs, self.asset, self.fact_ids = refs, asset, fact_ids or ["F0001"]
+                self.calls = 0
+
+            def complete_json(self, _system, _user):
+                self.calls += 1
+                scene = {"id": "s001", "type": "HERO", "narration": "Grounded fact 1",
+                         "asset_ref": self.asset, "fact_ids": self.fact_ids}
+                if self.refs is not ...:
+                    scene["evidence_refs"] = self.refs
+                return {"version": 1, "title": "Grounded", "scenes": [scene]}
+
+        for refs in (..., None, []):
+            with self.subTest(refs=refs):
+                provider = FullProvider(refs)
+                episode = planner._complete_episode(provider, "storyboard", ask,
+                                                    {"E0001", "E0002"}, 0)
+                self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0001"])
+                self.assertEqual(provider.calls, 1)
+        episode = planner._complete_episode(FullProvider(["E0002", "E0002"],
+                                                          fact_ids=["F0001", "F0002"]),
+                                            "storyboard", ask, {"E0001", "E0002"}, 0)
+        self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0002", "E0001"])
+        for refs in (..., ["E0001"]):
+            with self.subTest(invalid_refs=refs):
+                with self.assertRaisesRegex(ValueError, "evidence_refs|asset_ref"):
+                    planner._complete_episode(FullProvider(refs, "E0099"), "storyboard", ask,
+                                              {"E0001", "E0002"}, 0)
+        with self.assertRaisesRegex(ValueError, "selected fact_ids or selected asset_ref"):
+            planner._complete_episode(FullProvider(..., "E0002"), "storyboard", ask,
+                                      {"E0001", "E0002"}, 0)
+        with self.assertRaisesRegex(ValueError, "evidence_refs"):
+            planner._complete_episode(FullProvider("E0001"), "storyboard", ask,
+                                      {"E0001", "E0002"}, 0)
+
+    def test_bad_outline_retries_before_any_scene_and_is_not_checkpointed(self):
+        class BadFirst(StoryboardProvider):
+            bad = True
+
+            def complete_json(self, system, user):
+                request = json.loads(user)
+                result = super().complete_json(system, user)
+                if request.get("storyboard_mode") == "outline" and self.bad:
+                    result["scene_intents"][0]["purpose"] = (
+                        "Turn project sources into finished technical documentaries."
+                    )
+                    self.bad = False
+                return result
+
+        for retry in (False, True):
+            with self.subTest(retry=retry), tempfile.TemporaryDirectory() as tmp:
+                provider = BadFirst(count=3)
+                project = _project(Path(tmp))
+                inventory, research = _source()
+                if retry:
+                    episode = plan(provider, research, inventory, project, "DemoEngine",
+                                   INSTRUCTIONS, max_retries=1)
+                    self.assertEqual(episode["scenes"][0]["id"], "s001")
+                    modes = [call.get("storyboard_mode") for call in provider.calls]
+                    self.assertEqual(modes.count("outline"), 2)
+                    self.assertGreater(modes.index("scenes"), modes.index("outline", modes.index("outline")+1))
+                    second = [call for call in provider.calls if call.get("storyboard_mode") == "outline"][1]
+                    self.assertIn("outline-s001", second["validation_feedback"])
+                    self.assertEqual(json_load(project / "manifests" / "storyboard-parts" /
+                                               "outline.json")["result"]["scene_intents"][0]["purpose"],
+                                     "Grounded fact 1")
+                else:
+                    with self.assertRaisesRegex(StructuredOutputError, "outline-s001"):
+                        plan(provider, research, inventory, project, "DemoEngine",
+                             INSTRUCTIONS, max_retries=0)
+                    saved = project / "manifests" / "storyboard-parts"
+                    self.assertFalse((saved / "outline.json").exists())
+                    self.assertFalse((project / "episode.json").exists())
+                    self.assertNotIn("scenes", [call.get("storyboard_mode") for call in provider.calls])
+
+    def test_cached_outline_is_revalidated_even_with_current_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _project(Path(tmp))
+            provider = StoryboardProvider(count=3)
+            inventory, research = _source()
+            plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
+                 max_retries=0)
+            path = project / "manifests" / "storyboard-parts" / "outline.json"
+            saved = json_load(path)
+            saved["result"]["summary"] = "AI enrichment provides guaranteed results."
+            path.write_text(json.dumps(saved))
+            before = len([call for call in provider.calls if call.get("storyboard_mode") == "outline"])
+            plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
+                 max_retries=0)
+            after = len([call for call in provider.calls if call.get("storyboard_mode") == "outline"])
+            self.assertEqual(after, before + 1)
+            self.assertEqual(json_load(path)["result"]["summary"], "Grounded fact 1")
+
     def test_map_reduce_output_limit_reuses_scoped_compaction_on_resume(self):
         class CompactThenRecover(StoryboardProvider):
             def complete_json(self, system, user):
@@ -238,7 +339,7 @@ class StoryboardRecoveryTests(unittest.TestCase):
                            INSTRUCTIONS, max_retries=0, progress=Progress(progress))
             self.assertEqual(episode["version"], 1)
             self.assertEqual((episode["title"], episode["slug"], episode["summary"]),
-                             ("Grounded project", "grounded-project", "An evidence-first explanation."))
+                             ("Grounded project", "grounded-project", "Grounded fact 1"))
             self.assertEqual([s["id"] for s in episode["scenes"]],
                              [f"s{i:03d}" for i in range(1, 8)])
             self.assertEqual([s["title"] for s in episode["scenes"]],

@@ -2,6 +2,8 @@
 
 **Source2Reel is a local, evidence-first AI-assisted technical explainer production engine.**
 
+Source2Reel exists to turn authoritative project sources into evidence-grounded technical explainers through a local production pipeline.
+
 It ingests authoritative project sources, builds a hashed evidence inventory, uses a replaceable local AI provider for research and storyboard generation, renders through a fixed template/profile system, generates local narration, derives timing from audio, and produces a deterministic 1920×1080 H.264/AAC explainer package.
 
 Cisco CP-9951 DOOM is the first reference episode and acceptance test. It is not a one-off renderer.

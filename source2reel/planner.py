@@ -613,21 +613,20 @@ def _repair_episode_shape(
             evidence_scene = scene.get("type") in {
                 "HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"
             }
-            if evidence_scene and isinstance(refs, list):
+            if evidence_scene:
                 asset_ref = scene.get("asset_ref")
-                if not asset_ref and len(refs) == 1:
-                    scene["asset_ref"] = refs[0]
-                elif asset_ref and asset_ref not in refs:
-                    if valid_refs is None or asset_ref in valid_refs:
+                if refs is None:
+                    refs = []
+                    scene["evidence_refs"] = refs
+                if isinstance(refs, list):
+                    if not asset_ref and len(refs) == 1 and isinstance(refs[0], str) and (
+                        valid_refs is None or refs[0] in valid_refs
+                    ):
+                        scene["asset_ref"] = refs[0]
+                    elif isinstance(asset_ref, str) and asset_ref and (
+                        valid_refs is None or asset_ref in valid_refs
+                    ) and asset_ref not in refs:
                         scene["evidence_refs"] = refs + [asset_ref]
-                    elif valid_refs is not None:
-                        valid_scene_refs = [ref for ref in refs if ref in valid_refs]
-                        if len(valid_scene_refs) == 1:
-                            scene["asset_ref"] = valid_scene_refs[0]
-                if not refs and scene.get("asset_ref") and (
-                    valid_refs is None or scene["asset_ref"] in valid_refs
-                ):
-                    scene["evidence_refs"] = [scene["asset_ref"]]
             repaired.append(scene)
         ep["scenes"] = repaired
     return ep
@@ -766,6 +765,9 @@ _OUTLINE_SYSTEM = (
     "scene_intents list. Choose the episode length editorially (1 to 32 scenes). "
     "Each factual intent must select fact_ids from the supplied research facts; "
     "its purpose and evidence_refs must follow only those selected claims. "
+    "Every factual proposition in summary must follow supplied planner facts, "
+    "and every factual proposition in an intent purpose must follow that "
+    "intent's selected fact_ids. Unsupported outline prose fails before scene generation. "
     "Normal workflow scenes must select normal workflow facts, not just setup "
     "or optional maintenance facts. Each intent needs type, purpose (at most "
     "160 characters), and at most six evidence_refs. For each evidence scene "
@@ -782,6 +784,8 @@ _SCENES_SYSTEM = (
     "and with its assigned id and type. Follow each scene's type-specific "
     "required_output: preserve its fixed asset_ref for evidence scenes and "
     "supply 2–8 labeled, evidence-grounded diagram nodes for diagram scenes. "
+    "The outline summary and scene purposes are planning labels, not evidence; "
+    "only selected fact claims authorize factual narration. "
     "Use only the selected fact claims for each scene; never add factual "
     "workflow steps or responsibilities absent from those claims. Do not "
     "invent exact commands, config assignments, file paths, APIs or code. "
@@ -904,6 +908,47 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
     except (ValueError, TypeError) as exc:
         raise StructuredOutputError(f"Storyboard outline presentation invalid: {exc}") from exc
     return outline
+
+
+_EDITORIAL_PREFIX = re.compile(
+    r"^(?:introduce|show|explain|compare|conclude with|summarize|present|describe)\s+", re.I
+)
+_EDITORIAL_ONLY = re.compile(
+    r"(?:(?:the|a|an)\s+)?(?:introduction|opening|closing|conclusion|outro|"
+    r"summary|transition|section|point\s+\d+)", re.I
+)
+
+
+def _outline_factual_text(purpose: str) -> str:
+    """Discard an editorial verb, never the factual object it introduces."""
+    content = _EDITORIAL_PREFIX.sub("", purpose.strip()).strip().rstrip(". ")
+    if _EDITORIAL_ONLY.fullmatch(content):
+        return ""
+    # "Introduce X as Y" asserts "X is Y". Keep that assertion for checking.
+    content = re.sub(r"^(.+?)\s+as\s+((?:an?|the)\s+.+)$", r"\1 is \2", content, flags=re.I)
+    return content
+
+
+def _validate_outline_grounding(
+    provider: LLMProvider, outline: dict[str, Any], ask: dict[str, Any],
+    project_dir: Path, progress: Progress | None = None,
+) -> None:
+    """Verify outline labels against planner facts before they reach scene parts."""
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    checks = [{"id": "outline-summary", "claim": outline["summary"],
+               "facts": list(facts.values())}]
+    for intent in outline["scene_intents"]:
+        claim = _outline_factual_text(intent["purpose"])
+        if claim:
+            checks.append({"id": f"outline-{intent['id']}", "claim": claim,
+                           "facts": [facts[fact_id] for fact_id in intent["fact_ids"]]})
+    accepted = verify_claims(provider, checks, project_dir, "outline", progress)
+    for check in checks:
+        if check["id"] not in accepted:
+            raise StructuredOutputError(
+                f"{check['id']}: unsupported factual proposition in storyboard outline: "
+                f"{check['claim'][:160]}"
+            )
 
 
 def _scene_part_payload(
@@ -1059,9 +1104,32 @@ def _multipart_episode(
                         context_size, output_reserve_tokens, safety_tokens):
         raise ValueError("Storyboard outline input exceeds the configured context budget")
     with step(progress, "Planning storyboard parts"):
+        feedback: str | None = None
+
+        class OutlineRetryProvider:
+            def complete_json(self, request_system: str, user: str) -> dict[str, Any]:
+                if feedback:
+                    revised = {**json.loads(user), "validation_feedback": feedback}
+                    revised_user = json.dumps(revised, ensure_ascii=False)
+                    if fits_context(request_system, revised_user, context_size,
+                                    output_reserve_tokens, safety_tokens):
+                        user = revised_user
+                return provider.complete_json(request_system, user)
+
+        def normalize_outline(value: dict[str, Any]) -> dict[str, Any]:
+            nonlocal feedback
+            try:
+                normalized = _normalize_outline(value, allowed, ask)
+                _validate_outline_grounding(provider, normalized, ask, project_dir, progress)
+                return normalized
+            except StructuredOutputError as exc:
+                feedback = (f"Previous outline rejected: {str(exc)[:190]}. "
+                            "Rewrite the unsupported summary or purpose using only selected facts.")
+                raise
+
         outline = checkpointed_complete_json(
-            provider, outline_system, outline_payload, part_dir / "outline.json",
-            lambda value: _normalize_outline(value, allowed, ask), max_retries=max_retries,
+            OutlineRetryProvider(), outline_system, outline_payload, part_dir / "outline.json",
+            normalize_outline, max_retries=max_retries,
         )
 
     scene_system = system + _SCENES_SYSTEM
