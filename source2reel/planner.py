@@ -770,6 +770,8 @@ _OUTLINE_SYSTEM = (
     "intent's selected fact_ids. Unsupported outline prose fails before scene generation. "
     "Select every fact_id verbatim from allowed_fact_ids; never continue the "
     "numeric sequence or use an ID from a previous request. "
+    "Choose evidence_refs from selected fact_ids in fact_evidence_map, plus a "
+    "selected asset_ref for an evidence scene. "
     "Normal workflow scenes must select normal workflow facts, not just setup "
     "or optional maintenance facts. Each intent needs type, purpose (at most "
     "160 characters), and at most six evidence_refs. For each evidence scene "
@@ -804,6 +806,12 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "storyboard_mode": "outline",
         "allowed_fact_ids": [fact["fact_id"] for fact in ask["research"]["facts"]],
         "fact_id_requirement": "Every intent fact_id must be copied verbatim from allowed_fact_ids.",
+        "fact_evidence_map": {fact["fact_id"]: fact["evidence_refs"]
+                              for fact in ask["research"]["facts"]},
+        "evidence_ref_requirement": (
+            "Use selected fact_ids' refs in fact_evidence_map; an evidence scene "
+            "may also cite its fixed selected research asset_ref."
+        ),
         "project_title_hint": ask["project_title_hint"],
         "optional_instructions": ask["optional_instructions"],
         "allowed_scene_types": ask["allowed_scene_types"],
@@ -848,18 +856,23 @@ def _final_requests_fit(
                         context_size, output_reserve_tokens, safety_tokens)
 
 
+def _valid_outline_fact_ids(raw: Any, intent: dict[str, Any], ask: dict[str, Any]) -> bool:
+    needs_facts = intent["type"] not in {"SECTION_TITLE", "OUTRO"} or bool(intent["evidence_refs"])
+    if raw is None:
+        return not needs_facts
+    allowed = {fact["fact_id"] for fact in ask["research"]["facts"]}
+    return (isinstance(raw, list) and len(raw) <= 6 and (raw or not needs_facts) and
+            all(isinstance(fact_id, str) and fact_id in allowed for fact_id in raw) and
+            len(set(raw)) == len(raw))
+
+
 def _outline_fact_ids(raw: Any, intent: dict[str, Any], ask: dict[str, Any]) -> list[str]:
     """Repair only a unique ref-to-existing-fact mapping, never editorial meaning."""
     facts = ask["research"]["facts"]
     allowed = [fact["fact_id"] for fact in facts]
     allowed_set = set(allowed)
     ids = raw if isinstance(raw, list) else []
-    needs_facts = intent["type"] not in {"SECTION_TITLE", "OUTRO"} or bool(intent["evidence_refs"])
-    if raw is None and not needs_facts:
-        return []
-    if (isinstance(raw, list) and len(ids) <= 6 and
-            all(isinstance(fact_id, str) and fact_id in allowed_set for fact_id in ids) and
-            len(set(ids)) == len(ids) and (ids or not needs_facts)):
+    if _valid_outline_fact_ids(raw, intent, ask):
         return ids
 
     invalid = ([str(fact_id)[:60] for fact_id in ids[:6] if not isinstance(fact_id, str)
@@ -891,6 +904,33 @@ def _outline_fact_ids(raw: Any, intent: dict[str, Any], ask: dict[str, Any]) -> 
     return [fact_id for fact_id in allowed if fact_id in selected]
 
 
+def _normalize_outline_evidence_refs(
+    intent: dict[str, Any], ask: dict[str, Any], allowed: set[str],
+) -> list[str]:
+    """Keep citations for already selected facts; an asset stays visual only."""
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    fact_refs = list(dict.fromkeys(
+        ref for fact_id in intent["fact_ids"]
+        for ref in facts[fact_id]["evidence_refs"] if ref in allowed
+    ))
+    selected_asset = intent.get("asset_ref")
+    asset_refs = {asset.get("evidence_ref") for asset in ask["research"].get("assets", [])}
+    if (selected_asset is not None and selected_asset not in fact_refs and
+            selected_asset not in asset_refs):
+        raise ValueError(f"{intent['id']}: asset_ref lacks selected fact or research asset support")
+    authorized = set(fact_refs)
+    if intent["type"] in EVIDENCE_TYPES and selected_asset in asset_refs:
+        authorized.add(selected_asset)
+    kept = [ref for ref in intent["evidence_refs"] if ref in authorized]
+    if intent["type"] not in {"SECTION_TITLE", "OUTRO"} and not any(
+        ref in fact_refs for ref in kept
+    ):
+        if not fact_refs or len(kept) >= 6:
+            raise ValueError(f"{intent['id']}: selected facts have no room for scoped evidence")
+        kept.append(fact_refs[0])
+    return kept
+
+
 def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") not in (1, "1"):
         raise StructuredOutputError("Storyboard outline must have version 1")
@@ -913,14 +953,17 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
         if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 160:
             raise StructuredOutputError(f"Storyboard intent {index} needs a short purpose")
         if not isinstance(refs, list) or len(refs) > 6 or any(
-            not isinstance(ref, str) or ref not in allowed for ref in refs
+            not isinstance(ref, str) for ref in refs
         ):
-            raise StructuredOutputError(f"Storyboard intent {index} cites evidence outside planner scope")
+            raise StructuredOutputError(f"Storyboard intent {index} has invalid evidence_refs")
         refs = list(dict.fromkeys(refs))
-        if raw["type"] not in {"SECTION_TITLE", "OUTRO"} and not refs:
-            raise StructuredOutputError(f"Storyboard intent {index} needs evidence refs")
         intent = {"id": f"s{index:03d}", "type": raw["type"],
                   "purpose": purpose.strip(), "evidence_refs": refs}
+        valid_fact_ids = _valid_outline_fact_ids(raw.get("fact_ids"), intent, ask)
+        if not valid_fact_ids and any(ref not in allowed for ref in refs):
+            raise StructuredOutputError(f"Storyboard intent {index} cites evidence outside planner scope")
+        if not valid_fact_ids and raw["type"] not in {"SECTION_TITLE", "OUTRO"} and not refs:
+            raise StructuredOutputError(f"Storyboard intent {index} needs evidence refs")
         if raw["type"] in EVIDENCE_TYPES:
             asset_ref = raw.get("asset_ref")
             if not isinstance(asset_ref, str) or asset_ref not in refs or asset_ref not in allowed:
@@ -930,6 +973,8 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
             intent["asset_ref"] = asset_ref
         try:
             intent["fact_ids"] = _outline_fact_ids(raw.get("fact_ids"), intent, ask)
+            if valid_fact_ids:
+                intent["evidence_refs"] = _normalize_outline_evidence_refs(intent, ask, allowed)
             _validate_scene_facts(intent, ask)
         except StructuredOutputError:
             raise

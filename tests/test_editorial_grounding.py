@@ -193,7 +193,7 @@ class EditorialGroundingTests(unittest.TestCase):
         self.assertTrue(fits_context("storyboard", json.dumps(ask, ensure_ascii=False),
                                      1500, 0, 0))
         self.assertFalse(_final_requests_fit("storyboard", ask, 1500, 0, 0))
-        self.assertTrue(_final_requests_fit("storyboard", ask, 1900, 0, 0))
+        self.assertTrue(_final_requests_fit("storyboard", ask, 2000, 0, 0))
 
     def test_selected_fact_scope_excludes_unrelated_setup_profile_and_config(self):
         ask = _ask()

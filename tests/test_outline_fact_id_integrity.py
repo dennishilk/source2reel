@@ -101,9 +101,113 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
     def test_payload_lists_exact_allowed_fact_ids_and_a_real_example(self):
         request = planner._outline_payload(self.ask)
         self.assertEqual(request["allowed_fact_ids"], ["F0001", "F0002", "F0003"])
+        self.assertEqual(request["fact_evidence_map"], {
+            "F0001": ["E0001"], "F0002": ["E0002"], "F0003": ["E0003"],
+        })
+        self.assertLess(len(json.dumps(request["fact_evidence_map"])), 100)
         self.assertEqual(request["required_output"]["scene_intents"][0]["fact_ids"], ["F0001"])
         self.assertIn("verbatim", request["fact_id_requirement"])
         self.assertIn("allowed_fact_ids", planner._OUTLINE_SYSTEM)
+        self.assertIn("fact_evidence_map", planner._OUTLINE_SYSTEM)
+        self.assertIn("selected fact_ids", request["evidence_ref_requirement"])
+
+    def test_valid_fact_keeps_its_selection_when_global_ref_is_stray(self):
+        value = outline()
+        value["scene_intents"][0]["evidence_refs"] = ["E0002"]
+        result = planner._normalize_outline(value, self.allowed, self.ask)
+        self.assertEqual(result["scene_intents"][0]["fact_ids"], ["F0001"])
+        self.assertEqual(result["scene_intents"][0]["evidence_refs"], ["E0001"])
+        planner._validate_scene_facts(result["scene_intents"][0], self.ask)
+
+    def test_mixed_refs_keep_authorized_order_and_deduplicate(self):
+        first = self.ask["research"]["facts"][0]
+        first["evidence_refs"].append("E0003")
+        first["support"].append({"evidence_ref": "E0003", "text": CLAIMS[0]})
+        next(item for item in self.ask["evidence_index"]
+             if item["ref"] == "E0003")["excerpt"] = CLAIMS[0] + " " + CLAIMS[2]
+        value = outline()
+        value["scene_intents"][0]["evidence_refs"] = ["E0001", "E0002", "E0001"]
+        result = planner._normalize_outline(value, self.allowed, self.ask)
+        self.assertEqual(result["scene_intents"][0]["evidence_refs"], ["E0001"])
+        self.assertEqual(result["scene_intents"][0]["fact_ids"], ["F0001"])
+
+    def test_multiple_selected_facts_do_not_adopt_a_third_fact(self):
+        value = outline()
+        value["scene_intents"][1]["fact_ids"] = ["F0001", "F0002"]
+        value["scene_intents"][1]["evidence_refs"] = ["E0002", "E0003"]
+        result = planner._normalize_outline(value, self.allowed, self.ask)
+        self.assertEqual(result["scene_intents"][1]["fact_ids"], ["F0001", "F0002"])
+        self.assertEqual(result["scene_intents"][1]["evidence_refs"], ["E0002"])
+
+    def test_empty_refs_are_completed_from_valid_selected_fact(self):
+        value = outline()
+        value["scene_intents"][0]["evidence_refs"] = []
+        result = planner._normalize_outline(value, self.allowed, self.ask)
+        self.assertEqual(result["scene_intents"][0]["evidence_refs"], ["E0001"])
+
+    def test_out_of_scope_stray_ref_is_discarded_only_with_valid_fact_ids(self):
+        value = outline()
+        value["scene_intents"][0]["evidence_refs"] = ["E9999"]
+        result = planner._normalize_outline(value, self.allowed, self.ask)
+        self.assertEqual(result["scene_intents"][0]["evidence_refs"], ["E0001"])
+        self.assertEqual(result["scene_intents"][0]["fact_ids"], ["F0001"])
+
+    def test_selected_visual_asset_survives_without_authorizing_narration(self):
+        self.ask["evidence_index"].append({"ref": "E0090", "kind": "media",
+                                           "evidence_role": "primary"})
+        self.ask["research"]["assets"].append({"evidence_ref": "E0090",
+                                                 "purpose": "Visual only"})
+        self.allowed.add("E0090")
+        value = outline()
+        value["scene_intents"][0].update({
+            "type": "HERO", "evidence_refs": ["E0090", "E9999"], "asset_ref": "E0090",
+        })
+        result = planner._normalize_outline(value, self.allowed, self.ask)
+        first = result["scene_intents"][0]
+        self.assertEqual(first["fact_ids"], ["F0001"])
+        self.assertEqual(first["evidence_refs"], ["E0090", "E0001"])
+        self.assertEqual(first["asset_ref"], "E0090")
+        self.assertNotIn("E0090", self.ask["research"]["facts"][0]["evidence_refs"])
+        with self.assertRaisesRegex(ValueError, "selected fact_ids or selected asset_ref"):
+            planner._validate_scene_facts({**first, "evidence_refs": ["E0090", "E0002"]},
+                                          self.ask)
+        with self.assertRaisesRegex(ValueError, "unsupported factual proposition"):
+            planner._validate_narration_grounding(
+                OutlineProvider([]), [{**first,
+                                       "narration": "WidgetEngine streams unsupported live footage."}],
+                self.ask, self.project,
+            )
+
+    def test_invalid_or_contradictory_asset_fails_instead_of_normalizing(self):
+        for asset in ("E9999", "E0002"):
+            with self.subTest(asset=asset):
+                value = outline()
+                value["scene_intents"][0].update({
+                    "type": "HERO", "asset_ref": asset, "evidence_refs": [asset],
+                })
+                with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+                    planner._normalize_outline(value, self.allowed, self.ask)
+
+    def test_sixth_intent_stray_ref_normalizes_and_checkpoint_is_reused(self):
+        value = outline()
+        value["scene_intents"].extend(copy.deepcopy(value["scene_intents"][:3]))
+        value["scene_intents"][5].update({
+            "type": "SUMMARY", "fact_ids": ["F0001"],
+            "evidence_refs": ["E0002"], "purpose": CLAIMS[0],
+        })
+        provider = OutlineProvider([value])
+        with patch("source2reel.planner._validate_outline_grounding",
+                   wraps=planner._validate_outline_grounding) as grounding:
+            episode = self.run_parts(provider)
+        grounding.assert_called_once()
+        self.assertEqual(len(episode["scenes"]), 6)
+        self.assertEqual(episode["scenes"][5]["fact_ids"], ["F0001"])
+        self.assertEqual(episode["scenes"][5]["evidence_refs"], ["E0001"])
+        path = self.project / "manifests" / "storyboard-parts" / "outline.json"
+        self.assertEqual(json_load(path)["result"]["scene_intents"][5]["evidence_refs"],
+                         ["E0001"])
+        self.run_parts(provider)
+        self.assertEqual(len(provider.outline_calls), 1)
 
     def test_valid_ids_pass_unchanged(self):
         value = outline()
