@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .providers import LLMProvider
-from .providers import StructuredOutputError
+from .providers import OutputLimitExceeded, StructuredOutputError
 from .progress import Progress, step
 from .util import json_dump, json_load
 
@@ -165,8 +165,9 @@ def checkpointed_split_json(
     label: str = "Structured request",
     used: set[Path] | None = None,
     max_split_depth: int = MAX_SPLIT_DEPTH,
+    split_single: Callable[[Any], tuple[Any, Any] | None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Retry a part, then split only malformed structured output; cache each child."""
+    """Retry a part, then split recoverable output; optionally divide one item."""
     if max_split_depth < 0:
         raise ValueError("max_split_depth must be non-negative")
     if not items:
@@ -192,12 +193,14 @@ def checkpointed_split_json(
                 pass
         split_known = False
         saved_reason = ""
+        saved_output_limit = False
         if not cached_parent and marker.exists():
             try:
                 saved = json_load(marker)
                 split_known = saved.get("input_sha256") == digest and saved.get("split") is True
                 if split_known:
                     saved_reason = str(saved.get("reason") or "")
+                    saved_output_limit = saved.get("output_limit") is True
             except (OSError, ValueError, TypeError):
                 pass
 
@@ -215,30 +218,48 @@ def checkpointed_split_json(
         reason = str(failure) if failure is not None else saved_reason or "model output was incomplete"
 
         if len(batch) == 1:
-            raise RuntimeError(
-                f"{current_label}: invalid structured output for single record "
-                f"{_record_refs(batch[0])} ({reason}); check the model output budget "
-                "or split the source record"
-            ) from failure
-        if depth >= max_split_depth:
+            if split_single is None or not (isinstance(failure, OutputLimitExceeded) or
+                                            (split_known and saved_output_limit)):
+                raise RuntimeError(
+                    f"{current_label}: invalid structured output for single record "
+                    f"{_record_refs(batch[0])} ({reason}); check the model output budget "
+                    "or split the source record"
+                ) from failure
+            if depth >= max_split_depth:
+                raise RuntimeError(
+                    f"{label}: record {_record_refs(batch[0])} hit the output limit "
+                    f"({reason}); maximum split depth {max_split_depth} reached; "
+                    "source record cannot be subdivided further"
+                ) from failure
+            divided = split_single(batch[0])
+            if divided is None:
+                raise RuntimeError(
+                    f"{label}: record {_record_refs(batch[0])} hit the output limit "
+                    f"({reason}); source record cannot be subdivided further"
+                ) from failure
+            left, right = [divided[0]], [divided[1]]
+        elif depth >= max_split_depth:
             raise RuntimeError(
                 f"{current_label}: structured output still invalid at maximum split depth "
                 f"{max_split_depth}; refs: {', '.join(_record_refs(item) for item in batch)}; "
                 f"reason: {reason}"
             ) from failure
+        else:
+            midpoint = len(batch) // 2
+            left, right = batch[:midpoint], batch[midpoint:]
 
         used.add(marker)
         if not split_known:
             json_dump(marker, {"version": 1, "input_sha256": digest, "split": True,
-                               "reason": reason})
+                               "reason": reason,
+                               "output_limit": isinstance(failure, OutputLimitExceeded)})
         if progress is not None:
             progress.note(f"{current_label}: malformed or truncated structured output; processing smaller parts"
                           if not split_known else f"{current_label}: resuming smaller parts")
-        midpoint = len(batch) // 2
         first = path.with_name(f"{path.stem}-a{path.suffix}")
         second = path.with_name(f"{path.stem}-b{path.suffix}")
-        return run(batch[:midpoint], first, depth + 1, suffix + "a") + run(
-            batch[midpoint:], second, depth + 1, suffix + "b"
+        return run(left, first, depth + 1, suffix + "a") + run(
+            right, second, depth + 1, suffix + "b"
         )
 
     return run(items, checkpoint, 0, "")

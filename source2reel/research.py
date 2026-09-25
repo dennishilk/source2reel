@@ -11,12 +11,24 @@ from .providers import LLMProvider
 from .util import json_dump
 
 
+MAX_FACTS_PER_REF = 6
+MAX_FACTS_PER_REQUEST = 12
+MAX_ASSETS_PER_REF = 2
+MAX_ASSETS_PER_REQUEST = 6
+
+
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
     return {
         "batch": batch_number,
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
         "evidence": evidence,
+        "research_limits": {
+            "facts_per_ref": MAX_FACTS_PER_REF,
+            "facts_per_request": MAX_FACTS_PER_REQUEST,
+            "assets_per_ref": MAX_ASSETS_PER_REF,
+            "assets_per_request": MAX_ASSETS_PER_REQUEST,
+        },
         "required_output": {
             "facts": [{
                 "claim": "...",
@@ -44,6 +56,54 @@ def _dedupe(items: list[dict[str, Any]], key) -> list[dict[str, Any]]:
         seen.add(marker)
         out.append(item)
     return out
+
+
+def _split_research_document(entry: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Split a cited excerpt at an existing paragraph, line, or sentence boundary."""
+    excerpt = entry.get("excerpt")
+    if entry.get("kind") != "document" or not isinstance(excerpt, str):
+        return None
+
+    def usable(positions: list[int]) -> list[int]:
+        return [position for position in positions
+                if excerpt[:position].strip() and excerpt[position:].strip()]
+
+    line_breaks = usable([match.end() for match in re.finditer("\n", excerpt)])
+    paragraph_breaks = [position for position in line_breaks
+                        if excerpt[:position].endswith("\n\n") and
+                        len(excerpt) // 4 <= position <= 3 * len(excerpt) // 4]
+    # Fall back to whole lines if paragraphs are too uneven. A long single
+    # line may still contain complete sentences, which retain the source text.
+    sentence_breaks = usable([match.end() for match in
+                              re.finditer(r"(?<=[.!?;])\s+(?=\S)", excerpt)])
+    boundaries = paragraph_breaks or line_breaks or sentence_breaks
+    if not boundaries:
+        return None
+    position = min(boundaries, key=lambda value: (abs(2 * value - len(excerpt)), value))
+    left = {**entry, "excerpt": excerpt[:position]}
+    right = {**entry, "excerpt": excerpt[position:]}
+    start = entry.get("line_start")
+    if isinstance(start, int):
+        right_start = start + left["excerpt"].count("\n")
+        left["line_end"] = right_start - int(left["excerpt"].endswith("\n"))
+        right["line_start"] = right_start
+        right["line_end"] = right_start + right["excerpt"].count("\n") - int(
+            right["excerpt"].endswith("\n"))
+    return left, right
+
+
+def _limit_by_ref(items: list[dict[str, Any]], refs, limit: int) -> list[dict[str, Any]]:
+    """Bound one original ref across all successful split children and batches."""
+    count: dict[str, int] = {}
+    kept = []
+    for item in items:
+        cited = set(refs(item))
+        if any(count.get(ref, 0) >= limit for ref in cited):
+            continue
+        kept.append(item)
+        for ref in cited:
+            count[ref] = count.get(ref, 0) + 1
+    return kept
 
 
 def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
@@ -254,11 +314,14 @@ def research(
         supplied = valid & {entry["ref"] for entry in batch}
         by_ref = {entry["ref"]: entry for entry in batch if entry["ref"] in supplied}
         facts = []
+        facts_per_ref: dict[str, int] = {}
         for fact in result.get("facts", []):
+            if len(facts) >= MAX_FACTS_PER_REQUEST:
+                break
             if not isinstance(fact, dict) or not str(fact.get("claim", "")).strip():
                 continue
             refs = [r for r in fact.get("evidence_refs", []) if r in supplied]
-            if not refs:
+            if not refs or any(facts_per_ref.get(ref, 0) >= MAX_FACTS_PER_REF for ref in set(refs)):
                 continue
             claim = str(fact["claim"]).strip()
             scope = _fact_scope(refs, roles)
@@ -308,14 +371,22 @@ def research(
             if clean.get("confidence") not in {"high", "medium", "low"}:
                 clean["confidence"] = "low"
             facts.append(clean)
+            for ref in set(refs):
+                facts_per_ref[ref] = facts_per_ref.get(ref, 0) + 1
 
         assets = []
+        assets_per_ref: dict[str, int] = {}
         for asset in result.get("assets", []):
-            if not isinstance(asset, dict) or asset.get("evidence_ref") not in supplied:
+            if len(assets) >= MAX_ASSETS_PER_REQUEST:
+                break
+            if (not isinstance(asset, dict) or asset.get("evidence_ref") not in supplied or
+                    assets_per_ref.get(asset["evidence_ref"], 0) >= MAX_ASSETS_PER_REF):
                 continue
             clean = dict(asset)
             clean["purpose"] = str(clean.get("purpose", "")).strip()
             assets.append(clean)
+            ref = asset["evidence_ref"]
+            assets_per_ref[ref] = assets_per_ref.get(ref, 0) + 1
         return {"facts": facts, "assets": assets}
 
     make_payload = lambda part, batch: _payload(part, batch, title_hint, instructions)
@@ -348,6 +419,7 @@ def research(
             checkpoint, normalize,
             max_retries=max_retries, progress=progress,
             label=f"Research batch {i}/{len(chunks)}", used=used,
+            split_single=_split_research_document,
         )
         for result in results:
             allfacts.extend(result["facts"])
@@ -373,6 +445,9 @@ def research(
             str(a.get("purpose", "")).casefold(),
         ),
     )
+
+    allfacts = _limit_by_ref(allfacts, lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF)
+    assets = _limit_by_ref(assets, lambda asset: [asset["evidence_ref"]], MAX_ASSETS_PER_REF)
 
     allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)
 
