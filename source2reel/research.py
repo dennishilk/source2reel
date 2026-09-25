@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 from typing import Any
 
-from .chunking import checkpointed_split_json, split_for_context
-from .grounding import GROUNDING_CONTRACT, verify_claims
+from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
+from .grounding import GROUNDING_CONTRACT, _declarative_text, verify_claims
 from .inventory import _EMBEDDED_ROOTS
-from .progress import Progress
+from .progress import Progress, step
 from .providers import LLMProvider
 from .util import json_dump
 
@@ -17,6 +18,9 @@ MAX_FACTS_PER_REQUEST = 12
 MAX_ASSETS_PER_REF = 2
 MAX_ASSETS_PER_REQUEST = 6
 MAX_RANKED_CANDIDATES = 128
+MAX_COVERAGE_RECORDS = 4
+MAX_COVERAGE_CHARS = 16000
+COVERAGE_CONTRACT = "requested-primary-coverage-v1"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -138,6 +142,9 @@ def _rank_requested_facts(
         requested.add("workflow")
     if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
         requested.add("overview")
+    distinctions = {key: spec for key, spec in _requested_concepts(instructions, title_hint).items()
+                    if spec["kind"] == "distinction"}
+    requested.update(distinctions)
     remaining = list(enumerate(facts))
     ranked = []
     covered: set[str] = set()
@@ -148,6 +155,8 @@ def _rank_requested_facts(
             matches = ({"purpose"} if _PURPOSE.search(claim) else set()) | (
                 {"workflow"} if _WORKFLOW.search(claim) else set()) | (
                 {"overview"} if _OVERVIEW.search(claim) else set())
+            matches.update(key for key, spec in distinctions.items()
+                           if _covers_request(claim, spec))
             matches &= requested
             lexical = len(terms & set(re.findall(r"[a-z]{4,}", claim.casefold())))
             primary = fact.get("subject_scope") == "main_subject"
@@ -160,8 +169,165 @@ def _rank_requested_facts(
         covered.update(({"purpose"} if _PURPOSE.search(claim) else set()) |
                        ({"workflow"} if _WORKFLOW.search(claim) else set()) |
                        ({"overview"} if _OVERVIEW.search(claim) else set()))
+        covered.update(key for key, spec in distinctions.items()
+                       if _covers_request(claim, spec))
         ranked.append(chosen[1])
     return ranked
+
+
+_REQUEST_SPECIFIC_STOP = set((
+    "explain describe show cover focus clearly distinguish compare differentiate "
+    "what why how it is and the a an its to from into with about through "
+    "end video episode project projects technical finished first local "
+    "turn turns works work pipeline workflow"
+).split())
+_COVERAGE_SYSTEM = (
+    "\n\nFocused requested-topic recovery. Return only facts explicitly supported "
+    "by these supplied primary evidence excerpts for missing_requested_topics. "
+    "Use the same exact quotation, subject-scope, and grounding rules as normal "
+    "research. If a requested fact is absent, omit it. Do not infer capabilities "
+    "from code identifiers or fill gaps from the user's instruction."
+)
+
+
+def _request_words(text: str) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", text.casefold())
+    return {word[:-1] if word.endswith("s") and len(word) >= 6 else word
+            for word in words if len(word) >= 3 and word not in _REQUEST_SPECIFIC_STOP}
+
+
+def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[str, Any]]:
+    """Describe explicit topics without treating a request as evidence."""
+    instruction = re.sub(r"\bend with:.*", "", instructions, flags=re.I | re.S)
+    concepts: dict[str, dict[str, Any]] = {}
+    if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
+        concepts["overview"] = {"kind": "overview"}
+    if re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
+        concepts["purpose"] = {"kind": "purpose"}
+    if re.search(r"\b(?:how|workflow|pipeline|process|stages?)\b", instruction, re.I):
+        how = re.search(r"\bhow\b([^.!?;\n]+)", instruction, re.I)
+        focus = _request_words(how.group(1)) if how else set()
+        focus -= _request_words(title_hint)
+        concepts["workflow"] = {"kind": "workflow", "terms": sorted(focus)}
+    distinction_count = 0
+    for clause in re.split(r"[.!?;\n]", instruction):
+        match = re.search(
+            r"\b(?:distinguish|differentiate|contrast|compare)\s+(.+?)\s+"
+            r"(?:from|with|versus|vs)\s+(.+)$", clause, re.I,
+        )
+        if match and distinction_count < 2:
+            left, right = _request_words(match.group(1)), _request_words(match.group(2))
+            if left and right:
+                distinction_count += 1
+                concepts[f"distinction-{distinction_count}"] = {
+                    "kind": "distinction", "left": sorted(left), "right": sorted(right),
+                }
+    return concepts
+
+
+def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
+    kind = spec["kind"]
+    if kind == "purpose":
+        return bool(_PURPOSE.search(claim))
+    if kind == "overview":
+        return bool(_OVERVIEW.search(claim))
+    words = _request_words(claim)
+    if kind == "distinction":
+        # A generic overlap (e.g. "explainer production") must not imply
+        # that a named production profile was actually covered. The compared
+        # right-hand concept must be present in full.
+        right = set(spec["right"]) - set(spec["left"])
+        return bool(words & set(spec["left"]) and right and right <= words)
+    terms = set(spec["terms"])
+    return bool((_WORKFLOW.search(claim) or _ORDER_SOURCE.search(claim)) and
+                len(words & terms) >= min(2, len(terms)))
+
+
+def _missing_requested_concepts(
+    facts: list[dict[str, Any]], instructions: str, title_hint: str,
+    roles: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    concepts = _requested_concepts(instructions, title_hint)
+    primary = [fact for fact in facts if fact.get("evidence_refs") and
+               all(roles.get(ref) == "primary" for ref in fact["evidence_refs"])]
+    return {key: spec for key, spec in concepts.items() if not any(
+        _covers_request(fact["claim"], spec) for fact in primary
+    )}
+
+
+def _coverage_candidates(
+    inventory: dict[str, Any], missing: dict[str, dict[str, Any]],
+    title_hint: str, system: str, context_size: int,
+    output_reserve_tokens: int, safety_tokens: int, instructions: str,
+) -> list[dict[str, Any]]:
+    """Choose at most one useful primary record per missing topic."""
+    ranked = []
+    title_key = re.sub(r"[^a-z0-9]", "", title_hint.casefold())
+    doc_exts = {".md", ".rst", ".txt", ".adoc", ".html", ".htm"}
+    for index, entry in enumerate(inventory["evidence"]):
+        if (entry.get("evidence_role", "primary") != "primary" or
+                entry.get("kind") != "document" or
+                not isinstance(entry.get("excerpt"), str)):
+            continue
+        excerpt = entry["excerpt"]
+        if not excerpt.strip() or len(excerpt) > MAX_COVERAGE_CHARS:
+            continue
+        prose = _declarative_text(excerpt)
+        if not prose:
+            continue
+        words = _request_words(prose)
+        named = bool(title_key and title_key in re.sub(r"[^a-z0-9]", "", prose.casefold()))
+        matched = set()
+        for key, spec in missing.items():
+            if spec["kind"] in {"purpose", "overview"} and not named:
+                continue
+            if spec["kind"] == "workflow":
+                terms = set(spec["terms"])
+                if ((_WORKFLOW.search(prose) or _ORDER_SOURCE.search(prose)) and
+                        (not terms or words & terms)):
+                    matched.add(key)
+            elif _covers_request(prose, spec):
+                matched.add(key)
+        if not matched:
+            continue
+        path = Path(entry.get("relative_path") or "")
+        score = (8 * len(matched) + 6 * (path.suffix.casefold() in doc_exts) +
+                 4 * named + 2 * (path.name.casefold() == "readme.md") -
+                 min(4, len(path.parts)))
+        ranked.append((score, -index, entry, matched))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    selected: list[dict[str, Any]] = []
+    selected_refs: set[str] = set()
+    covered: set[str] = set()
+    for topic in missing:
+        if topic in covered:
+            continue
+        for _score, _order, entry, matched in ranked:
+            if topic not in matched or entry["ref"] in selected_refs:
+                continue
+            batch = selected + [entry]
+            if (len(batch) > MAX_COVERAGE_RECORDS or
+                    sum(len(item["excerpt"]) for item in batch) > MAX_COVERAGE_CHARS):
+                continue
+            payload = _coverage_payload(batch, missing, title_hint, instructions)
+            if not fits_context(system, json.dumps(payload, ensure_ascii=False), context_size,
+                                output_reserve_tokens, safety_tokens):
+                continue
+            selected.append(entry)
+            selected_refs.add(entry["ref"])
+            covered.update(matched)
+            break
+    return selected
+
+
+def _coverage_payload(
+    batch: list[dict[str, Any]], missing: dict[str, dict[str, Any]],
+    title_hint: str, instructions: str,
+) -> dict[str, Any]:
+    return {**_payload(1, batch, title_hint, instructions),
+            "research_mode": "requested_coverage", "coverage_contract": COVERAGE_CONTRACT,
+            "missing_requested_topics": missing}
 
 
 def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
@@ -550,6 +716,33 @@ def research(
     assets = _limit_by_ref(assets, lambda asset: [asset["evidence_ref"]], MAX_ASSETS_PER_REF)
 
     allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)
+
+    missing = _missing_requested_concepts(allfacts, instructions, title_hint, roles)
+    if missing:
+        coverage_system = system + _COVERAGE_SYSTEM
+        batch = _coverage_candidates(
+            inventory, missing, title_hint, coverage_system, context_size,
+            output_reserve_tokens, safety_tokens, instructions,
+        )
+        if batch:
+            payload = _coverage_payload(batch, missing, title_hint, instructions)
+            checkpoint = project_dir / "manifests" / "research-coverage" / "part-001.json"
+            with step(progress, "Recovering requested coverage"):
+                recovered = checkpointed_complete_json(
+                    provider, coverage_system, payload, checkpoint,
+                    lambda value: normalize(value, batch), max_retries=max_retries,
+                )["facts"]
+            if recovered:
+                allfacts = _dedupe(allfacts + recovered, lambda fact: (
+                    fact["claim"].casefold(), tuple(fact["evidence_refs"]),
+                    fact.get("phase", "unknown"),
+                ))
+                allfacts = _limit_by_ref(
+                    _rank_requested_facts(allfacts, instructions, title_hint),
+                    lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
+                )
+                allfacts, assets = _consolidate(allfacts, assets, inventory,
+                                                title_hint, instructions)
 
     out = {"version": 1, "facts": allfacts, "assets": assets}
     json_dump(project_dir / "manifests" / "research.json", out)

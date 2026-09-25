@@ -209,18 +209,16 @@ class EditorialGroundingTests(unittest.TestCase):
         rule = part["fact_selection_requirement"]
         for literal in ("setup", "maintenance", "profile", "commands", "config"):
             self.assertIn(literal, rule)
-        with self.assertRaisesRegex(StructuredOutputError, "fact_ids"):
-            _normalize_outline({"version": 1, "title": "Widget", "slug": "widget",
-                                "summary": "Normal flow", "scene_intents": [{
-                                    "type": "CODE", "purpose": "Normal workflow",
-                                    "fact_ids": ["F9999"], "evidence_refs": ["E0001"],
-                                }]}, {f"E{i:04d}" for i in range(1, 6)}, ask)
-        with self.assertRaisesRegex(StructuredOutputError, "fact_ids"):
-            _normalize_outline({"version": 1, "title": "Widget", "slug": "widget",
-                                "summary": "Normal flow", "scene_intents": [{
-                                    "type": "CODE", "purpose": "Normal workflow",
-                                    "evidence_refs": ["E0001"],
-                                }]}, {f"E{i:04d}" for i in range(1, 6)}, ask)
+        for returned in ({"fact_ids": ["F9999"]}, {}):
+            with self.subTest(returned=returned):
+                fixed = _normalize_outline({
+                    "version": 1, "title": "Widget", "slug": "widget",
+                    "summary": "Normal flow", "scene_intents": [{
+                        "type": "CODE", "purpose": "Normal workflow",
+                        "evidence_refs": ["E0001"], **returned,
+                    }],
+                }, {f"E{i:04d}" for i in range(1, 6)}, ask)
+                self.assertEqual(fixed["scene_intents"][0]["fact_ids"], ["F0001"])
         for leak in ("E0002", "E0003", "E0005"):
             with self.subTest(leak=leak), self.assertRaisesRegex(StructuredOutputError, "evidence_refs"):
                 _normalize_scene_part({"scenes": [{

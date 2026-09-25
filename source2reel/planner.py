@@ -768,6 +768,8 @@ _OUTLINE_SYSTEM = (
     "Every factual proposition in summary must follow supplied planner facts, "
     "and every factual proposition in an intent purpose must follow that "
     "intent's selected fact_ids. Unsupported outline prose fails before scene generation. "
+    "Select every fact_id verbatim from allowed_fact_ids; never continue the "
+    "numeric sequence or use an ID from a previous request. "
     "Normal workflow scenes must select normal workflow facts, not just setup "
     "or optional maintenance facts. Each intent needs type, purpose (at most "
     "160 characters), and at most six evidence_refs. For each evidence scene "
@@ -800,6 +802,8 @@ _SCENES_SYSTEM = (
 def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
     return {
         "storyboard_mode": "outline",
+        "allowed_fact_ids": [fact["fact_id"] for fact in ask["research"]["facts"]],
+        "fact_id_requirement": "Every intent fact_id must be copied verbatim from allowed_fact_ids.",
         "project_title_hint": ask["project_title_hint"],
         "optional_instructions": ask["optional_instructions"],
         "allowed_scene_types": ask["allowed_scene_types"],
@@ -822,7 +826,8 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
             "presentation_requirement": ask["presentation_requirement"],
             "scene_intents": [{
                 "type": "one allowed scene type", "purpose": "brief editorial aim",
-                "fact_ids": ["F0001"],
+                "fact_ids": ([ask["research"]["facts"][0]["fact_id"]]
+                             if ask["research"]["facts"] else []),
                 "evidence_refs": ["a supplied evidence ref"],
                 "asset_ref": "one of this intent's evidence_refs if type requires an asset_ref; omit otherwise",
             }],
@@ -841,6 +846,49 @@ def _final_requests_fit(
     return fits_context(system + _OUTLINE_SYSTEM,
                         json.dumps(_outline_payload(ask), ensure_ascii=False),
                         context_size, output_reserve_tokens, safety_tokens)
+
+
+def _outline_fact_ids(raw: Any, intent: dict[str, Any], ask: dict[str, Any]) -> list[str]:
+    """Repair only a unique ref-to-existing-fact mapping, never editorial meaning."""
+    facts = ask["research"]["facts"]
+    allowed = [fact["fact_id"] for fact in facts]
+    allowed_set = set(allowed)
+    ids = raw if isinstance(raw, list) else []
+    needs_facts = intent["type"] not in {"SECTION_TITLE", "OUTRO"} or bool(intent["evidence_refs"])
+    if raw is None and not needs_facts:
+        return []
+    if (isinstance(raw, list) and len(ids) <= 6 and
+            all(isinstance(fact_id, str) and fact_id in allowed_set for fact_id in ids) and
+            len(set(ids)) == len(ids) and (ids or not needs_facts)):
+        return ids
+
+    invalid = ([str(fact_id)[:60] for fact_id in ids[:6] if not isinstance(fact_id, str)
+                or fact_id not in allowed_set] if isinstance(raw, list) else
+               [str(raw)[:60] if raw is not None else "<missing>"])
+    label = ", ".join(invalid) if invalid else "<missing or duplicate>"
+    if isinstance(raw, list) and len(raw) > 6:
+        label += f" ({len(raw)} returned IDs; maximum 6)"
+    error = StructuredOutputError(
+        f"{intent['id']}: invalid fact_ids [{label}]; allowed_fact_ids: [{', '.join(allowed)}]"
+    )
+    if (not isinstance(raw, (list, type(None))) or len(ids) > 6 or
+            len(set(map(str, ids))) != len(ids) or not intent["evidence_refs"]):
+        raise error
+
+    asset = intent.get("asset_ref")
+    asset_refs = {item.get("evidence_ref") for item in ask["research"].get("assets", [])}
+    selected: set[str] = set()
+    for ref in intent["evidence_refs"]:
+        if ref == asset and ref in asset_refs:
+            continue
+        compatible = [fact["fact_id"] for fact in facts if ref in fact["evidence_refs"]]
+        if len(compatible) != 1:
+            raise error
+        selected.add(compatible[0])
+    if (not selected or len(selected) > 6 or
+            any(fact_id in allowed_set and fact_id not in selected for fact_id in ids)):
+        raise error
+    return [fact_id for fact_id in allowed if fact_id in selected]
 
 
 def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, Any]) -> dict[str, Any]:
@@ -872,8 +920,7 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
         if raw["type"] not in {"SECTION_TITLE", "OUTRO"} and not refs:
             raise StructuredOutputError(f"Storyboard intent {index} needs evidence refs")
         intent = {"id": f"s{index:03d}", "type": raw["type"],
-                  "purpose": purpose.strip(), "fact_ids": raw.get("fact_ids", []),
-                  "evidence_refs": refs}
+                  "purpose": purpose.strip(), "evidence_refs": refs}
         if raw["type"] in EVIDENCE_TYPES:
             asset_ref = raw.get("asset_ref")
             if not isinstance(asset_ref, str) or asset_ref not in refs or asset_ref not in allowed:
@@ -882,7 +929,10 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
                 )
             intent["asset_ref"] = asset_ref
         try:
+            intent["fact_ids"] = _outline_fact_ids(raw.get("fact_ids"), intent, ask)
             _validate_scene_facts(intent, ask)
+        except StructuredOutputError:
+            raise
         except ValueError as exc:
             raise StructuredOutputError(f"Storyboard intent {index} invalid: {exc}") from exc
         intents.append(intent)
@@ -1123,8 +1173,11 @@ def _multipart_episode(
                 _validate_outline_grounding(provider, normalized, ask, project_dir, progress)
                 return normalized
             except StructuredOutputError as exc:
-                feedback = (f"Previous outline rejected: {str(exc)[:190]}. "
-                            "Rewrite the unsupported summary or purpose using only selected facts.")
+                if "allowed_fact_ids:" in str(exc):
+                    feedback = f"{exc} Copy only these exact existing IDs; keep the evidence refs."
+                else:
+                    feedback = (f"Previous outline rejected: {str(exc)[:190]}. "
+                                "Rewrite the unsupported summary or purpose using only selected facts.")
                 raise
 
         outline = checkpointed_complete_json(
