@@ -14,6 +14,8 @@ from urllib.parse import urlsplit
 from .config import load_engine_config
 from .hardware import detect_hardware
 from .paths import local_environment, runtime_paths
+from .schema import validate_episode
+from .util import json_load
 
 _children: dict[int, subprocess.Popen] = {}
 
@@ -181,33 +183,180 @@ def stop_all(root: Path) -> int:
     return len(entries)
 
 
-def interactive(root: Path) -> None:
-    info = detect_hardware()
-    choices = "Vulkan, CPU" if info.vulkan_available else "CPU"
-    print(f"Source2Reel session | GPU: {info.vendor} | available: {choices}")
+def _source(raw: str) -> str | None:
+    source = raw.strip()
+    if source.startswith(("http://", "https://")):
+        return source if urlsplit(source).netloc else None
+    if source:
+        try:
+            if Path(source).expanduser().is_dir():
+                return source
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def _projects(root: Path) -> list[str]:
+    """List only local project directories with a readable, usable storyboard."""
+    projects = root / "projects"
+    if not projects.is_dir():
+        return []
+    names = []
+    for directory in sorted(projects.iterdir(), key=lambda p: p.name):
+        episode = directory / "episode.json"
+        if not directory.is_dir() or directory.is_symlink() or not episode.is_file() or episode.is_symlink():
+            continue
+        try:
+            data = json_load(episode)
+            if not isinstance(data, dict):
+                continue
+            validate_episode(data)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError, UnicodeError):
+            continue
+        names.append(directory.name)
+    return names
+
+
+def _select_project(root: Path) -> str | None:
+    projects = _projects(root)
+    if not projects:
+        print("No usable episodes found in projects/.")
+        return None
+    print("\nEpisodes:")
+    for number, project in enumerate(projects, 1):
+        print(f"{number}  {project}")
     while True:
-        print("\n1 Start local AI  2 Doctor  3 Voice test  4 Status  5 Stop all  0 Exit")
+        choice = input("Project number [0 = back]: ").strip()
+        if choice == "0":
+            return None
+        if choice.isdecimal() and 1 <= int(choice) <= len(projects):
+            return projects[int(choice) - 1]
+        print("Invalid project number.")
+
+
+def _review(root: Path, project: str) -> None:
+    episode = json_load(root / "projects" / project / "episode.json")
+    print(f"\nStoryboard: {episode['title']}")
+    for scene in episode["scenes"]:
+        title = f" | {scene['title']}" if scene.get("title") else ""
+        refs = ", ".join(scene.get("evidence_refs", [])) or "none"
+        preview = " ".join(scene["narration"].split())
+        if len(preview) > 140:
+            preview = preview[:139].rstrip() + "…"
+        print(f"\n{scene['id']} | {scene['type']}{title}\n  Evidence: {refs}\n  Narration: {preview}")
+
+
+def _review_or_build(root: Path, project: str, *, show_first: bool, new: bool) -> None:
+    from .pipeline import build_existing
+
+    print(f"Storyboard: {root / 'projects' / project / 'episode.json'}")
+    if show_first:
+        _review(root, project)
+    while True:
+        choice = input("[R] Review  [B] Build  [Q] " + ("Quit / continue later: " if new else "Back: ")).strip().lower()
+        if choice == "r":
+            _review(root, project)
+        elif choice == "b":
+            print(f"Build output: {build_existing(root, project)}")
+            return
+        elif choice == "q":
+            return
+        else:
+            print("Choose R, B or Q.")
+
+
+def _new_episode(root: Path) -> None:
+    from .pipeline import create
+
+    while True:
+        first = input("Source URL, repository or local directory:\n> ").strip()
+        if _source(first):
+            break
+        print("Enter a valid http(s) URL or existing local directory.")
+    sources = [first]
+    while True:
+        additional = input("Additional source? [Enter = none]\n> ").strip()
+        if not additional:
+            break
+        if _source(additional):
+            sources.append(additional)
+        else:
+            print("Enter a valid http(s) URL or existing local directory.")
+    instructions = input("Episode focus/instructions? [Enter = discover the story automatically]\n> ").strip()
+    while True:
+        answer = input("Stop for storyboard review first? [Y/n]\n> ").strip().lower()
+        if answer in ("", "y", "yes", "n", "no"):
+            review = answer not in ("n", "no")
+            break
+        print("Enter Y or N.")
+    print("\nProject:")
+    for source in sources:
+        print(f"  source: {source}")
+    print(f"  mode: {'custom focus' if instructions else 'automatic story discovery'}")
+    print(f"  review: {'yes' if review else 'no'}")
+
+    # Only the built-in OpenAI-compatible provider uses the managed llama-server.
+    # Another configured provider, such as Ollama, manages its own lifecycle.
+    if load_engine_config(root)["llm"]["provider"] == "openai_compat":
+        if status(root):
+            print("Reusing Source2Reel-managed local AI.")
+        else:
+            print("Starting Source2Reel local AI...")
+            start(root)
+    output = create(root, sources, None, instructions, False, review)
+    if review:
+        _review_or_build(root, output.parent.name, show_first=False, new=True)
+    else:
+        print(f"Build output: {output}")
+
+
+def _local_ai(root: Path) -> None:
+    while True:
+        print("\nLocal AI\n1  Start\n2  Status\n3  Stop all\n0  Back")
+        choice = input("ai> ").strip().lower()
+        if choice == "0":
+            return
+        if choice == "1":
+            print(start(root))
+        elif choice == "2":
+            print(status(root) or "No managed processes")
+        elif choice == "3":
+            print(f"Stopped {stop_all(root)} managed process(es)")
+        else:
+            print("Unknown choice")
+
+
+def interactive(root: Path) -> None:
+    print("SOURCE2REEL")
+    while True:
+        print("\n1  New episode\n2  Continue episode\n3  Build episode\n4  Local AI\n5  Doctor\n6  Voice test\n0  Exit")
         try:
             choice = input("s2r> ").strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return
-        try:
             if choice in ("0", "exit", "quit"):
                 return
             if choice == "1":
-                print(start(root))
+                _new_episode(root)
             elif choice == "2":
+                project = _select_project(root)
+                if project:
+                    _review_or_build(root, project, show_first=True, new=False)
+            elif choice == "3":
+                project = _select_project(root)
+                if project:
+                    from .pipeline import build_existing
+                    print(f"Build output: {build_existing(root, project)}")
+            elif choice == "4":
+                _local_ai(root)
+            elif choice == "5":
                 from .doctor import run_doctor
                 run_doctor(root)
-            elif choice == "3":
+            elif choice == "6":
                 from .cli import voice_test
                 print(voice_test(root))
-            elif choice == "4":
-                print(status(root) or "No managed processes")
-            elif choice in ("5", "stop all"):
-                print(f"Stopped {stop_all(root)} managed process(es)")
             else:
                 print("Unknown choice")
-        except (RuntimeError, OSError) as exc:
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return
+        except (RuntimeError, OSError, ValueError) as exc:
             print(f"Error: {exc}")

@@ -1,5 +1,14 @@
 # PROJECT_STATE
 
+## 2026-09-24 — interactive producer (feature branch, pending Cthulhu acceptance)
+
+The bare `./s2r` entry point offers New, Continue, and Build episode menus,
+plus the existing local AI controls, Doctor, and Voice test. New episode accepts
+one or more sources, keeps blank instructions empty, and defaults to stopping
+after the storyboard. Review reads the saved episode locally; Build delegates to
+the existing pipeline. The wizard starts or reuses managed llama.cpp for the
+built-in OpenAI-compatible provider. Explicit CLI behavior is unchanged.
+
 ## 2026-09-23 — post-acceptance visual product changes
 
 Physical acceptance freeze: `889d772919d713a178f4a7bc5bf0ce4ef9b143ad`.

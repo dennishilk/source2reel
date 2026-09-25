@@ -9,6 +9,19 @@ Cisco CP-9951 DOOM is the first reference episode and acceptance test. It is not
 ## Normal workflow
 
 ```bash
+./s2r
+```
+
+Choose **New episode**, paste a GitHub URL, website URL or local directory,
+then press Enter for automatic story discovery and the default storyboard
+review. The producer starts or reuses Source2Reel-managed local AI when its
+built-in llama.cpp provider is configured. At the storyboard prompt, choose
+Review, Build, or Quit to continue later. **Continue episode** lists saved
+storyboards, and **Build episode** builds a selected storyboard directly.
+
+The explicit CLI remains available for automation and advanced use:
+
+```bash
 ./s2r create https://github.com/OWNER/PROJECT
 ```
 
@@ -113,7 +126,7 @@ cd source2reel
 ./s2r stop all
 ```
 
-`./s2r` opens a terminal session when called without arguments. No global CLI or
+`./s2r` opens the interactive producer when called without arguments. No global CLI or
 Fish PATH change is necessary. The installer creates separate core and Kokoro
 CPU voice environments, explicitly installs the English spaCy model into voice,
 and validates the pipeline. `am_michael` remains pending audible approval.
