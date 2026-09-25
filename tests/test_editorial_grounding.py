@@ -139,8 +139,8 @@ class EditorialGroundingTests(unittest.TestCase):
     def test_final_request_budget_includes_possible_multipart_outline(self):
         ask = _ask()
         self.assertTrue(fits_context("storyboard", json.dumps(ask, ensure_ascii=False),
-                                     1100, 0, 0))
-        self.assertFalse(_final_requests_fit("storyboard", ask, 1100, 0, 0))
+                                     1120, 0, 0))
+        self.assertFalse(_final_requests_fit("storyboard", ask, 1120, 0, 0))
         self.assertTrue(_final_requests_fit("storyboard", ask, 1600, 0, 0))
 
     def test_selected_fact_scope_excludes_unrelated_setup_profile_and_config(self):

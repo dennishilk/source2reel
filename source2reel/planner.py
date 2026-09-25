@@ -10,7 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
-from .research import _consolidate, _reference_focus
+from .research import _consolidate, _fact_scope, _reference_focus
 from .schema import DIAGRAM_TYPES, EVIDENCE_TYPES, SCENE_TYPES, validate_episode, validate_presentation
 from .util import json_dump, json_load
 
@@ -99,9 +99,11 @@ def _final_narration_suffix(instructions: str) -> str | None:
     return (matches[0].group("curly") or matches[0].group("plain")).strip()
 
 
-def _identified_research(research: dict[str, Any]) -> dict[str, Any]:
+def _identified_research(research: dict[str, Any], evidence_index: list[dict[str, Any]]) -> dict[str, Any]:
+    roles = {e["ref"]: e.get("evidence_role") or "primary" for e in evidence_index}
     return {**research, "facts": [
-        {**fact, "fact_id": f"F{index:04d}"}
+        {**fact, "fact_id": f"F{index:04d}",
+         "subject_scope": _fact_scope(fact.get("evidence_refs", []), roles)}
         for index, fact in enumerate(research.get("facts", []), 1)
     ]}
 
@@ -118,14 +120,16 @@ def _make_ask(
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
         "allowed_scene_types": sorted(SCENE_TYPES),
-        "research": _identified_research(research),
+        "research": _identified_research(research, evidence_index),
         "media_inventory": media,
         "evidence_index": evidence_index,
         "authoritative_resource_urls": resource_urls or [],
         "required_narration_suffix": _final_narration_suffix(instructions),
         "fact_selection_requirement": (
             "Every factual scene must select up to six fact_ids from research.facts. Base its actual "
-            "claims only on those selected facts; cite only their evidence_refs (plus a "
+            "claims only on those selected facts; respect each fact's derived subject_scope: "
+            "supporting_only facts describe examples, and only primary-backed facts can "
+            "define the main project's properties; cite only their evidence_refs (plus a "
             "selected research asset for an evidence scene). A setup, maintenance, revision "
             "or optional fact alone cannot describe the mandatory normal workflow. Do not "
             "expand a profile's documented responsibilities. Quote exact commands, config "
@@ -188,6 +192,8 @@ def _planner_records(
             "claim": fact.get("claim", ""),
             "phase": fact.get("phase", "unknown"),
             "confidence": fact.get("confidence", "low"),
+            "subject_scope": _fact_scope(refs, {ref: evidence_by_ref[ref].get("evidence_role") or "primary"
+                                                for ref in refs}),
             "evidence_refs": refs,
             "evidence": [evidence_by_ref[r] for r in refs],
             "media": fact_media,

@@ -21,6 +21,7 @@ def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str,
             "facts": [{
                 "claim": "...",
                 "evidence_refs": ["E0001"],
+                "support": [{"evidence_ref": "E0001", "text": "short exact excerpt supporting the claim"}],
                 "phase": "development|final|background|unknown",
                 "confidence": "high|medium|low",
             }],
@@ -43,6 +44,66 @@ def _dedupe(items: list[dict[str, Any]], key) -> list[dict[str, Any]]:
         seen.add(marker)
         out.append(item)
     return out
+
+
+def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
+    """Derive subject scope from citations rather than a model-supplied label."""
+    primary = any(roles.get(ref, "primary") == "primary" for ref in refs)
+    supporting = any(roles.get(ref, "primary") != "primary" for ref in refs)
+    return "mixed" if primary and supporting else "main_subject" if primary else "supporting_only"
+
+
+def _starts_with_subject(claim: str, title_hint: str) -> bool:
+    """Conservatively catch claims that explicitly assign a property to the main title."""
+    title = re.sub(r"[^a-z0-9]", "", title_hint.casefold())
+    if len(title) < 4:
+        return False
+    words = re.findall(r"[a-z0-9]+", claim.casefold())
+    while words and words[0] in {"the", "a", "an", "this", "our"}:
+        words.pop(0)
+    prefix = ""
+    for word in words[:5]:
+        prefix += word
+        if prefix == title:
+            return True
+        if len(prefix) >= len(title):
+            break
+    return False
+
+
+_ORDER_CLAIM = re.compile(
+    r"\b(?:then|before|after|followed\s+by|sequence|sequential|staged|"
+    r"(?:normal|standard|mandatory)(?:\s+\w+){0,2}\s+(?:workflow|pipeline))\b|->|→",
+    re.I,
+)
+_ORDER_SOURCE = re.compile(
+    r"\b(?:then|before|after|followed\s+by|sequence|sequential|staged|"
+    r"(?:normal|standard|mandatory)(?:\s+\w+){0,2}\s+(?:workflow|pipeline)|"
+    r"ordered\s+steps|workflow\s+(?:runs|follows|begins|starts))\b|->|→",
+    re.I,
+)
+_PREDICATE_STOPWORDS = {
+    "about", "after", "also", "before", "from", "into", "their", "them",
+    "there", "these", "this", "those", "under", "using", "when", "where",
+    "which", "while", "with", "without", "would",
+}
+
+
+def _primary_supports_main_predicate(
+    claim: str, support: list[dict[str, str]], roles: dict[str, str], title_hint: str,
+) -> bool:
+    title = re.sub(r"[^a-z0-9]", "", title_hint.casefold())
+    predicate_words = {
+        word for word in re.findall(r"[a-z0-9]+", claim.casefold())
+        if len(word) >= 4 and word != title and word not in _PREDICATE_STOPWORDS
+    }
+    for item in support:
+        if roles.get(item["evidence_ref"], "primary") != "primary":
+            continue
+        primary_words = set(re.findall(r"[a-z0-9]+", item["text"].casefold()))
+        if predicate_words & primary_words:
+            return True
+    return False
 
 
 def _reference_focus(title_hint: str, instructions: str, inventory: dict[str, Any]) -> bool:
@@ -184,11 +245,14 @@ def research(
 ) -> dict[str, Any]:
     system = (project_dir.parents[1] / "prompts" / "research.txt").read_text()
     valid = {e["ref"] for e in inventory["evidence"]}
+    roles = {e["ref"]: e.get("evidence_role", "primary") for e in inventory["evidence"]}
+    reference_focus = _reference_focus(title_hint, instructions, inventory)
 
     def normalize(result: dict[str, Any], batch: list[dict[str, Any]]) -> dict[str, Any]:
         # A ref must be in this exact request, including after a failed part
         # splits into children. Global validity alone does not prove provenance.
         supplied = valid & {entry["ref"] for entry in batch}
+        by_ref = {entry["ref"]: entry for entry in batch if entry["ref"] in supplied}
         facts = []
         for fact in result.get("facts", []):
             if not isinstance(fact, dict) or not str(fact.get("claim", "")).strip():
@@ -196,9 +260,49 @@ def research(
             refs = [r for r in fact.get("evidence_refs", []) if r in supplied]
             if not refs:
                 continue
+            claim = str(fact["claim"]).strip()
+            scope = _fact_scope(refs, roles)
+            # A generated example cannot by itself confer a capability or
+            # guarantee on the requested project. Keep claims about the
+            # example itself as supporting evidence.
+            if (scope == "supporting_only" and
+                    not reference_focus and
+                    _starts_with_subject(claim, title_hint)):
+                continue
+
+            support = []
+            invalid_support = False
+            raw_support = fact.get("support", [])
+            if not isinstance(raw_support, list):
+                continue
+            for item in raw_support:
+                if not isinstance(item, dict):
+                    invalid_support = True
+                    break
+                ref, span = item.get("evidence_ref"), item.get("text")
+                if (ref not in refs or not isinstance(span, str) or
+                        not 12 <= len(span) <= 320 or
+                        span not in (by_ref[ref].get("excerpt") or "")):
+                    invalid_support = True
+                    break
+                support.append({"evidence_ref": ref, "text": span})
+            if invalid_support:
+                continue
+            if (scope == "mixed" and _starts_with_subject(claim, title_hint) and
+                    not _primary_supports_main_predicate(claim, support, roles, title_hint)):
+                continue
+            # An enumeration of commands is not evidence of their order.
+            # Ordered/normal-flow claims need a verbatim batch-local passage
+            # explicitly describing that relationship.
+            if _ORDER_CLAIM.search(claim) and not any(
+                _ORDER_SOURCE.search(item["text"]) for item in support
+            ):
+                continue
             clean = dict(fact)
-            clean["claim"] = str(fact["claim"]).strip()
+            clean["claim"] = claim
             clean["evidence_refs"] = list(dict.fromkeys(refs))
+            clean["subject_scope"] = scope
+            clean["support"] = _dedupe(support, lambda item: (item["evidence_ref"], item["text"]))
             if clean.get("phase") not in {"development", "final", "background", "unknown"}:
                 clean["phase"] = "unknown"
             if clean.get("confidence") not in {"high", "medium", "low"}:

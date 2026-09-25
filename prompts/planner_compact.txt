@@ -12,6 +12,7 @@ Rules:
 - Keep normal, optional, revision, maintenance, setup and testing flows distinct. Preserve the source's qualifiers; do not promote an auxiliary path to a mandatory normal step.
 - Favor high-confidence final facts when evidence competes for space, while retaining relevant development facts with their phase labels.
 - Keep primary project evidence prominent; use embedded references and generated artifacts as supporting proof unless optional_instructions explicitly requests that focus.
+- Keep supporting_only facts attached to their example; a supporting-only record cannot establish a general property of the main project. Mixed facts must keep their primary support for main-project assertions.
 - Merge duplicates and near-duplicates.
 - Do not turn "detected", "possible", "unknown", or "insufficient evidence" into a stronger claim.
 - Return only the requested JSON object.
