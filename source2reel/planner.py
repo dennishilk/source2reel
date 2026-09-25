@@ -599,6 +599,17 @@ def _repair_episode_shape(
             if not scene.get("id"):
                 scene["id"] = f"s{index:03d}"
             refs = scene.get("evidence_refs")
+            if isinstance(refs, list):
+                seen_refs: set[str] = set()
+                unique_refs = []
+                for ref in refs:
+                    if isinstance(ref, str):
+                        if ref in seen_refs:
+                            continue
+                        seen_refs.add(ref)
+                    unique_refs.append(ref)
+                refs = unique_refs
+                scene["evidence_refs"] = refs
             evidence_scene = scene.get("type") in {
                 "HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"
             }

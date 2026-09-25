@@ -24,7 +24,7 @@ class GroundingRegressions(unittest.TestCase):
         merged = ('The baseline does not include Torch, CUDA, or NVIDIA proprietary '
                   'packages; these are installed only via setup-voice.sh.')
         self.assertEqual(deterministic_decision(merged, [lock]), "reject")
-        self.assertEqual(deterministic_decision('The core lock rejects Torch/NVIDIA/CUDA runtime entries.', [lock]), "verify")
+        self.assertEqual(deterministic_decision('The core lock rejects Torch/NVIDIA/CUDA runtime entries.', [lock]), "reject")
         self.assertEqual(deterministic_decision('Kokoro/Torch is installed in a separate optional voice environment.', [voice]), "accept")
 
     def test_exact_but_unsupported_and_technical_injections(self):
@@ -147,14 +147,17 @@ class GroundingRegressions(unittest.TestCase):
             def complete_json(self, system, user):
                 payload = json.loads(user)
                 self.calls.append(payload)
-                return {'decisions': [{'id': check['id'], 'supported': True}
+                return {'decisions': [{'id': check['id'], 'supported': True,
+                                      'propositions': [{'text': proposition, 'support_indices': [0]}
+                                                       for proposition in check['required_propositions']]}
                                       for check in payload['checks']]}
 
         with tempfile.TemporaryDirectory() as tmp:
             provider = Provider()
             self.assertEqual(verify_claims(provider, [item], Path(tmp), 'research'), {'C0001'})
             self.assertEqual(verify_claims(provider, [item], Path(tmp), 'research'), {'C0001'})
-            self.assertEqual(provider.calls, [{'checks': [item]}])
+            self.assertEqual(provider.calls, [{'checks': [{**item,
+                'required_propositions': ['CUDA is not installed automatically by the baseline.']}]}])
             self.assertEqual(len(list((Path(tmp) / 'manifests' / 'grounding-parts').glob('*.json'))), 1)
 
     def test_verifier_malformed_or_incomplete_decisions_fail_closed(self):
@@ -246,7 +249,9 @@ class GroundingRegressions(unittest.TestCase):
                 payload = json.loads(user)
                 if 'checks' in payload:
                     self.checked.append(payload)
-                    return {'decisions': [{'id': 's001', 'supported': True}]}
+                    return {'decisions': [{'id': 's001', 'supported': True,
+                                           'propositions': [{'text': proposition, 'support_indices': [0]}
+                                                            for proposition in payload['checks'][0]['required_propositions']]}]}
                 return {'version': 1, 'title': 'Engine', 'scenes': [{
                     'id': 's001', 'type': 'SUMMARY', 'narration': narration,
                     'fact_ids': ['F0001'], 'evidence_refs': ['E0001']}]}

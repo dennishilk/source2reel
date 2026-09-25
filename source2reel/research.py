@@ -16,6 +16,7 @@ MAX_FACTS_PER_REF = 6
 MAX_FACTS_PER_REQUEST = 12
 MAX_ASSETS_PER_REF = 2
 MAX_ASSETS_PER_REQUEST = 6
+MAX_RANKED_CANDIDATES = 128
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -106,6 +107,61 @@ def _limit_by_ref(items: list[dict[str, Any]], refs, limit: int) -> list[dict[st
         for ref in cited:
             count[ref] = count.get(ref, 0) + 1
     return kept
+
+
+_REQUEST_STOP = set((
+    "explain describe show cover focus clearly distinguish compare make use only do not "
+    "invent what why how it is and the a an its to from into with about through "
+    "end video episode project source sources evidence technical finished"
+).split())
+_PURPOSE = re.compile(
+    r"\b(?:purpose|goal|motivation|because|so that|designed to|created to|"
+    r"built to|aims? to|exists? to|in order to)\b", re.I,
+)
+_WORKFLOW = re.compile(r"\b(?:pipeline|workflow|stages?|process|transform|turns?)\b", re.I)
+_OVERVIEW = re.compile(r"\b(?:is an?|engine|tool|system|framework|application)\b", re.I)
+
+
+def _rank_requested_facts(
+    facts: list[dict[str, Any]], instructions: str, title_hint: str,
+) -> list[dict[str, Any]]:
+    """Reserve bounded output for distinct, explicitly requested grounded topics."""
+    if not instructions.strip():
+        return facts
+    instruction = re.sub(r"\bend with:.*", "", instructions, flags=re.I | re.S)
+    terms = {word for word in re.findall(r"[a-z]{4,}", instruction.casefold())
+             if word not in _REQUEST_STOP and word not in title_hint.casefold()}
+    requested = set()
+    if re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
+        requested.add("purpose")
+    if re.search(r"\b(?:how|workflow|pipeline|process|stages?)\b", instruction, re.I):
+        requested.add("workflow")
+    if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
+        requested.add("overview")
+    remaining = list(enumerate(facts))
+    ranked = []
+    covered: set[str] = set()
+    while remaining:
+        def score(pair: tuple[int, dict[str, Any]]) -> tuple[int, int, int, int]:
+            index, fact = pair
+            claim = fact["claim"]
+            matches = ({"purpose"} if _PURPOSE.search(claim) else set()) | (
+                {"workflow"} if _WORKFLOW.search(claim) else set()) | (
+                {"overview"} if _OVERVIEW.search(claim) else set())
+            matches &= requested
+            lexical = len(terms & set(re.findall(r"[a-z]{4,}", claim.casefold())))
+            primary = fact.get("subject_scope") == "main_subject"
+            quality = (fact.get("phase") == "final") + (fact.get("confidence") == "high")
+            return (int(primary), 5 * len(matches - covered) + 2 * len(matches) +
+                    min(lexical, 5), quality, -index)
+        chosen = max(remaining, key=score)
+        remaining.remove(chosen)
+        claim = chosen[1]["claim"]
+        covered.update(({"purpose"} if _PURPOSE.search(claim) else set()) |
+                       ({"workflow"} if _WORKFLOW.search(claim) else set()) |
+                       ({"overview"} if _OVERVIEW.search(claim) else set()))
+        ranked.append(chosen[1])
+    return ranked
 
 
 def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
@@ -318,6 +374,17 @@ def research(
         candidates = []
         candidate_count: dict[str, int] = {}
         returned_facts = result.get("facts", [])
+        if instructions.strip() and isinstance(returned_facts, list):
+            # Rank a finite candidate pool before the existing 24-candidate
+            # and per-ref limits can discard a requested purpose or workflow.
+            scoped = []
+            for fact in returned_facts[:MAX_RANKED_CANDIDATES]:
+                if not isinstance(fact, dict) or not isinstance(fact.get("claim"), str):
+                    continue
+                refs = fact.get("evidence_refs")
+                scoped.append({**fact, "subject_scope": _fact_scope(
+                    refs if isinstance(refs, list) else [], roles)})
+            returned_facts = _rank_requested_facts(scoped, instructions, title_hint)
         for fact in returned_facts if isinstance(returned_facts, list) else []:
             if len(candidates) >= 2 * MAX_FACTS_PER_REQUEST:
                 break
@@ -392,9 +459,9 @@ def research(
         } for index, candidate in enumerate(candidates, 1)], project_dir, "research", progress)
         facts = []
         facts_per_ref: dict[str, int] = {}
-        for index, candidate in enumerate(candidates, 1):
-            if f"C{index:04d}" not in verdicts:
-                continue
+        verified = [candidate for index, candidate in enumerate(candidates, 1)
+                    if f"C{index:04d}" in verdicts]
+        for candidate in _rank_requested_facts(verified, instructions, title_hint):
             refs = set(candidate["evidence_refs"])
             if (len(facts) >= MAX_FACTS_PER_REQUEST or any(
                 facts_per_ref.get(ref, 0) >= MAX_FACTS_PER_REF for ref in refs
@@ -478,7 +545,8 @@ def research(
         ),
     )
 
-    allfacts = _limit_by_ref(allfacts, lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF)
+    allfacts = _limit_by_ref(_rank_requested_facts(allfacts, instructions, title_hint),
+                             lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF)
     assets = _limit_by_ref(assets, lambda asset: [asset["evidence_ref"]], MAX_ASSETS_PER_REF)
 
     allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)

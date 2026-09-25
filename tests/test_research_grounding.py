@@ -19,7 +19,9 @@ class FixedProvider:
         request = json.loads(user)
         self.requests.append((system, request))
         if "checks" in request:
-            return {"decisions": [{"id": check["id"], "supported": True}
+            return {"decisions": [{"id": check["id"], "supported": True,
+                     "propositions": [{"text": unit, "support_indices": list(range(len(check["support"]))) }
+                                      for unit in check["required_propositions"]]}
                                   for check in request["checks"]]}
         return {"facts": self.facts, "assets": []}
 
