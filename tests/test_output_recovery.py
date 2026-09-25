@@ -278,10 +278,12 @@ class SplitRecoveryTests(unittest.TestCase):
                     return {"capsules": [{"claim": "Grounded",
                                           "evidence_refs": ["E0001", "E0002"],
                                           "media_refs": [], "phase": "final", "confidence": "high"}]}
+                fact_id = next(fact["fact_id"] for fact in payload["research"]["facts"]
+                               if "E0001" in fact["evidence_refs"])
                 return {"version": 1, "title": "Title", "slug": "title", "summary": "Summary",
                         "scenes": [{"id": "s001", "type": "PROJECT_EVIDENCE", "title": "Proof",
                                     "narration": "Grounded proof.", "evidence_refs": ["E0001"],
-                                    "asset_ref": "E0001", "annotations": [],
+                                    "fact_ids": [fact_id], "asset_ref": "E0001", "annotations": [],
                                     "pad_after_seconds": 0.5, "diagram": {}, "notes": ""}]}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -292,7 +294,7 @@ class SplitRecoveryTests(unittest.TestCase):
             (root / "prompts" / "planner_compact.txt").write_text("compact")
             research_input = {"facts": [{"claim": "Fact", "evidence_refs": [e["ref"]]}
                                         for e in _refs(2)], "assets": []}
-            with patch("source2reel.planner.fits_context", side_effect=[False, True]), \
+            with patch("source2reel.planner.fits_context", side_effect=[False, True, True]), \
                  patch("source2reel.planner.split_for_context", side_effect=lambda records, *args, **kwargs: [records]):
                 episode = plan(LeakyProvider(), research_input, {"evidence": _refs(2)}, project,
                                "Demo", max_retries=0)

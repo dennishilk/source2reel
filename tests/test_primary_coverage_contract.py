@@ -37,7 +37,12 @@ def _project(root: Path) -> Path:
     prompts.mkdir()
     (prompts / "storyboard.txt").write_text("storyboard")
     (prompts / "planner_compact.txt").write_text("compact")
-    return root / "projects" / "demo"
+    project = root / "projects" / "demo"
+    (project / "sources").mkdir(parents=True)
+    (project / "sources" / "source.json").write_text(json.dumps({
+        "kind": "website", "source": "https://example.test/project"
+    }))
+    return project
 
 
 def _primary_input():
@@ -99,16 +104,18 @@ class PrimaryCoverageTests(unittest.TestCase):
                         for ref in refs if roles[ref] != "primary"
                     ]}
                 ref = request["evidence_index"][0]["ref"]
+                fact_id = next(fact["fact_id"] for fact in request["research"]["facts"]
+                               if ref in fact["evidence_refs"])
                 return {"version": 1, "title": "WidgetEngine", "slug": "widget-engine",
                         "summary": "Evidence-backed summary", "scenes": [{
                             "id": "s001", "type": "HERO", "narration": "The documented source.",
-                            "evidence_refs": [ref], "asset_ref": ref,
+                            "fact_ids": [fact_id], "evidence_refs": [ref], "asset_ref": ref,
                         }]}
 
         provider = OmittingProvider()
         with tempfile.TemporaryDirectory() as tmp:
             project = _project(Path(tmp))
-            with patch("source2reel.planner.fits_context", side_effect=[False, False, True]), \
+            with patch("source2reel.planner.fits_context", side_effect=[False, False, True, True]), \
                  patch("source2reel.planner.split_for_context",
                        side_effect=lambda records, *args, **kwargs: [records]):
                 plan(provider, research, inventory, project, "WidgetEngine", INSTRUCTIONS,

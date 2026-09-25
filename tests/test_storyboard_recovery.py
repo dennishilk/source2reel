@@ -55,6 +55,10 @@ def _project(root):
     project = root / "projects" / "demo"
     (root / "prompts").mkdir()
     (root / "prompts" / "storyboard.txt").write_text("storyboard")
+    (project / "sources").mkdir(parents=True)
+    (project / "sources" / "source.json").write_text(json.dumps({
+        "kind": "website", "source": "https://example.test/project"
+    }))
     return project
 
 
@@ -82,19 +86,25 @@ class StoryboardProvider:
             requested_intent = payload["required_output"]["scene_intents"][0]
             evidence_types = payload.get("scene_type_requirements", {}).get(
                 "asset_ref_required_types", ())
+            supplied_facts = payload["research"]["facts"]
             intents = []
             for i in range(self.count):
                 intent = {"type": kinds[i % len(kinds)], "purpose": f"Point {i+1}",
                           "evidence_refs": refs[i % len(refs)]}
+                if "fact_ids" in requested_intent:
+                    intent["fact_ids"] = [fact["fact_id"] for fact in supplied_facts
+                                          if set(fact["evidence_refs"]) & set(intent["evidence_refs"])]
                 if intent["type"] in evidence_types and "asset_ref" in requested_intent:
                     intent["asset_ref"] = intent["evidence_refs"][-1]
                 intents.append(intent)
+            presentation = {"scene_titles": {"s001": "Project begins"}}
+            if intents[-1]["type"] == "OUTRO":
+                presentation["outro"] = {
+                    "headline": ["The project"],
+                    "links": [{"label": "Project", "url": [payload["authoritative_resource_urls"][0]]}]
+                }
             return {"version": 1, "title": "Grounded project", "slug": "grounded-project",
-                    "summary": "An evidence-first explanation.",
-                    "presentation": {"outro": {
-                        "headline": ["The project"],
-                        "links": [{"label": "Project", "url": ["https://example.test/project"]}]
-                    }, "scene_titles": {"s001": "Project begins"}},
+                    "summary": "An evidence-first explanation.", "presentation": presentation,
                     "scene_intents": intents}
         if mode == "scenes":
             part = payload["part_number"]
@@ -108,6 +118,8 @@ class StoryboardProvider:
                 scene = copy.deepcopy(requested)
                 scene["title"] = intent["purpose"]
                 scene["narration"] = f"Narration {intent['id']}."
+                if payload["contains_final_scene"] and intent == intents[-1] and payload["required_narration_suffix"]:
+                    scene["narration"] += " " + payload["required_narration_suffix"]
                 if "diagram" in scene:
                     claims = [fact["claim"] for fact in payload["research"]["facts"]
                               if set(fact["evidence_refs"]) & set(intent["evidence_refs"])]
@@ -192,10 +204,13 @@ class StoryboardRecoveryTests(unittest.TestCase):
                 self.calls = []
 
             def complete_json(self, system, user):
-                self.calls.append(json.loads(user))
+                request = json.loads(user)
+                self.calls.append(request)
                 return {"version": 1, "title": "Fast", "slug": "fast", "summary": "Fast",
                         "scenes": [{"id": "s001", "type": "HERO", "title": "Proof",
-                                    "narration": "Proven.", "evidence_refs": ["E0001"],
+                                    "narration": "Proven. " + request["required_narration_suffix"],
+                                    "fact_ids": [request["research"]["facts"][0]["fact_id"]],
+                                    "evidence_refs": ["E0001"],
                                     "asset_ref": "E0001"}]}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,6 +277,9 @@ class StoryboardRecoveryTests(unittest.TestCase):
                              [f"s{i:03d}" for i in range(1, 8)])
             self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0001", "E0020"])
             self.assertEqual(episode["scenes"][0]["asset_ref"], "E0020")
+            self.assertTrue(episode["scenes"][-1]["narration"].endswith(
+                "And yes — this video was made with the tool it just explained."
+            ))
             self.assertEqual(episode["presentation"]["outro"]["headline"], ["The project"])
             for scene in episode["scenes"]:
                 if "diagram" in scene:

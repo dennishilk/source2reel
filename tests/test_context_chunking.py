@@ -64,6 +64,9 @@ class FakeProvider:
                 }]
             }
         if system == "storyboard":
+            fact = next((fact for fact in payload["research"]["facts"]
+                         if "E0001" in fact["evidence_refs"]), payload["research"]["facts"][0])
+            ref = fact["evidence_refs"][0]
             return {
                 "version": 1,
                 "title": "Context-safe test",
@@ -74,8 +77,9 @@ class FakeProvider:
                     "type": "PROJECT_EVIDENCE",
                     "title": "Proof",
                     "narration": "Evidence-grounded narration.",
-                    "evidence_refs": ["E0001"],
-                    "asset_ref": "E0001",
+                    "fact_ids": [fact["fact_id"]],
+                    "evidence_refs": [ref],
+                    "asset_ref": ref,
                     "annotations": [],
                     "pad_after_seconds": 0.5,
                     "diagram": {},
@@ -283,7 +287,7 @@ class ContextChunkingTests(unittest.TestCase):
                 {"claim": f"Primary fact {i}", "evidence_refs": [f"E{i:04d}"]}
                 for i in (1, 2)
             ], "assets": []}
-            with patch("source2reel.planner.fits_context", side_effect=[False, True]), \
+            with patch("source2reel.planner.fits_context", side_effect=[False, True, True]), \
                  patch("source2reel.planner.split_for_context", side_effect=lambda records, *args, **kwargs: [records[:2], records[2:]]):
                 plan(LeakyProvider(), research_input, inventory, project, "Demo")
             parts = project / "manifests" / "planner-compact-parts"

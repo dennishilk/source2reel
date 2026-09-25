@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
 from .progress import Progress, step
@@ -45,20 +46,92 @@ def _research_refs(research: dict[str, Any]) -> set[str]:
     return refs
 
 
+def _authoritative_resource_urls(project_dir: Path) -> list[str]:
+    """Use only HTTP(S) URLs recorded by ingestion, never model prose."""
+    sources_dir = project_dir / "sources"
+    source_file = sources_dir / "source.json"
+    if not source_file.exists():
+        return []
+    source_data = json_load(source_file)
+    records = source_data.get("sources", [source_data])
+    urls: list[str] = []
+
+    def add(value: Any) -> None:
+        if not isinstance(value, str):
+            return
+        parsed = urlsplit(value)
+        if parsed.scheme in {"http", "https"} and parsed.netloc and not parsed.username:
+            urls.append(value)
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        add(record.get("source"))
+        if record.get("kind") == "github":
+            repo_url = record.get("repo_url")
+            add(repo_url)
+            if isinstance(repo_url, str) and repo_url.endswith(".git"):
+                parsed = urlsplit(repo_url)
+                add(urlunsplit(parsed._replace(path=parsed.path[:-4])))
+        if record.get("kind") == "website":
+            namespace = record.get("namespace")
+            base = sources_dir / namespace if isinstance(namespace, str) and re.fullmatch(r"source-\d+", namespace) else sources_dir
+            manifest = base / "website-manifest.json"
+            if manifest.exists():
+                for page in json_load(manifest).get("pages", []):
+                    if isinstance(page, dict) and "html" in page and "text" in page:
+                        add(page.get("url"))
+    return list(dict.fromkeys(urls))
+
+
+_FINAL_SUFFIX = re.compile(
+    r'\bend\s+with\s*:\s*(?:“(?P<curly>[^”\n]+)”|"(?P<plain>[^"\n]+)")',
+    re.I,
+)
+
+
+def _final_narration_suffix(instructions: str) -> str | None:
+    matches = list(_FINAL_SUFFIX.finditer(instructions))
+    if len(matches) != 1 or re.search(
+        r"(?:\bnot|\bnever|\bdon't)\s*$", instructions[max(0, matches[0].start()-24):matches[0].start()], re.I,
+    ):
+        return None
+    return (matches[0].group("curly") or matches[0].group("plain")).strip()
+
+
+def _identified_research(research: dict[str, Any]) -> dict[str, Any]:
+    return {**research, "facts": [
+        {**fact, "fact_id": f"F{index:04d}"}
+        for index, fact in enumerate(research.get("facts", []), 1)
+    ]}
+
+
 def _make_ask(
     research: dict[str, Any],
     media: list[dict[str, Any]],
     evidence_index: list[dict[str, Any]],
     title_hint: str,
     instructions: str,
+    resource_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
         "allowed_scene_types": sorted(SCENE_TYPES),
-        "research": research,
+        "research": _identified_research(research),
         "media_inventory": media,
         "evidence_index": evidence_index,
+        "authoritative_resource_urls": resource_urls or [],
+        "required_narration_suffix": _final_narration_suffix(instructions),
+        "fact_selection_requirement": (
+            "Every factual scene must select up to six fact_ids from research.facts. Base its actual "
+            "claims only on those selected facts; cite only their evidence_refs (plus a "
+            "selected research asset for an evidence scene). A setup, maintenance, revision "
+            "or optional fact alone cannot describe the mandatory normal workflow. Do not "
+            "expand a profile's documented responsibilities. Quote exact commands, config "
+            "assignments, file paths, APIs or code only when the selected facts support "
+            "those exact literals. Evidence refs alone do not prove narration."
+        ),
         "output_contract": {
             "version": 1,
             "title": "English title",
@@ -73,6 +146,7 @@ def _make_ask(
                 "type": "HERO",
                 "title": "English on-screen title",
                 "narration": "English narration",
+                "fact_ids": ["F0001"],
                 "evidence_refs": ["E0001"],
                 "asset_ref": "E0001",
                 "annotations": [],
@@ -83,8 +157,9 @@ def _make_ask(
         },
         "presentation_requirement": (
             "For an OUTRO, include episode.presentation.outro with 1–3 grounded "
-            "headline lines and 1–3 supported link labels/URLs. If links are "
-            "unsupported, use SUMMARY instead. Other scenes need no outro."
+            "headline lines and 1–3 links whose URLs are exactly in "
+            "authoritative_resource_urls. An OUTRO must be the single last scene. "
+            "If no supported links exist, finish with SUMMARY and omit presentation.outro."
         ),
         "optional_structured_scene_fields": {
             "media.start_seconds": "non-negative seconds into an authentic video, when evidence calls for an offset",
@@ -435,6 +510,49 @@ def _repair_episode_shape(
     return ep
 
 
+def _validate_scene_facts(scene: dict[str, Any], ask: dict[str, Any],
+                          fixed_ids: list[str] | None = None) -> None:
+    """Bind cited refs to selected claims and an explicitly selected asset."""
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    refs = scene.get("evidence_refs", [])
+    ids = scene.get("fact_ids", [])
+    needs_facts = scene.get("type") not in {"SECTION_TITLE", "OUTRO"} or bool(refs)
+    if not isinstance(ids, list) or len(ids) > 6 or (needs_facts and not ids) or any(
+        not isinstance(fact_id, str) or fact_id not in facts for fact_id in ids
+    ) or len(set(ids)) != len(ids):
+        raise ValueError(f"{scene.get('id', 'Scene')}: select valid fact_ids from supplied planner facts")
+    if fixed_ids is not None and ids != fixed_ids:
+        raise ValueError(f"{scene.get('id', 'Scene')}: scene fact_ids differ from fixed outline selection")
+    supported = {ref for fact_id in ids for ref in facts[fact_id]["evidence_refs"]}
+    asset_ref = scene.get("asset_ref")
+    if scene.get("type") in EVIDENCE_TYPES and asset_ref in {
+        asset.get("evidence_ref") for asset in ask["research"].get("assets", [])
+    }:
+        supported.add(asset_ref)
+    if not isinstance(refs, list) or any(ref not in supported for ref in refs):
+        raise ValueError(f"{scene.get('id', 'Scene')}: evidence_refs must come from selected fact_ids or selected asset_ref")
+
+
+def _validate_resource_links(presentation: Any, ask: dict[str, Any]) -> None:
+    outro = presentation.get("outro") if isinstance(presentation, dict) else None
+    if not isinstance(outro, dict):
+        return
+    allowed = set(ask["authoritative_resource_urls"])
+    for link in outro.get("links", []):
+        lines = link["url"] if isinstance(link["url"], list) else [link["url"]]
+        if not all(isinstance(line, str) for line in lines) or not (
+            all(line.strip() in allowed for line in lines) or
+            "".join(line.strip() for line in lines) in allowed
+        ):
+            raise ValueError(f"OUTRO link URL is not an authoritative source URL: {lines}")
+
+
+def _validate_final_narration(episode: dict[str, Any], ask: dict[str, Any]) -> None:
+    suffix = ask["required_narration_suffix"]
+    if suffix and not episode["scenes"][-1]["narration"].endswith(suffix):
+        raise ValueError(f"Last scene narration must end exactly with: {suffix}")
+
+
 class _EpisodeValidationExhausted(ValueError):
     """Full episode output stayed schema-invalid after bounded retries."""
 
@@ -459,6 +577,10 @@ def _complete_episode(
         try:
             episode = _repair_episode_shape(raw, valid_refs)
             validate_episode(episode, valid_refs, require_integrated_presentation=True)
+            for scene in episode["scenes"]:
+                _validate_scene_facts(scene, ask)
+            _validate_resource_links(episode.get("presentation", {}), ask)
+            _validate_final_narration(episode, ask)
             return episode
         except (ValueError, TypeError) as exc:
             last_error = exc
@@ -472,13 +594,17 @@ _OUTLINE_SYSTEM = (
     "\n\nMultipart storyboard outline: return one compact JSON object containing "
     "version, title, slug, summary, optional presentation, and an ordered "
     "scene_intents list. Choose the episode length editorially (1 to 32 scenes). "
-    "Each intent needs type, purpose (at most 160 characters), and at most six "
-    "evidence_refs from the supplied planner evidence. For each evidence scene "
+    "Each factual intent must select fact_ids from the supplied research facts; "
+    "its purpose and evidence_refs must follow only those selected claims. "
+    "Normal workflow scenes must select normal workflow facts, not just setup "
+    "or optional maintenance facts. Each intent needs type, purpose (at most "
+    "160 characters), and at most six evidence_refs. For each evidence scene "
     "type, also choose one fixed asset_ref from that intent's evidence_refs; "
     "other scene types do not need an asset_ref. Do not write scene narration yet. "
-    "If you plan an OUTRO, supply presentation.outro with grounded headline and "
-    "links; if no links are supported, finish with SUMMARY instead. Keep any "
-    "requested final sentence for narration in the last scene."
+    "If you plan an OUTRO, it must be the single final scene, with grounded "
+    "presentation.outro links selected only from authoritative_resource_urls. "
+    "Otherwise finish with SUMMARY and omit presentation.outro. Reserve the "
+    "required_narration_suffix for the last scene's narration, not its headline."
 )
 _SCENES_SYSTEM = (
     "\n\nMultipart storyboard scenes: return only a JSON object with a scenes list, "
@@ -486,11 +612,14 @@ _SCENES_SYSTEM = (
     "and with its assigned id and type. Follow each scene's type-specific "
     "required_output: preserve its fixed asset_ref for evidence scenes and "
     "supply 2–8 labeled, evidence-grounded diagram nodes for diagram scenes. "
+    "Use only the selected fact claims for each scene; never add factual "
+    "workflow steps or responsibilities absent from those claims. Do not "
+    "invent exact commands, config assignments, file paths, APIs or code. "
     "Cite only the supplied part evidence. "
     "Preserve structured scene fields including media.start_seconds, captions, "
     "diagram nodes and annotations when appropriate. Keep narration concise. "
-    "Only if this part contains the episode's last scene, satisfy any requested "
-    "final sentence in that scene's narration."
+    "If this part contains the last scene, its narration must end exactly "
+    "with required_narration_suffix when provided."
 )
 
 
@@ -503,6 +632,9 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "research": ask["research"],
         "media_inventory": ask["media_inventory"],
         "evidence_index": ask["evidence_index"],
+        "authoritative_resource_urls": ask["authoritative_resource_urls"],
+        "required_narration_suffix": ask["required_narration_suffix"],
+        "fact_selection_requirement": ask["fact_selection_requirement"],
         "scene_type_requirements": {
             "asset_ref_required_types": sorted(EVIDENCE_TYPES),
             "asset_ref": "For these types, choose one evidence_ref from the same intent as the fixed visual asset; omit for other types.",
@@ -514,6 +646,7 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
             "presentation_requirement": ask["presentation_requirement"],
             "scene_intents": [{
                 "type": "one allowed scene type", "purpose": "brief editorial aim",
+                "fact_ids": ["F0001"],
                 "evidence_refs": ["a supplied evidence ref"],
                 "asset_ref": "one of this intent's evidence_refs if type requires an asset_ref; omit otherwise",
             }],
@@ -521,7 +654,20 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_outline(value: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
+def _final_requests_fit(
+    system: str, ask: dict[str, Any], context_size: int,
+    output_reserve_tokens: int, safety_tokens: int,
+) -> bool:
+    """Leave enough input room for recovery even if the full output overflows."""
+    if not fits_context(system, json.dumps(ask, ensure_ascii=False),
+                        context_size, output_reserve_tokens, safety_tokens):
+        return False
+    return fits_context(system + _OUTLINE_SYSTEM,
+                        json.dumps(_outline_payload(ask), ensure_ascii=False),
+                        context_size, output_reserve_tokens, safety_tokens)
+
+
+def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") not in (1, "1"):
         raise StructuredOutputError("Storyboard outline must have version 1")
     outline = {"version": 1}
@@ -550,7 +696,8 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str]) -> dict[str, An
         if raw["type"] not in {"SECTION_TITLE", "OUTRO"} and not refs:
             raise StructuredOutputError(f"Storyboard intent {index} needs evidence refs")
         intent = {"id": f"s{index:03d}", "type": raw["type"],
-                  "purpose": purpose.strip(), "evidence_refs": refs}
+                  "purpose": purpose.strip(), "fact_ids": raw.get("fact_ids", []),
+                  "evidence_refs": refs}
         if raw["type"] in EVIDENCE_TYPES:
             asset_ref = raw.get("asset_ref")
             if not isinstance(asset_ref, str) or asset_ref not in refs or asset_ref not in allowed:
@@ -558,6 +705,10 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str]) -> dict[str, An
                     f"Storyboard intent {index} asset_ref must be one of its scoped evidence_refs"
                 )
             intent["asset_ref"] = asset_ref
+        try:
+            _validate_scene_facts(intent, ask)
+        except ValueError as exc:
+            raise StructuredOutputError(f"Storyboard intent {index} invalid: {exc}") from exc
         intents.append(intent)
     outline["scene_intents"] = intents
     if "presentation" in value:
@@ -565,6 +716,12 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str]) -> dict[str, An
     try:
         validate_presentation(outline.get("presentation", {}),
                               any(intent["type"] == "OUTRO" for intent in intents))
+        outro_indices = [i for i, intent in enumerate(intents) if intent["type"] == "OUTRO"]
+        if len(outro_indices) > 1 or (outro_indices and outro_indices[0] != len(intents)-1):
+            raise ValueError("OUTRO must be the single final scene")
+        if "outro" in outline.get("presentation", {}) and not outro_indices:
+            raise ValueError("presentation.outro requires a final OUTRO scene")
+        _validate_resource_links(outline.get("presentation", {}), ask)
         titles = outline.get("presentation", {}).get("scene_titles", {})
         if any(scene_id not in {intent["id"] for intent in intents} for scene_id in titles):
             raise ValueError("presentation.scene_titles references an unplanned scene")
@@ -578,14 +735,11 @@ def _scene_part_payload(
     part_number: int, part_count: int, scope_id: str,
 ) -> dict[str, Any]:
     scoped = {item["ref"] for item in ask["evidence_index"]}
+    selected_ids = {fact_id for intent in intents for fact_id in intent["fact_ids"]}
+    facts = [fact for fact in ask["research"].get("facts", [])
+             if fact["fact_id"] in selected_ids]
     requested = {ref for intent in intents for ref in intent["evidence_refs"]}
-    facts = [dict(fact) for fact in ask["research"].get("facts", [])
-             if any(ref in requested for ref in fact.get("evidence_refs", []))]
-    for fact in facts:
-        fact["evidence_refs"] = [ref for ref in fact.get("evidence_refs", []) if ref in scoped]
-    # A supporting fact may need two citations. Include its whole cited scope,
-    # while never expanding beyond the planner context used by the fast path.
-    supplied = requested | {ref for fact in facts for ref in fact["evidence_refs"]}
+    supplied = (requested | {ref for fact in facts for ref in fact["evidence_refs"]}) & scoped
     media = [item for item in ask["media_inventory"] if item["ref"] in supplied]
     assets = [asset for asset in ask["research"].get("assets", [])
               if asset.get("evidence_ref") in supplied]
@@ -604,6 +758,7 @@ def _scene_part_payload(
     def required_scene(intent: dict[str, Any]) -> dict[str, Any]:
         scene = {"id": intent["id"], "type": intent["type"], "title": "on-screen title",
                  "narration": "concise evidence-grounded narration",
+                 "fact_ids": intent["fact_ids"],
                  "evidence_refs": intent["evidence_refs"]}
         if intent["type"] in EVIDENCE_TYPES:
             scene["asset_ref"] = intent["asset_ref"]
@@ -622,6 +777,11 @@ def _scene_part_payload(
         "episode_metadata": metadata,
         "total_scenes": len(all_intents),
         "contains_final_scene": intents[-1]["id"] == all_intents[-1]["id"],
+        "required_narration_suffix": (
+            ask["required_narration_suffix"]
+            if intents[-1]["id"] == all_intents[-1]["id"] else None
+        ),
+        "fact_selection_requirement": ask["fact_selection_requirement"],
         "scene_intents": intents,
         **neighbors,
         "research": {"version": ask["research"].get("version", 1),
@@ -643,7 +803,7 @@ def _scene_part_payload(
 
 def _normalize_scene_part(
     value: dict[str, Any], intents: list[dict[str, Any]],
-    allowed: set[str], outline: dict[str, Any],
+    allowed: set[str], outline: dict[str, Any], ask: dict[str, Any],
 ) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {"scenes"}:
         raise StructuredOutputError("Storyboard part must contain only a scenes list")
@@ -676,13 +836,22 @@ def _normalize_scene_part(
             nodes = (diagram.get("nodes") or diagram.get("steps")) if isinstance(diagram, dict) else None
             if not isinstance(nodes, list) or not 2 <= len(nodes) <= 8:
                 raise StructuredOutputError(f"{intent['id']}: diagram nodes/steps require 2–8 labeled entries")
+        try:
+            _validate_scene_facts(scene, ask, intent["fact_ids"])
+        except ValueError as exc:
+            raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
         normalized_scenes.append(scene)
     partial = {"version": 1, "title": outline["title"], "scenes": normalized_scenes}
     if "presentation" in outline:
-        partial["presentation"] = outline["presentation"]
+        partial["presentation"] = (
+            outline["presentation"] if any(intent["type"] == "OUTRO" for intent in intents)
+            else {key: value for key, value in outline["presentation"].items() if key != "outro"}
+        )
     try:
         partial = _repair_episode_shape(partial, allowed)
         validate_episode(partial, allowed, require_integrated_presentation=True)
+        if intents[-1]["id"] == outline["scene_intents"][-1]["id"]:
+            _validate_final_narration(partial, ask)
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
     return {"scenes": partial["scenes"]}
@@ -712,7 +881,7 @@ def _multipart_episode(
     with step(progress, "Planning storyboard parts"):
         outline = checkpointed_complete_json(
             provider, outline_system, outline_payload, part_dir / "outline.json",
-            lambda value: _normalize_outline(value, allowed), max_retries=max_retries,
+            lambda value: _normalize_outline(value, allowed, ask), max_retries=max_retries,
         )
 
     scene_system = system + _SCENES_SYSTEM
@@ -744,7 +913,7 @@ def _multipart_episode(
 
         def normalize_for(value: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
             part_allowed = {entry["ref"] for entry in payload_for(items)["evidence_index"]}
-            return _normalize_scene_part(value, items, part_allowed, outline)
+            return _normalize_scene_part(value, items, part_allowed, outline, ask)
 
         results = checkpointed_split_json(
             provider, scene_system, group, payload_for, checkpoint, normalize_for,
@@ -761,6 +930,8 @@ def _multipart_episode(
     episode["scenes"] = scenes
     episode = _repair_episode_shape(episode, allowed)
     validate_episode(episode, allowed, require_integrated_presentation=True)
+    _validate_resource_links(episode.get("presentation", {}), ask)
+    _validate_final_narration(episode, ask)
     _clean_storyboard_parts(part_dir, used)
     return episode
 
@@ -830,14 +1001,15 @@ def plan(
     candidate_refs = _research_refs(research) | {m["ref"] for m in media}
     evidence_index = _evidence_index(inventory, candidate_refs)
     system = (project_dir.parents[1] / "prompts" / "storyboard.txt").read_text()
+    resource_urls = _authoritative_resource_urls(project_dir)
 
-    direct_ask = _make_ask(research, media, evidence_index, title_hint, instructions)
-    direct_user = json.dumps(direct_ask, ensure_ascii=False)
-    if fits_context(system, direct_user, context_size, output_reserve_tokens, safety_tokens):
+    direct_ask = _make_ask(research, media, evidence_index, title_hint, instructions, resource_urls)
+    if _final_requests_fit(system, direct_ask, context_size,
+                           output_reserve_tokens, safety_tokens):
         json_dump(project_dir / "manifests" / "planner-evidence.json", {
             "version": 1,
             "strategy": "direct",
-            "research": research,
+            "research": direct_ask["research"],
             "media_inventory": media,
             "evidence_index": evidence_index,
             "evidence_scope": _evidence_scope(evidence_index),
@@ -901,15 +1073,15 @@ def plan(
         }
         compact_media = [m for m in media if m["ref"] in selected_media_refs]
         compact_index = _evidence_index(inventory, selected_refs | selected_media_refs)
-        ask = _make_ask(compact_research, compact_media, compact_index, title_hint, instructions)
-        user = json.dumps(ask, ensure_ascii=False)
-
-        if fits_context(system, user, context_size, output_reserve_tokens, safety_tokens):
+        ask = _make_ask(compact_research, compact_media, compact_index,
+                        title_hint, instructions, resource_urls)
+        if _final_requests_fit(system, ask, context_size,
+                               output_reserve_tokens, safety_tokens):
             json_dump(project_dir / "manifests" / "planner-evidence.json", {
                 "version": 1,
                 "strategy": "map-reduce",
                 "levels": level,
-                "research": compact_research,
+                "research": ask["research"],
                 "media_inventory": compact_media,
                 "evidence_index": compact_index,
                 "evidence_scope": _evidence_scope(compact_index),

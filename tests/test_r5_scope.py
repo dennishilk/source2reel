@@ -178,10 +178,13 @@ class PlannerRoleTests(unittest.TestCase):
                         return {"capsules": [self.capsule([r], f"Reference {r}") for r in refs]}
                     return {"capsules": [self.capsule(refs, "One broad mixed capsule")]}
                 first = payload["evidence_index"][0]["ref"]
+                fact_id = next(fact["fact_id"] for fact in payload["research"]["facts"]
+                               if first in fact["evidence_refs"])
                 return {"version": 1, "title": "Demo", "slug": "demo", "summary": "Demo",
                         "scenes": [{"id": "s001", "type": "PROJECT_EVIDENCE", "title": "Proof",
                                     "narration": "A grounded observation.", "evidence_refs": [first],
-                                    "asset_ref": first, "annotations": [], "pad_after_seconds": 0.5,
+                                    "fact_ids": [fact_id], "asset_ref": first,
+                                    "annotations": [], "pad_after_seconds": 0.5,
                                     "diagram": {}, "notes": ""}]}
 
             @staticmethod
@@ -191,7 +194,7 @@ class PlannerRoleTests(unittest.TestCase):
 
         provider = LosingProvider()
         project = _project(root)
-        with patch("source2reel.planner.fits_context", side_effect=[False, False, True]), \
+        with patch("source2reel.planner.fits_context", side_effect=[False, False, True, True]), \
              patch("source2reel.planner.split_for_context",
                    side_effect=lambda records, *args, **kwargs: [records]):
             plan(provider, research_input, {"evidence": entries}, project,

@@ -86,5 +86,11 @@ def validate_episode(
     # frozen episodes may instead supply it through presentation.json at build
     # time; the renderer validates the merged presentation separately.
     if require_integrated_presentation:
-        validate_presentation(ep.get("presentation", {}),
-                              any(scene["type"] == "OUTRO" for scene in scenes))
+        outro_indices = [index for index, scene in enumerate(scenes) if scene["type"] == "OUTRO"]
+        if len(outro_indices) > 1: raise ValueError("episode may have only one OUTRO scene")
+        if outro_indices and outro_indices[0] != len(scenes)-1:
+            raise ValueError("OUTRO must be the final scene")
+        presentation = ep.get("presentation", {})
+        validate_presentation(presentation, bool(outro_indices))
+        if "outro" in presentation and not outro_indices:
+            raise ValueError("presentation.outro requires a final OUTRO scene")
