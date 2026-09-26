@@ -362,7 +362,8 @@ class GroundingRegressions(unittest.TestCase):
                          {facts[-2]['claim'], facts[-1]['claim']})
         ask = _make_ask({'facts': facts, 'assets': []}, [], entries, 'WidgetEngine', instructions)
         self.assertEqual(len(ask['priority_fact_ids']), 2)
-        with self.assertRaisesRegex(StructuredOutputError, 'explicitly requested facts'):
+        with self.assertRaisesRegex(StructuredOutputError,
+                                    'Missing requested storyboard coverage: workflow -> choose one of F0017'):
             _normalize_outline({'version': 1, 'title': 'Engine', 'slug': 'engine',
                                 'summary': 'Story', 'scene_intents': [{
                                     'type': 'CODE', 'purpose': f'Detail {i}',

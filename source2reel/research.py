@@ -123,7 +123,11 @@ _PURPOSE = re.compile(
     r"built to|aims? to|exists? to|in order to)\b", re.I,
 )
 _WORKFLOW = re.compile(r"\b(?:pipeline|workflow|stages?|process|transform|turns?)\b", re.I)
-_OVERVIEW = re.compile(r"\b(?:is an?|engine|tool|system|framework|application)\b", re.I)
+_OVERVIEW = re.compile(
+    r"\b(?:is|are)\s+(?:an?|the)\b[^.!?;]{0,100}"
+    r"\b(?:engine|tool|system|framework|application|platform|library|service|"
+    r"program|analyzer|inspector)\b", re.I,
+)
 
 
 def _rank_requested_facts(
@@ -135,16 +139,10 @@ def _rank_requested_facts(
     instruction = re.sub(r"\bend with:.*", "", instructions, flags=re.I | re.S)
     terms = {word for word in re.findall(r"[a-z]{4,}", instruction.casefold())
              if word not in _REQUEST_STOP and word not in title_hint.casefold()}
-    requested = set()
-    if re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
-        requested.add("purpose")
-    if re.search(r"\b(?:how|workflow|pipeline|process|stages?)\b", instruction, re.I):
-        requested.add("workflow")
-    if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
-        requested.add("overview")
-    distinctions = {key: spec for key, spec in _requested_concepts(instructions, title_hint).items()
-                    if spec["kind"] == "distinction"}
-    requested.update(distinctions)
+    concepts = _requested_concepts(instructions, title_hint)
+    def matched(claim: str) -> set[str]:
+        return {key for key, spec in concepts.items() if _covers_request(claim, spec)}
+
     remaining = list(enumerate(facts))
     ranked = []
     covered: set[str] = set()
@@ -152,12 +150,7 @@ def _rank_requested_facts(
         def score(pair: tuple[int, dict[str, Any]]) -> tuple[int, int, int, int]:
             index, fact = pair
             claim = fact["claim"]
-            matches = ({"purpose"} if _PURPOSE.search(claim) else set()) | (
-                {"workflow"} if _WORKFLOW.search(claim) else set()) | (
-                {"overview"} if _OVERVIEW.search(claim) else set())
-            matches.update(key for key, spec in distinctions.items()
-                           if _covers_request(claim, spec))
-            matches &= requested
+            matches = matched(claim)
             lexical = len(terms & set(re.findall(r"[a-z]{4,}", claim.casefold())))
             primary = fact.get("subject_scope") == "main_subject"
             quality = (fact.get("phase") == "final") + (fact.get("confidence") == "high")
@@ -166,11 +159,7 @@ def _rank_requested_facts(
         chosen = max(remaining, key=score)
         remaining.remove(chosen)
         claim = chosen[1]["claim"]
-        covered.update(({"purpose"} if _PURPOSE.search(claim) else set()) |
-                       ({"workflow"} if _WORKFLOW.search(claim) else set()) |
-                       ({"overview"} if _OVERVIEW.search(claim) else set()))
-        covered.update(key for key, spec in distinctions.items()
-                       if _covers_request(claim, spec))
+        covered.update(matched(claim))
         ranked.append(chosen[1])
     return ranked
 
@@ -253,6 +242,29 @@ def _missing_requested_concepts(
     return {key: spec for key, spec in concepts.items() if not any(
         _covers_request(fact["claim"], spec) for fact in primary
     )}
+
+
+def _requested_fact_groups(
+    facts: list[dict[str, Any]], instructions: str, title_hint: str,
+    roles: dict[str, str],
+) -> dict[str, list[str]]:
+    """Map supported requested topics to original main-subject facts in stable order.
+
+    The request identifies topics, never evidence. Planner callers supply facts
+    already checked against their exact source quotations and allowed inventory.
+    """
+    concepts = _requested_concepts(instructions, title_hint)
+    groups: dict[str, list[str]] = {}
+    for key, spec in concepts.items():
+        ids = [fact["fact_id"] for fact in facts
+               if isinstance(fact.get("fact_id"), str) and
+               isinstance(fact.get("claim"), str) and
+               fact.get("support") and fact.get("evidence_refs") and
+               all(roles.get(ref) == "primary" for ref in fact["evidence_refs"]) and
+               _covers_request(fact["claim"], spec)]
+        if ids:
+            groups[key] = list(dict.fromkeys(ids))
+    return groups
 
 
 def _coverage_candidates(

@@ -13,7 +13,8 @@ from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_
 from .grounding import GROUNDING_CONTRACT, GroundingError, verify_claims
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
-from .research import _consolidate, _fact_scope, _reference_focus
+from .research import (_consolidate, _fact_scope, _reference_focus,
+                       _requested_fact_groups)
 from .schema import (DIAGRAM_TYPES, EVIDENCE_TYPES, SCENE_CONTRACTS, SCENE_TYPES,
                      validate_episode, validate_presentation)
 from .util import json_dump, json_load
@@ -167,6 +168,16 @@ def _make_ask(
     visual_refs = [ref for ref in _visual_asset_refs(evidence_index)
                    if ref in _research_refs(identified)]
     roles = {entry["ref"]: entry.get("evidence_role") or "primary" for entry in evidence_index}
+    scoped_refs = set(roles)
+    requested_fact_groups = _requested_fact_groups(
+        [fact for fact in identified["facts"]
+         if all(ref in scoped_refs for ref in fact.get("evidence_refs", [])) and
+         all(isinstance(span, dict) and
+             span.get("evidence_ref") in fact["evidence_refs"] and
+             isinstance(span.get("text"), str) and span["text"].strip()
+             for span in fact.get("support", []))],
+        instructions, title_hint, roles,
+    )
     requested = _explicit_topic_words(instructions) - _topic_words(title_hint)
     ranked = sorted((
         (len(requested & _topic_words(fact["claim"])), index, fact["fact_id"])
@@ -203,11 +214,14 @@ def _make_ask(
             "research.assets. If none, use a non-evidence type; documents are not visuals."
         ),
         "research": identified,
+        "requested_topic_fact_ids": requested_fact_groups,
+        "requested_topic_requirement": (
+            "For each listed topic, select one listed fact ID in a content scene; "
+            "SECTION_TITLE/OUTRO do not count."
+        ),
         "priority_fact_ids": priorities,
         "priority_requirement": (
-            "If priority_fact_ids contains at least two original, final primary facts, "
-            "ground at least half of factual scenes in one or more of these directly "
-            "requested facts. If no requested fact exists, omit that topic."
+            "Ranking hints only; requested_topic_fact_ids govern coverage."
         ),
         "media_inventory": media,
         "evidence_index": evidence_index,
@@ -448,16 +462,29 @@ def _explicit_topic_words(instructions: str) -> set[str]:
     return _topic_words(" ".join(subjects))
 
 
+class _RequestedCoverageError(StructuredOutputError):
+    """A valid scene selection omitted supported explicit requested topics."""
+
+    def __init__(self, missing: dict[str, list[str]]):
+        self.missing = missing
+        detail = "; ".join(f"{topic} -> choose one of {', '.join(ids)}"
+                           for topic, ids in missing.items())
+        super().__init__(f"Missing requested storyboard coverage: {detail}")
+
+
+def _missing_story_topics(scenes: list[dict[str, Any]],
+                          ask: dict[str, Any]) -> dict[str, list[str]]:
+    selected = {fact_id for scene in scenes
+                if scene["type"] not in {"SECTION_TITLE", "OUTRO"}
+                for fact_id in scene.get("fact_ids", [])}
+    return {topic: ids for topic, ids in ask.get("requested_topic_fact_ids", {}).items()
+            if ids and selected.isdisjoint(ids)}
+
+
 def _validate_focus_coverage(scenes: list[dict[str, Any]], ask: dict[str, Any]) -> None:
-    priorities = set(ask["priority_fact_ids"])
-    if len(priorities) < 2:
-        return
-    factual = [scene for scene in scenes if scene["type"] not in {"SECTION_TITLE", "OUTRO"}]
-    if len(factual) < 3:
-        return
-    direct = sum(bool(priorities & set(scene.get("fact_ids", []))) for scene in factual)
-    if direct * 2 < len(factual):
-        raise ValueError("Storyboard needs more scenes grounded in explicitly requested facts")
+    missing = _missing_story_topics(scenes, ask)
+    if missing:
+        raise _RequestedCoverageError(missing)
 
 
 def _primary_anchors(
@@ -945,6 +972,9 @@ def _canonical_full_episode(episode: dict[str, Any], ask: dict[str, Any],
 
 def _retry_feedback(error: Exception) -> str:
     """Keep retries focused on the contract the previous answer actually broke."""
+    if isinstance(error, _RequestedCoverageError):
+        return (f"{error}. Add content coverage for these supported topics; preserve "
+                "valid scene fact selections and unrelated metadata.")
     message = str(error)[:260]
     if "allowed_fact_ids:" in message:
         return f"{message} Copy only those exact existing IDs; preserve their cited evidence."
@@ -975,8 +1005,10 @@ def _complete_episode(
     *, project_dir: Path | None = None, progress: Progress | None = None,
 ) -> dict[str, Any]:
     last_error: Exception | None = None
+    coverage_candidate: dict[str, Any] | None = None
     attempts = max(1, max_retries + 1)
     for attempt in range(attempts):
+        coverage_candidate = None
         payload = dict(ask)
         if last_error is not None:
             payload["validation_feedback"] = _retry_feedback(last_error)
@@ -986,7 +1018,6 @@ def _complete_episode(
             episode = _canonical_full_episode(episode, ask, valid_refs)
             validate_episode(episode, valid_refs, require_integrated_presentation=True)
             episode = _canonical_full_summary(provider, episode, ask, project_dir, progress)
-            _validate_focus_coverage(episode["scenes"], ask)
             _validate_resource_links(episode.get("presentation", {}), ask)
             _validate_final_narration(episode, ask)
             _validate_narration_grounding(
@@ -995,6 +1026,8 @@ def _complete_episode(
                     episode["scenes"], ask, episode["scenes"][-1]["id"],
                 ),
             )
+            coverage_candidate = episode
+            _validate_focus_coverage(episode["scenes"], ask)
             return episode
         except _NarrationGroundingRejected as exc:
             if attempt == attempts - 1:
@@ -1005,12 +1038,83 @@ def _complete_episode(
                 episode = {**episode, "scenes": canonical}
                 validate_episode(episode, valid_refs, require_integrated_presentation=True)
                 _validate_final_narration(episode, ask)
+                try:
+                    _validate_focus_coverage(episode["scenes"], ask)
+                except _RequestedCoverageError:
+                    return _recover_full_coverage(provider, system, episode, ask, valid_refs,
+                                                  max_retries, project_dir, progress)
                 return episode
             last_error = exc
         except (ValueError, TypeError) as exc:
             last_error = exc
     assert last_error is not None
+    if isinstance(last_error, _RequestedCoverageError) and coverage_candidate is not None:
+        return _recover_full_coverage(provider, system, coverage_candidate, ask, valid_refs,
+                                      max_retries, project_dir, progress)
     raise _EpisodeValidationExhausted(f"planner output invalid after {attempts} attempt(s): {last_error}")
+
+
+def _recover_full_coverage(
+    provider: LLMProvider, system: str, episode: dict[str, Any], ask: dict[str, Any],
+    allowed: set[str], max_retries: int, project_dir: Path | None,
+    progress: Progress | None,
+) -> dict[str, Any]:
+    """Generate missing grounded content naturally, with exact-claim scene fallback."""
+    additions = _coverage_additions(episode["scenes"], ask, allowed)
+    scenes, presentation = _insert_coverage_scenes(
+        episode["scenes"], additions, episode.get("presentation"),
+        preserve_existing_ids=True, keep_last=bool(ask["required_narration_suffix"]),
+    )
+    recovered = {**episode, "scenes": scenes}
+    if presentation is not None:
+        recovered["presentation"] = presentation
+    by_id = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    outline = {**recovered, "scene_intents": [
+        {"id": scene["id"], "type": scene["type"],
+         "purpose": scene.get("purpose") or _safe_intent_purpose(scene, by_id),
+         "fact_ids": scene["fact_ids"], "evidence_refs": scene["evidence_refs"]}
+        for scene in scenes
+    ]}
+    insertion = len(episode["scenes"]) - int(
+        episode["scenes"][-1]["type"] == "OUTRO" or bool(ask["required_narration_suffix"])
+    )
+    for number, intent in enumerate(
+        outline["scene_intents"][insertion:insertion + len(additions)], 1,
+    ):
+        request = _scene_part_payload(ask, outline, [intent], number,
+                                      len(additions), "coverage-recovery")
+        scoped = {entry["ref"] for entry in request["evidence_index"]}
+        template = request["required_output"]["scenes"][0]
+        result = None
+        for _ in range(max(1, max_retries + 1)):
+            try:
+                proposed = provider.complete_json(system + _SCENES_SYSTEM,
+                                                  json.dumps(request, ensure_ascii=False))
+                result = _normalize_scene_part(proposed, [intent], scoped, outline, ask,
+                                               provider, project_dir, progress)["scenes"][0]
+                break
+            except (StructuredOutputError, ValueError, TypeError, KeyError, AttributeError):
+                continue
+        if result is None:
+            template["narration"] = _grounded_narration_fallback(
+                intent, ask, is_final=intent["id"] == scenes[-1]["id"],
+            )
+            result = _normalize_scene_part({"scenes": [template]}, [intent], scoped,
+                                           outline, ask)["scenes"][0]
+        scenes[next(index for index, scene in enumerate(scenes)
+                    if scene["id"] == intent["id"])] = result
+    _validate_focus_coverage(scenes, ask)
+    recovered["scenes"] = scenes
+    validate_episode(recovered, allowed, require_integrated_presentation=True)
+    _validate_resource_links(recovered.get("presentation", {}), ask)
+    _validate_final_narration(recovered, ask)
+    _validate_narration_grounding(
+        provider, scenes, ask, project_dir, progress,
+        trusted_fallbacks=_recognized_grounded_narrations(scenes, ask, scenes[-1]["id"]),
+    )
+    if progress is not None:
+        progress.note("Storyboard coverage retries exhausted; added grounded summary scenes")
+    return recovered
 
 
 _MAX_STORYBOARD_SCENES = 32
@@ -1084,6 +1188,8 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "fact_selection_requirement": ask["fact_selection_requirement"],
         "priority_fact_ids": ask["priority_fact_ids"],
         "priority_requirement": ask["priority_requirement"],
+        "requested_topic_fact_ids": ask.get("requested_topic_fact_ids", {}),
+        "requested_topic_requirement": ask.get("requested_topic_requirement", ""),
         "scene_type_requirements": {
             "asset_ref_required_types": sorted(EVIDENCE_TYPES),
             "asset_ref": "Choose one visual_asset_refs member from selected fact_ids' fact_evidence_map refs or research.assets evidence_ref; cite it in evidence_refs. Omit for other types.",
@@ -1239,7 +1345,8 @@ def _canonical_outline_intent(
     return intent
 
 
-def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, Any]) -> dict[str, Any]:
+def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, Any],
+                       *, check_coverage: bool = True) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") not in (1, "1"):
         raise StructuredOutputError("Storyboard outline must have version 1")
     outline = {"version": 1}
@@ -1259,10 +1366,6 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
     for index, raw in enumerate(raw_intents, 1):
         intents.append(_canonical_outline_intent(raw, index, allowed, ask))
     outline["scene_intents"] = intents
-    try:
-        _validate_focus_coverage(intents, ask)
-    except ValueError as exc:
-        raise StructuredOutputError(f"Storyboard outline focus invalid: {exc}") from exc
     if "presentation" in value:
         outline["presentation"] = value["presentation"]
     try:
@@ -1279,6 +1382,8 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
             raise ValueError("presentation.scene_titles references an unplanned scene")
     except (ValueError, TypeError) as exc:
         raise StructuredOutputError(f"Storyboard outline presentation invalid: {exc}") from exc
+    if check_coverage:
+        _validate_focus_coverage(intents, ask)
     return outline
 
 
@@ -1338,6 +1443,90 @@ def _safe_intent_purpose(intent: dict[str, Any], facts: dict[str, dict[str, Any]
                 len(claim) <= _MAX_OUTLINE_PURPOSE_CHARS and fact.get("support")):
             return claim
     return _EDITORIAL_SCENE_PURPOSES[intent["type"]]
+
+
+def _coverage_additions(
+    scenes: list[dict[str, Any]], ask: dict[str, Any], allowed: set[str],
+) -> list[dict[str, Any]]:
+    """Greedily cover missing topics with the fewest stable, cited fact choices."""
+    missing = set(_missing_story_topics(scenes, ask))
+    groups = ask.get("requested_topic_fact_ids", {})
+    facts = ask["research"]["facts"]
+    additions = []
+    while missing:
+        if len(scenes) + len(additions) >= _MAX_STORYBOARD_SCENES:
+            raise StructuredOutputError(
+                f"Requested storyboard coverage has no room within {_MAX_STORYBOARD_SCENES} scenes: "
+                f"{', '.join(sorted(missing))}"
+            )
+        ranked = [(sum(fact["fact_id"] in groups[topic] for topic in missing), -index, fact)
+                  for index, fact in enumerate(facts)]
+        count, _order, chosen = max(ranked, key=lambda item: (item[0], item[1]))
+        if not count:
+            raise StructuredOutputError("Requested storyboard coverage has no supported fact candidate")
+        draft = {"type": "SUMMARY", "fact_ids": [chosen["fact_id"]],
+                 "evidence_refs": chosen["evidence_refs"][:1],
+                 "purpose": (chosen["claim"] if len(chosen["claim"]) <= _MAX_OUTLINE_PURPOSE_CHARS
+                             else _EDITORIAL_SCENE_PURPOSES["SUMMARY"])}
+        position = len(scenes) - int(bool(scenes and (
+            scenes[-1]["type"] == "OUTRO" or ask["required_narration_suffix"]
+        )))
+        additions.append(_canonical_outline_intent(draft, position + len(additions) + 1,
+                                                   allowed, ask))
+        missing -= {topic for topic in missing if chosen["fact_id"] in groups[topic]}
+    return additions
+
+
+def _insert_coverage_scenes(
+    scenes: list[dict[str, Any]], additions: list[dict[str, Any]],
+    presentation: dict[str, Any] | None,
+    *, preserve_existing_ids: bool = False, keep_last: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Insert before OUTRO and keep positional IDs and scene titles aligned."""
+    if not additions:
+        return scenes, presentation
+    at = len(scenes) - int(scenes[-1]["type"] == "OUTRO" or keep_last)
+    if preserve_existing_ids:
+        used = {scene["id"] for scene in scenes}
+        serial = max([int(scene_id[1:]) for scene_id in used
+                      if re.fullmatch(r"s\d+", scene_id)] + [len(scenes)])
+        appended = []
+        for addition in additions:
+            serial += 1
+            while f"s{serial:03d}" in used:
+                serial += 1
+            scene_id = f"s{serial:03d}"
+            used.add(scene_id)
+            appended.append({**addition, "id": scene_id})
+        return [*scenes[:at], *appended, *scenes[at:]], presentation
+    combined = [*scenes[:at], *additions, *scenes[at:]]
+    renamed = {scene["id"]: f"s{index:03d}"
+               for index, scene in enumerate(combined, 1)
+               if not at < index <= at + len(additions)}
+    combined = [{**scene, "id": f"s{index:03d}"}
+                for index, scene in enumerate(combined, 1)]
+    if presentation is not None and "scene_titles" in presentation:
+        presentation = {**presentation, "scene_titles": {
+            renamed.get(scene_id, scene_id): title
+            for scene_id, title in presentation["scene_titles"].items()
+        }}
+    return combined, presentation
+
+
+def _recover_outline_coverage(
+    outline: dict[str, Any], ask: dict[str, Any], allowed: set[str],
+) -> dict[str, Any]:
+    additions = _coverage_additions(outline["scene_intents"], ask, allowed)
+    intents, presentation = _insert_coverage_scenes(
+        outline["scene_intents"], additions, outline.get("presentation"),
+        keep_last=bool(ask["required_narration_suffix"]),
+    )
+    recovered = {**outline, "scene_intents": intents}
+    if presentation is not None:
+        recovered["presentation"] = presentation
+    canonical = _normalize_outline(recovered, allowed, ask)
+    _validate_focus_coverage(canonical["scene_intents"], ask)
+    return canonical
 
 
 def _canonicalize_outline_metadata(
@@ -1430,8 +1619,9 @@ def _scene_part_payload(
               if asset.get("evidence_ref") in supplied]
     index = [item for item in ask["evidence_index"] if item["ref"] in supplied]
     all_intents = outline["scene_intents"]
-    first = int(intents[0]["id"][1:]) - 1
-    last = int(intents[-1]["id"][1:])
+    first = next(index for index, item in enumerate(all_intents)
+                 if item["id"] == intents[0]["id"])
+    last = first + len(intents)
     neighbors = {}
     for key, offset in (("previous_intent", first - 1), ("next_intent", last)):
         if 0 <= offset < len(all_intents):
@@ -1583,6 +1773,7 @@ def _multipart_episode(
         raise ValueError("Storyboard outline input exceeds the configured context budget")
     with step(progress, "Planning storyboard parts"):
         feedback: str | None = None
+        coverage_candidate: dict[str, Any] | None = None
 
         class OutlineRetryProvider:
             def complete_json(self, request_system: str, user: str) -> dict[str, Any]:
@@ -1595,19 +1786,31 @@ def _multipart_episode(
                 return provider.complete_json(request_system, user)
 
         def normalize_outline(value: dict[str, Any]) -> dict[str, Any]:
-            nonlocal feedback
+            nonlocal feedback, coverage_candidate
+            coverage_candidate = None
             try:
-                normalized = _normalize_outline(value, allowed, ask)
-                return _canonicalize_outline_metadata(provider, normalized, ask,
-                                                      project_dir, progress)
-            except StructuredOutputError as exc:
+                normalized = _normalize_outline(value, allowed, ask, check_coverage=False)
+                canonical = _canonicalize_outline_metadata(provider, normalized, ask,
+                                                           project_dir, progress)
+                coverage_candidate = canonical
+                _validate_focus_coverage(canonical["scene_intents"], ask)
+                return canonical
+            except (StructuredOutputError, _RequestedCoverageError) as exc:
                 feedback = _retry_feedback(exc)
                 raise
+
+        def recover_outline(error: Exception) -> dict[str, Any] | None:
+            if not isinstance(error, _RequestedCoverageError) or coverage_candidate is None:
+                return None
+            recovered = _recover_outline_coverage(coverage_candidate, ask, allowed)
+            if progress is not None:
+                progress.note("Outline coverage retries exhausted; adding grounded summary scenes")
+            return recovered
 
         outline_checkpoint = part_dir / "outline.json"
         outline = checkpointed_complete_json(
             OutlineRetryProvider(), outline_system, outline_payload, outline_checkpoint,
-            normalize_outline, max_retries=max_retries,
+            normalize_outline, max_retries=max_retries, recover_exhausted=recover_outline,
         )
         # A checkpoint from an older planner may contain prose that now needs
         # safe canonicalization. Replace its result before scene generation.
