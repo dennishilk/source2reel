@@ -283,7 +283,7 @@ class PhysicalShapedRecoveryTests(unittest.TestCase):
             self.assertEqual([scene["fact_ids"] for scene in episode["scenes"]],
                              [["F0001"], ["F0002"]])
 
-    def test_unsupported_narration_still_fails_after_metadata_repair(self):
+    def test_unsupported_narration_is_replaced_after_metadata_repair(self):
         inventory, research = source(["The tool records local events.",
                                       "The tool reports observed processes."])
 
@@ -306,11 +306,10 @@ class PhysicalShapedRecoveryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = project(Path(tmp))
-            with self.assertRaisesRegex((RuntimeError, StructuredOutputError),
-                                        "unsupported factual proposition|grounding failed"):
-                planner.plan(BadNarration(), research, inventory, path, "The tool", "",
-                             max_retries=0)
+            episode = planner.plan(BadNarration(), research, inventory, path, "The tool", "",
+                                   max_retries=0)
             outline = json_load(path / "manifests" / "storyboard-parts" / "outline.json")["result"]
             self.assertEqual(outline["summary"], " ".join(f["claim"] for f in research["facts"]))
             self.assertEqual(outline["scene_intents"][0]["purpose"], research["facts"][0]["claim"])
-            self.assertFalse((path / "episode.json").exists())
+            self.assertEqual(episode["scenes"][0]["narration"], research["facts"][0]["claim"])
+            self.assertNotIn("predicts every future event", json.dumps(episode))

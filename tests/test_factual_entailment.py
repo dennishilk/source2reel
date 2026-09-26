@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from source2reel.grounding import GroundingError, deterministic_decision, verify_claims
+from source2reel.grounding import deterministic_decision, verify_claims
 from source2reel.planner import (_complete_episode, _make_ask, _normalize_capsules,
                                  _normalize_outline, _primary_anchors, plan)
 from source2reel.providers import OutputLimitExceeded, StructuredOutputError
@@ -215,7 +215,7 @@ class GroundingRegressions(unittest.TestCase):
             self.assertEqual(fact['support'][0]['text'], fact['claim'])
             self.assertRegex(fact['source_fact_id'], r'^R\d{4}$')
 
-    def test_fast_path_rejects_unsupported_purpose(self):
+    def test_fast_path_replaces_unsupported_narration_after_retries(self):
         claim = 'The core dependency graph excludes Torch.'
         ask = _make_ask({'facts': [{'claim': claim, 'evidence_refs': ['E0001'],
                         'support': [{'evidence_ref': 'E0001', 'text': claim}]}], 'assets': []},
@@ -228,8 +228,9 @@ class GroundingRegressions(unittest.TestCase):
                     ' This keeps the engine lightweight and accessible.',
                     'fact_ids': ['F0001'], 'evidence_refs': ['E0001']}]}
 
-        with self.assertRaisesRegex(ValueError, 'unsupported factual proposition'):
-            _complete_episode(Provider(), 'storyboard', ask, {'E0001'}, 0)
+        episode = _complete_episode(Provider(), 'storyboard', ask, {'E0001'}, 0)
+        self.assertEqual(episode['scenes'][0]['narration'], claim)
+        self.assertEqual(episode['scenes'][0]['fact_ids'], ['F0001'])
 
     def test_scene_paraphrase_verifier_sees_only_selected_fact_and_exact_support(self):
         claim = 'The baseline does not install CUDA automatically.'
@@ -265,7 +266,7 @@ class GroundingRegressions(unittest.TestCase):
             {'claim': claim, 'support': [{'evidence_ref': 'E0001', 'text': claim}]}])
         self.assertNotIn(hidden, json.dumps(provider.checked))
 
-    def test_multipart_scene_rejects_expansion_then_resumes_with_grounded_claim(self):
+    def test_multipart_scene_replaces_expansion_and_reuses_grounded_checkpoint(self):
         claim = 'Kokoro runs on CPU for the baseline.'
         inventory = {'evidence': [{'ref': 'E0001', 'kind': 'document',
                                    'relative_path': 'overview.md', 'evidence_role': 'primary',
@@ -298,14 +299,15 @@ class GroundingRegressions(unittest.TestCase):
             (root / 'prompts' / 'storyboard.txt').write_text('storyboard')
             project = root / 'projects' / 'widget'
             provider = Provider()
-            with self.assertRaisesRegex(RuntimeError, 'Storyboard grounding failed'):
-                plan(provider, data, inventory, project, 'Engine', max_retries=0)
-            self.assertFalse((project / 'episode.json').exists())
-            provider.bad = False
             episode = plan(provider, data, inventory, project, 'Engine', max_retries=0)
             self.assertEqual(episode['scenes'][0]['narration'], claim)
+            checkpoint = json_load(project / 'manifests' / 'storyboard-parts' / 'part-001.json')
+            self.assertEqual(checkpoint['result']['scenes'][0]['narration'], claim)
+            provider.bad = False
+            self.assertEqual(plan(provider, data, inventory, project, 'Engine',
+                                  max_retries=0), episode)
 
-    def test_fast_path_fails_closed_without_a_multipart_escape(self):
+    def test_fast_path_fallback_keeps_hallucination_out_without_multipart(self):
         fact = 'The core dependency graph excludes Torch.'
         inventory = {'evidence': [{'ref': 'E0001', 'kind': 'document',
                                    'relative_path': 'deps.md', 'evidence_role': 'primary',
@@ -330,11 +332,11 @@ class GroundingRegressions(unittest.TestCase):
             (root / 'prompts' / 'storyboard.txt').write_text('storyboard')
             project = root / 'projects' / 'sample'
             provider = Provider()
-            with self.assertRaisesRegex(GroundingError, 'unsupported factual proposition'):
-                plan(provider, data, inventory, project, 'Engine', max_retries=0)
+            episode = plan(provider, data, inventory, project, 'Engine', max_retries=0)
             self.assertEqual(provider.calls, 1)
             self.assertIsNone(provider.assert_full)
-            self.assertFalse((project / 'episode.json').exists())
+            self.assertEqual(episode['scenes'][0]['narration'], fact)
+            self.assertEqual(json_load(project / 'episode.json'), episode)
             self.assertFalse((project / 'manifests' / 'storyboard-parts' / 'recovery.json').exists())
 
     def test_explicit_requested_architecture_and_workflow_outweigh_details(self):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -709,12 +710,111 @@ def _validate_scene_facts(scene: dict[str, Any], ask: dict[str, Any],
         raise ValueError(f"{scene.get('id', 'Scene')}: evidence_refs must come from selected fact_ids or selected asset_ref")
 
 
+_MAX_NARRATION_CHARS = 1200
+
+
+class _NarrationGroundingRejected(StructuredOutputError):
+    """A structurally valid scene has narration that cannot pass grounding."""
+
+    failure_category = "narration grounding"
+
+    def __init__(self, scene_id: str, reason: str):
+        self.scene_id = scene_id
+        super().__init__(f"{scene_id}: {reason}")
+
+
+class _NarrationFallbackUnavailable(GroundingError):
+    """No complete selected claim can safely satisfy the narration contract."""
+
+
+def _grounded_narration_fallback(
+    scene: dict[str, Any], ask: dict[str, Any], *, is_final: bool,
+) -> str:
+    """Use complete, selected, supported claims; never derive facts from prose or refs."""
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    selected_ids = list(dict.fromkeys(scene["fact_ids"]))
+    suffix = ask["required_narration_suffix"] if is_final else None
+    available = _MAX_NARRATION_CHARS - (len(suffix) + 1 if suffix else 0)
+    claims: list[str] = []
+    length = 0
+    for fact_id in selected_ids:
+        fact = facts.get(fact_id)
+        if fact is None or not isinstance(fact.get("claim"), str) or not fact["claim"].strip():
+            raise _NarrationFallbackUnavailable(f"{scene['id']}: selected grounded fact claim is missing")
+        spans = fact.get("support")
+        if not isinstance(spans, list) or not spans or any(
+            not isinstance(span, dict) or span.get("evidence_ref") not in fact["evidence_refs"] or
+            not isinstance(span.get("text"), str) or not span["text"].strip()
+            for span in spans
+        ):
+            raise _NarrationFallbackUnavailable(f"{scene['id']}: selected fact lacks exact evidence support")
+        claim = fact["claim"]
+        extra = len(claim) + (1 if claims else 0)
+        if length + extra <= available:
+            claims.append(claim)
+            length += extra
+    if selected_ids and not claims:
+        raise _NarrationFallbackUnavailable(
+            f"{scene['id']}: no complete selected grounded fact claim fits "
+            f"the {_MAX_NARRATION_CHARS}-character narration bound"
+        )
+    if claims:
+        body = " ".join(claims)
+    elif scene["type"] in {"OUTRO", "SECTION_TITLE"} and not scene["evidence_refs"]:
+        body = "Closing."
+    else:
+        raise _NarrationFallbackUnavailable(f"{scene['id']}: no selected facts for factual narration")
+    if suffix:
+        if suffix in body:
+            if body.endswith(suffix) and body.count(suffix) == 1:
+                return body
+            raise _NarrationFallbackUnavailable(
+                f"{scene['id']}: selected claim overlaps the required suffix outside its final position"
+            )
+        body += " " + suffix
+    if len(body) > _MAX_NARRATION_CHARS:
+        raise _NarrationFallbackUnavailable(
+            f"{scene['id']}: narration fallback exceeds the bounded grounding check"
+        )
+    return body
+
+
+def _recognized_grounded_narrations(
+    scenes: list[dict[str, Any]], ask: dict[str, Any], final_scene_id: str,
+) -> dict[str, str]:
+    """Exact selected-claim narrations remain safe when a checkpoint is reused."""
+    recognized: dict[str, str] = {}
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    for scene in scenes:
+        if scene["fact_ids"]:
+            if not any(
+                isinstance(facts[fact_id].get("claim"), str) and
+                scene["narration"].startswith(facts[fact_id]["claim"])
+                for fact_id in scene["fact_ids"]
+            ):
+                continue
+        elif not scene["narration"].startswith("Closing."):
+            continue
+        try:
+            safe = _grounded_narration_fallback(
+                scene, ask, is_final=scene["id"] == final_scene_id,
+            )
+        except _NarrationFallbackUnavailable:
+            continue
+        if scene["narration"] == safe:
+            recognized[scene["id"]] = safe
+    return recognized
+
+
 def _validate_narration_grounding(
     provider: LLMProvider, scenes: list[dict[str, Any]], ask: dict[str, Any],
     project_dir: Path | None, progress: Progress | None = None,
+    trusted_fallbacks: dict[str, str] | None = None,
+    final_scene_id: str | None = None,
 ) -> None:
     """Check actual narration against just the scene's selected source facts."""
     known = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    final_scene_id = final_scene_id or scenes[-1]["id"]
     checks = []
     for scene in scenes:
         selected = [known[ref] for ref in scene.get("fact_ids", [])]
@@ -726,9 +826,13 @@ def _validate_narration_grounding(
             ):
                 raise ValueError(f"{scene['id']}: selected fact lacks exact evidence support")
         narration = scene["narration"].strip()
-        if len(narration) > 1200:
-            raise ValueError(f"{scene['id']}: narration exceeds the bounded grounding check")
-        if (scene == scenes[-1] and ask["required_narration_suffix"] and
+        if len(narration) > _MAX_NARRATION_CHARS:
+            raise _NarrationGroundingRejected(scene["id"], "narration exceeds the bounded grounding check")
+        if scene["id"] in (trusted_fallbacks or {}):
+            if scene["narration"] != trusted_fallbacks[scene["id"]]:
+                raise ValueError(f"{scene['id']}: grounded fallback narration was modified")
+            continue
+        if (scene["id"] == final_scene_id and ask["required_narration_suffix"] and
                 narration.endswith(ask["required_narration_suffix"])):
             narration = narration[:-len(ask["required_narration_suffix"])].strip()
         if not narration:
@@ -750,7 +854,37 @@ def _validate_narration_grounding(
         verified = verify_claims(provider, checks, project_dir, "scene", progress)
     for item in checks:
         if item["id"] not in verified:
-            raise ValueError(f"{item['id']}: narration introduces an unsupported factual proposition")
+            raise _NarrationGroundingRejected(
+                item["id"], "narration introduces an unsupported factual proposition",
+            )
+
+
+def _recover_narration_after_retries(
+    provider: LLMProvider, scenes: list[dict[str, Any]], ask: dict[str, Any],
+    project_dir: Path | None, progress: Progress | None,
+    first_rejected: str, final_scene_id: str,
+) -> list[dict[str, Any]]:
+    """Repair rejected full-response narrations, then check untouched natural scenes."""
+    canonical = [{**scene} for scene in scenes]
+    by_id = {scene["id"]: scene for scene in canonical}
+    trusted: dict[str, str] = {}
+    rejected = first_rejected
+    for _ in canonical:
+        if rejected not in by_id or rejected in trusted:
+            raise StructuredOutputError("Narration recovery selected an invalid scene")
+        scene = by_id[rejected]
+        narration = _grounded_narration_fallback(
+            scene, ask, is_final=rejected == final_scene_id,
+        )
+        scene["narration"] = narration
+        trusted[rejected] = narration
+        try:
+            _validate_narration_grounding(provider, canonical, ask, project_dir, progress,
+                                          trusted_fallbacks=trusted)
+            return canonical
+        except _NarrationGroundingRejected as exc:
+            rejected = exc.scene_id
+    raise StructuredOutputError("Narration recovery could not ground all scenes")
 
 
 def _validate_resource_links(presentation: Any, ask: dict[str, Any]) -> None:
@@ -855,8 +989,24 @@ def _complete_episode(
             _validate_focus_coverage(episode["scenes"], ask)
             _validate_resource_links(episode.get("presentation", {}), ask)
             _validate_final_narration(episode, ask)
-            _validate_narration_grounding(provider, episode["scenes"], ask, project_dir, progress)
+            _validate_narration_grounding(
+                provider, episode["scenes"], ask, project_dir, progress,
+                trusted_fallbacks=_recognized_grounded_narrations(
+                    episode["scenes"], ask, episode["scenes"][-1]["id"],
+                ),
+            )
             return episode
+        except _NarrationGroundingRejected as exc:
+            if attempt == attempts - 1:
+                canonical = _recover_narration_after_retries(
+                    provider, episode["scenes"], ask, project_dir, progress,
+                    exc.scene_id, episode["scenes"][-1]["id"],
+                )
+                episode = {**episode, "scenes": canonical}
+                validate_episode(episode, valid_refs, require_integrated_presentation=True)
+                _validate_final_narration(episode, ask)
+                return episode
+            last_error = exc
         except (ValueError, TypeError) as exc:
             last_error = exc
     assert last_error is not None
@@ -1396,8 +1546,16 @@ def _normalize_scene_part(
         if intents[-1]["id"] == outline["scene_intents"][-1]["id"]:
             _validate_final_narration(partial, ask)
         if provider is not None:
-            _validate_narration_grounding(provider, partial["scenes"], ask, project_dir, progress)
+            _validate_narration_grounding(
+                provider, partial["scenes"], ask, project_dir, progress,
+                trusted_fallbacks=_recognized_grounded_narrations(
+                    partial["scenes"], ask, outline["scene_intents"][-1]["id"],
+                ),
+                final_scene_id=outline["scene_intents"][-1]["id"],
+            )
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        if isinstance(exc, _NarrationGroundingRejected):
+            raise
         raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
     return {"scenes": partial["scenes"]}
 
@@ -1481,6 +1639,7 @@ def _multipart_episode(
     for number, group in enumerate(groups, 1):
         checkpoint = part_dir / f"part-{number:03d}.json"
         part_feedback: dict[tuple[str, ...], str] = {}
+        rejected_candidates: dict[tuple[str, ...], dict[str, Any]] = {}
 
         class SceneRetryProvider:
             def complete_json(self, request_system: str, user: str) -> dict[str, Any]:
@@ -1502,15 +1661,42 @@ def _multipart_episode(
             try:
                 return _normalize_scene_part(value, items, part_allowed, outline, ask,
                                              provider, project_dir, progress)
+            except _NarrationGroundingRejected as exc:
+                if len(items) == 1:
+                    rejected_candidates[(items[0]["id"],)] = copy.deepcopy(value)
+                part_feedback[tuple(item["id"] for item in items)] = _retry_feedback(exc)
+                raise
             except StructuredOutputError as exc:
                 part_feedback[tuple(item["id"] for item in items)] = _retry_feedback(exc)
                 raise
+
+        def recover_single(items: list[dict[str, Any]], error: Exception) -> dict[str, Any] | None:
+            if not isinstance(error, _NarrationGroundingRejected):
+                return None
+            intent = items[0]
+            candidate = rejected_candidates.get((intent["id"],))
+            if candidate is None:
+                return None  # No structurally valid, rejected narration was ever returned.
+            fallback = _grounded_narration_fallback(
+                intent, ask, is_final=intent["id"] == outline["scene_intents"][-1]["id"],
+            )
+            repaired = {**candidate, "scenes": [
+                {**candidate["scenes"][0], "narration": fallback}
+            ]}
+            part_allowed = {entry["ref"] for entry in payload_for(items)["evidence_index"]}
+            canonical = _normalize_scene_part(repaired, items, part_allowed, outline, ask)
+            if canonical["scenes"][0]["narration"] != fallback:
+                raise StructuredOutputError(f"{intent['id']}: grounded fallback narration was modified")
+            if progress is not None:
+                progress.note(f"{intent['id']}: narration grounding retries exhausted; using exact selected claims")
+            return canonical
 
         try:
             results = checkpointed_split_json(
                 SceneRetryProvider(), scene_system, group, payload_for, checkpoint, normalize_for,
                 max_retries=max_retries, progress=progress,
                 label=f"Storyboard part {number}/{len(groups)}", used=used,
+                recover_single=recover_single,
             )
         except RuntimeError as exc:
             if "narration introduces an unsupported factual proposition" in str(exc):

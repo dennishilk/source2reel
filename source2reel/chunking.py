@@ -108,8 +108,9 @@ def checkpointed_complete_json(
     checkpoint: Path,
     normalize: Normalizer,
     max_retries: int = 2,
+    recover_exhausted: Callable[[Exception], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Run one JSON request with an input-hashed checkpoint and bounded retry."""
+    """Run one JSON request with bounded retry and checkpoint only validated output."""
     user = json.dumps(payload, ensure_ascii=False)
     digest = hashlib.sha256((system + "\0" + user).encode("utf-8")).hexdigest()
 
@@ -135,6 +136,15 @@ def checkpointed_complete_json(
             last_error = exc
 
     assert last_error is not None
+    if recover_exhausted is not None:
+        recovered = recover_exhausted(last_error)
+        if recovered is not None:
+            json_dump(checkpoint, {
+                "version": 1,
+                "input_sha256": digest,
+                "result": recovered,
+            })
+            return recovered
     raise last_error
 
 
@@ -166,6 +176,7 @@ def checkpointed_split_json(
     used: set[Path] | None = None,
     max_split_depth: int = MAX_SPLIT_DEPTH,
     split_single: Callable[[Any], tuple[Any, Any] | None] | None = None,
+    recover_single: Callable[[list[Any], Exception], dict[str, Any] | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Retry a part, then split recoverable output; optionally divide one item."""
     if max_split_depth < 0:
@@ -210,6 +221,10 @@ def checkpointed_split_json(
                     return [checkpointed_complete_json(
                         provider, system, payload, path,
                         lambda value: normalize_batch(value, batch), max_retries=max_retries,
+                        recover_exhausted=(
+                            (lambda error: recover_single(batch, error))
+                            if len(batch) == 1 and recover_single is not None else None
+                        ),
                     )]
             except (StructuredOutputError, json.JSONDecodeError) as exc:
                 failure = exc
@@ -254,8 +269,18 @@ def checkpointed_split_json(
                                "reason": reason,
                                "output_limit": isinstance(failure, OutputLimitExceeded)})
         if progress is not None:
-            progress.note(f"{current_label}: malformed or truncated structured output; processing smaller parts"
-                          if not split_known else f"{current_label}: resuming smaller parts")
+            if split_known:
+                progress.note(f"{current_label}: resuming smaller parts")
+            else:
+                if getattr(failure, "failure_category", None) == "narration grounding":
+                    category = "narration grounding failure"
+                elif isinstance(failure, (OutputLimitExceeded, json.JSONDecodeError)) or any(
+                    term in reason.lower() for term in ("malformed", "truncated", "incomplete")
+                ):
+                    category = "malformed or truncated structured output"
+                else:
+                    category = "schema or structural validation failure"
+                progress.note(f"{current_label}: {category}; processing smaller parts")
         first = path.with_name(f"{path.stem}-a{path.suffix}")
         second = path.with_name(f"{path.stem}-b{path.suffix}")
         return run(left, first, depth + 1, suffix + "a") + run(

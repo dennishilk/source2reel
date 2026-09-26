@@ -287,10 +287,15 @@ class MultipartContractIntegrationTests(unittest.TestCase):
         self.assertEqual(self.run_plan(provider), episode)
         self.assertEqual(len(provider.calls), before)
 
-    def test_canonical_refs_do_not_skip_narration_grounding(self):
-        with self.assertRaisesRegex(RuntimeError, "unsupported factual proposition"):
-            self.run_plan(MultipartContractProvider(unsupported_narration=True))
-        self.assertFalse((self.project / "episode.json").exists())
+    def test_canonical_refs_do_not_authorize_unsupported_narration(self):
+        provider = MultipartContractProvider(unsupported_narration=True)
+        episode = self.run_plan(provider)
+        self.assertEqual(episode["scenes"][0]["narration"], CLAIMS[0])
+        self.assertEqual(episode["scenes"][0]["fact_ids"], ["F0001"])
+        self.assertNotIn("unsupported predictions", json.dumps(episode))
+        split = self.project / "manifests" / "storyboard-parts"
+        self.assertEqual(json_load(split / "part-001-a.json")["result"]["scenes"][0]["narration"],
+                         CLAIMS[0])
 
     def test_scene_part_discards_asset_on_non_evidence_type(self):
         class NonEvidenceAsset(MultipartContractProvider):

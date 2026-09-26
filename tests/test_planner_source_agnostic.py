@@ -301,7 +301,7 @@ class SourceProfileTests(unittest.TestCase):
             self.assertEqual(episode["scenes"][0]["narration"], research["facts"][0]["claim"])
             self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 1)
 
-    def test_unsupported_narration_fails_even_with_canonical_refs(self):
+    def test_unsupported_narration_is_replaced_even_with_canonical_refs(self):
         inventory, research = source(["SourceDoc records local input.",
                                       "SourceDoc validates output fields."])
 
@@ -318,11 +318,11 @@ class SourceProfileTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = project(Path(tmp))
-            with self.assertRaisesRegex((RuntimeError, StructuredOutputError),
-                                        "unsupported factual proposition|grounding failed"):
-                planner.plan(UnsupportedNarration(), research, inventory, path,
-                             "SourceDoc", "", max_retries=0)
-            self.assertFalse((path / "episode.json").exists())
+            episode = planner.plan(UnsupportedNarration(), research, inventory, path,
+                                   "SourceDoc", "", max_retries=0)
+            self.assertEqual(episode["scenes"][0]["narration"], research["facts"][0]["claim"])
+            self.assertEqual(episode["scenes"][0]["fact_ids"], ["F0001"])
+            self.assertNotIn("impossible predictions", json.dumps(episode))
 
     def test_legacy_accepted_episode_still_validates(self):
         path = Path(__file__).resolve().parents[1] / "projects" / "cisco-doom-episode-001" / "episode.json"
