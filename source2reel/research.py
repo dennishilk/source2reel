@@ -20,7 +20,8 @@ MAX_ASSETS_PER_REQUEST = 6
 MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
-COVERAGE_CONTRACT = "requested-primary-coverage-v1"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v2"
+COVERAGE_CONTRACT = "requested-primary-coverage-v2"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -36,6 +37,7 @@ def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str,
             "assets_per_request": MAX_ASSETS_PER_REQUEST,
         },
         "grounding_contract": GROUNDING_CONTRACT,
+        "research_semantics_contract": RESEARCH_SEMANTICS_CONTRACT,
         "required_output": {
             "facts": [{
                 "claim": "...",
@@ -122,7 +124,9 @@ _PURPOSE = re.compile(
     r"\b(?:purpose|goal|motivation|because|so that|designed to|created to|"
     r"built to|aims? to|exists? to|in order to)\b", re.I,
 )
-_WORKFLOW = re.compile(r"\b(?:pipeline|workflow|stages?|process|transform|turns?)\b", re.I)
+_WORKFLOW = re.compile(
+    r"\b(?:pipeline|workflow|stages?|transform(?:s|ed|ing)?|turn(?:s|ed|ing)?)\b", re.I,
+)
 _OVERVIEW = re.compile(
     r"\b(?:is|are)\s+(?:an?|the)\b[^.!?;]{0,100}"
     r"\b(?:engine|tool|system|framework|application|platform|library|service|"
@@ -228,7 +232,7 @@ def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
         right = set(spec["right"]) - set(spec["left"])
         return bool(words & set(spec["left"]) and right and right <= words)
     terms = set(spec["terms"])
-    return bool((_WORKFLOW.search(claim) or _ORDER_SOURCE.search(claim)) and
+    return bool(_workflow_signal(claim) and
                 len(words & terms) >= min(2, len(terms)))
 
 
@@ -295,7 +299,7 @@ def _coverage_candidates(
                 continue
             if spec["kind"] == "workflow":
                 terms = set(spec["terms"])
-                if ((_WORKFLOW.search(prose) or _ORDER_SOURCE.search(prose)) and
+                if (_workflow_signal(prose) and
                         (not terms or words & terms)):
                     matched.add(key)
             elif _covers_request(prose, spec):
@@ -378,6 +382,25 @@ _ORDER_SOURCE = re.compile(
     r"ordered\s+steps|workflow\s+(?:runs|follows|begins|starts))\b|->|→",
     re.I,
 )
+_FLOW_ACTION = re.compile(
+    r"\b(?:normaliz(?:e|es|ed|ing)|enqueu(?:e|es|ed|ing)|"
+    r"updat(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|"
+    r"correlat(?:e|es|ed|ing)|classif(?:y|ies|ied|ying)|"
+    r"writ(?:e|es|ten|ing)|stor(?:e|es|ed|ing)|"
+    r"captur(?:e|es|ed|ing)|aggregat(?:e|es|ed|ing)|"
+    r"convert(?:s|ed|ing)?|produc(?:e|es|ed|ing)|"
+    r"emit(?:s|ted|ting)?|read(?:s|ing)?)\b", re.I,
+)
+
+
+def _workflow_signal(text: str) -> bool:
+    """Recognize an operation sequence, never an unqualified process entity."""
+    if _WORKFLOW.search(text) or _ORDER_SOURCE.search(text):
+        return True
+    actions = {match.group().casefold() for match in _FLOW_ACTION.finditer(text)}
+    return len(actions) >= 2 and bool(re.search(r"\b(?:and|then|into)\b|,", text, re.I))
+
+
 _PREDICATE_STOPWORDS = {
     "about", "after", "also", "before", "from", "into", "their", "them",
     "there", "these", "this", "those", "under", "using", "when", "where",
