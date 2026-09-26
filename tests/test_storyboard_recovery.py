@@ -464,10 +464,11 @@ class StoryboardRecoveryTests(unittest.TestCase):
                 provider = BadScene(count=3)
                 provider.first_refs = ["E0001", "E0020"]
                 project = _project(Path(tmp))
-                if bad == "missing":
+                if bad in {"missing", "uncited"}:
                     episode = plan(provider, research, inventory, project, "DemoEngine",
                                    INSTRUCTIONS, max_retries=0)
                     self.assertEqual(episode["scenes"][0]["asset_ref"], "E0020")
+                    self.assertIn("E0020", episode["scenes"][0]["evidence_refs"])
                 else:
                     with self.assertRaisesRegex(RuntimeError, "asset_ref"):
                         plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
