@@ -81,12 +81,11 @@ class FakeProvider:
                 "summary": "Test",
                 "scenes": [{
                     "id": "s001",
-                    "type": "PROJECT_EVIDENCE",
+                    "type": "SUMMARY",
                     "title": "Proof",
                     "narration": fact["claim"],
                     "fact_ids": [fact["fact_id"]],
                     "evidence_refs": [ref],
-                    "asset_ref": ref,
                     "annotations": [],
                     "pad_after_seconds": 0.5,
                     "diagram": {},

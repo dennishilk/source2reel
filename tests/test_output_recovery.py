@@ -284,11 +284,11 @@ class SplitRecoveryTests(unittest.TestCase):
                 fact_id = next(fact["fact_id"] for fact in payload["research"]["facts"]
                                if "E0001" in fact["evidence_refs"])
                 return {"version": 1, "title": "Title", "slug": "title", "summary": "Summary",
-                        "scenes": [{"id": "s001", "type": "PROJECT_EVIDENCE", "title": "Proof",
+                        "scenes": [{"id": "s001", "type": "SUMMARY", "title": "Proof",
                                     "narration": next(f["claim"] for f in payload["research"]["facts"]
                                                       if f["fact_id"] == fact_id),
                                     "evidence_refs": ["E0001"],
-                                    "fact_ids": [fact_id], "asset_ref": "E0001", "annotations": [],
+                                    "fact_ids": [fact_id], "annotations": [],
                                     "pad_after_seconds": 0.5, "diagram": {}, "notes": ""}]}
 
         with tempfile.TemporaryDirectory() as tmp:

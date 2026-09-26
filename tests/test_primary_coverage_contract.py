@@ -144,8 +144,8 @@ class PrimaryCoverageTests(unittest.TestCase):
                                 if ref in fact["evidence_refs"])
                 return {"version": 1, "title": "WidgetEngine", "slug": "widget-engine",
                         "summary": "Evidence-backed summary", "scenes": [{
-                            "id": "s001", "type": "HERO", "narration": selected["claim"],
-                            "fact_ids": [selected["fact_id"]], "evidence_refs": [ref], "asset_ref": ref,
+                            "id": "s001", "type": "SUMMARY", "narration": selected["claim"],
+                            "fact_ids": [selected["fact_id"]], "evidence_refs": [ref],
                         }]}
 
         provider = OmittingProvider()

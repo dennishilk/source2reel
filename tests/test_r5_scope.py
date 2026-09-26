@@ -196,9 +196,9 @@ class PlannerRoleTests(unittest.TestCase):
                 selected = next(fact for fact in payload["research"]["facts"]
                                 if first in fact["evidence_refs"])
                 return {"version": 1, "title": "Demo", "slug": "demo", "summary": "Demo",
-                        "scenes": [{"id": "s001", "type": "PROJECT_EVIDENCE", "title": "Proof",
+                        "scenes": [{"id": "s001", "type": "SUMMARY", "title": "Proof",
                                     "narration": selected["claim"], "evidence_refs": [first],
-                                    "fact_ids": [selected["fact_id"]], "asset_ref": first,
+                                    "fact_ids": [selected["fact_id"]],
                                     "annotations": [], "pad_after_seconds": 0.5,
                                     "diagram": {}, "notes": ""}]}
 

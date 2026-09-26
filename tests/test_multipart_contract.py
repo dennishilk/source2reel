@@ -122,8 +122,7 @@ class MultipartContractMatrixTests(unittest.TestCase):
                     with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
                         self.canonical(refs, asset, kind=kind)
 
-        with self.assertRaisesRegex(StructuredOutputError, "asset_ref is not allowed"):
-            self.canonical(["E0001"], "E0001", kind="CODE")
+        self.assertNotIn("asset_ref", self.canonical(["E0001"], "E0001", kind="CODE"))
         for kind in ("SECTION_TITLE", "OUTRO"):
             with self.subTest(kind=kind):
                 raw = {"type": kind, "purpose": "Closing",
@@ -196,7 +195,7 @@ class MultipartContractProvider:
                 "summary": facts[0]["claim"], "scene_intents": [
                     {"type": "HERO", "purpose": facts[0]["claim"],
                      "fact_ids": [facts[0]["fact_id"]], "evidence_refs": [],
-                     "asset_ref": "E0001"},
+                     "asset_ref": "E0090"},
                     {"type": "CODE", "purpose": facts[1]["claim"],
                      "fact_ids": ["F9999"], "evidence_refs": ["E0002", "E0002"]},
                     {"type": "PROJECT_EVIDENCE", "purpose": facts[2]["claim"],
@@ -268,7 +267,7 @@ class MultipartContractIntegrationTests(unittest.TestCase):
         self.assertEqual([scene["fact_ids"] for scene in episode["scenes"]],
                          [["F0001"], ["F0002"], ["F0003"], ["F0001"]])
         self.assertEqual([scene["evidence_refs"] for scene in episode["scenes"]],
-                         [["E0001"], ["E0002"], ["E0003", "E0090"],
+                         [["E0090", "E0001"], ["E0002"], ["E0003", "E0090"],
                           ["E0001", "E0090"]])
         self.assertEqual(episode["scenes"][2]["asset_ref"], "E0090")
         validate_episode(episode, {"E0001", "E0002", "E0003", "E0090"},
@@ -278,7 +277,7 @@ class MultipartContractIntegrationTests(unittest.TestCase):
         self.assertTrue((parts / "recovery.json").exists())
         saved = json_load(parts / "outline.json")["result"]["scene_intents"]
         self.assertEqual([intent["evidence_refs"] for intent in saved],
-                         [["E0001"], ["E0002"], ["E0003", "E0090"],
+                         [["E0090", "E0001"], ["E0002"], ["E0003", "E0090"],
                           ["E0001", "E0090"]])
         part_scenes = [scene for path in sorted(parts.glob("part-[0-9][0-9][0-9].json"))
                        for scene in json_load(path)["result"]["scenes"]]
@@ -293,7 +292,7 @@ class MultipartContractIntegrationTests(unittest.TestCase):
             self.run_plan(MultipartContractProvider(unsupported_narration=True))
         self.assertFalse((self.project / "episode.json").exists())
 
-    def test_scene_part_rejects_asset_on_non_evidence_type(self):
+    def test_scene_part_discards_asset_on_non_evidence_type(self):
         class NonEvidenceAsset(MultipartContractProvider):
             def complete_json(self, system, user):
                 result = super().complete_json(system, user)
@@ -303,9 +302,10 @@ class MultipartContractIntegrationTests(unittest.TestCase):
                             scene["asset_ref"] = "E0002"
                 return result
 
-        with self.assertRaisesRegex(RuntimeError, "asset_ref is not allowed"):
-            self.run_plan(NonEvidenceAsset())
-        self.assertFalse((self.project / "episode.json").exists())
+        episode = self.run_plan(NonEvidenceAsset())
+        self.assertNotIn("asset_ref", episode["scenes"][1])
+        part = json_load(self.project / "manifests" / "storyboard-parts" / "part-001.json")
+        self.assertNotIn("asset_ref", part["result"]["scenes"][1])
 
 
 if __name__ == "__main__":

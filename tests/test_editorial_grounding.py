@@ -32,7 +32,8 @@ def _evidence():
         "The configuration uses [profile] with name = widget-series.",
     ]
     inventory = {"evidence": [
-        {"ref": f"E{i:04d}", "kind": "document", "relative_path": f"original-{i}.md",
+        {"ref": f"E{i:04d}", "kind": "media" if i == 1 else "document",
+         "relative_path": "original-1.png" if i == 1 else f"original-{i}.md",
          "evidence_role": "primary"} for i in range(1, 6)
     ]}
     research = {"version": 1, "facts": [
@@ -220,11 +221,12 @@ class EditorialGroundingTests(unittest.TestCase):
                 }, {f"E{i:04d}" for i in range(1, 6)}, ask)
                 self.assertEqual(fixed["scene_intents"][0]["fact_ids"], ["F0001"])
         for leak in ("E0002", "E0003", "E0005"):
-            with self.subTest(leak=leak), self.assertRaisesRegex(StructuredOutputError, "evidence_refs"):
-                _normalize_scene_part({"scenes": [{
+            with self.subTest(leak=leak):
+                clean = _normalize_scene_part({"scenes": [{
                     "id": "s001", "type": "CODE", "title": "Workflow", "narration": "Unsupported.",
                     "fact_ids": ["F0001"], "evidence_refs": ["E0001", leak],
                 }]}, outline["scene_intents"], {f"E{i:04d}" for i in range(1, 6)}, outline, ask)
+                self.assertEqual(clean["scenes"][0]["evidence_refs"], ["E0001"])
         with self.assertRaisesRegex(StructuredOutputError, "differ from fixed outline"):
             _normalize_scene_part({"scenes": [{
                 "id": "s001", "type": "CODE", "title": "Workflow", "narration": "Optional repair.",

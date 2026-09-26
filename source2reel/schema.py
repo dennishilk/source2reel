@@ -1,11 +1,43 @@
 from __future__ import annotations
 from typing import Any
+from dataclasses import dataclass
 import math
 import re
 
-SCENE_TYPES={"HERO","PROJECT_EVIDENCE","TERMINAL_EVIDENCE","HARDWARE_EVIDENCE","ARCHITECTURE_DIAGRAM","DATA_FLOW","TIMELINE","CODE","GRAPH","SECTION_TITLE","SUMMARY","OUTRO"}
-EVIDENCE_TYPES={"HERO","PROJECT_EVIDENCE","TERMINAL_EVIDENCE","HARDWARE_EVIDENCE"}
-DIAGRAM_TYPES={"ARCHITECTURE_DIAGRAM","DATA_FLOW","TIMELINE"}
+@dataclass(frozen=True)
+class SceneContract:
+    requires_asset_ref: bool = False
+    allows_asset_ref: bool = False
+    requires_facts: bool = True
+    allows_facts: bool = True
+    requires_diagram: bool = False
+    allows_media_timing: bool = False
+    canonical_optional_fields: frozenset[str] = frozenset({
+        "annotations", "notes", "pad_after_seconds", "captions",
+    })
+
+
+_COMMON_OPTIONAL = frozenset({"annotations", "notes", "pad_after_seconds", "captions"})
+_VISUAL_OPTIONAL = _COMMON_OPTIONAL | {"media"}
+_DIAGRAM_OPTIONAL = _COMMON_OPTIONAL | {"diagram"}
+SCENE_CONTRACTS = {
+    **{name: SceneContract(requires_asset_ref=True, allows_asset_ref=True,
+                           allows_media_timing=True,
+                           canonical_optional_fields=_VISUAL_OPTIONAL)
+       for name in ("HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE")},
+    **{name: SceneContract(requires_diagram=True, canonical_optional_fields=_DIAGRAM_OPTIONAL)
+       for name in ("ARCHITECTURE_DIAGRAM", "DATA_FLOW", "TIMELINE")},
+    **{name: SceneContract(canonical_optional_fields=_DIAGRAM_OPTIONAL)
+       for name in ("CODE", "GRAPH")},
+    **{name: SceneContract(requires_facts=False, canonical_optional_fields=_COMMON_OPTIONAL)
+       for name in ("SECTION_TITLE", "OUTRO")},
+    "SUMMARY": SceneContract(),
+}
+SCENE_TYPES = set(SCENE_CONTRACTS)
+EVIDENCE_TYPES = {name for name, contract in SCENE_CONTRACTS.items()
+                  if contract.requires_asset_ref}
+DIAGRAM_TYPES = {name for name, contract in SCENE_CONTRACTS.items()
+                 if contract.requires_diagram}
 _TIMED_MEDIA_NOTE=re.compile(r"\b(?:start|seek|begin|footage|gameplay)\b[^.\n]{0,80}?\b\d+(?:\.\d+)?\s*(?:seconds?|secs?|s)\b",re.I)
 
 
@@ -43,20 +75,24 @@ def validate_episode(
     if "presentation" in ep and not isinstance(ep["presentation"],dict): raise ValueError("episode.presentation must be an object")
     ids=set()
     for s in scenes:
+        if not isinstance(s, dict): raise ValueError("scene must be an object")
         sid=s.get("id")
         if not isinstance(sid,str) or not sid: raise ValueError("scene.id missing")
         if sid in ids: raise ValueError(f"duplicate scene id {sid}")
         ids.add(sid)
-        if s.get("type") not in SCENE_TYPES: raise ValueError(f"unsupported scene type {s.get('type')}")
+        if not isinstance(s.get("type"),str) or s["type"] not in SCENE_TYPES:
+            raise ValueError(f"unsupported scene type {s.get('type')}")
+        contract=SCENE_CONTRACTS[s["type"]]
         if not isinstance(s.get("narration"),str) or not s["narration"].strip(): raise ValueError(f"{sid}: narration missing")
         refs=s.get("evidence_refs",[])
-        if not isinstance(refs,list): raise ValueError(f"{sid}: evidence_refs must be list")
+        if not isinstance(refs,list) or any(not isinstance(ref,str) for ref in refs):
+            raise ValueError(f"{sid}: evidence_refs must be a list of strings")
         if evidence_refs is not None:
             bad=[r for r in refs if r not in evidence_refs]
             if bad: raise ValueError(f"{sid}: unknown evidence refs {bad}")
-        if s["type"] not in {"SECTION_TITLE","OUTRO"} and not refs:
+        if contract.requires_facts and not refs:
             raise ValueError(f"{sid}: factual/content scene requires evidence_refs")
-        if s["type"] in EVIDENCE_TYPES:
+        if contract.requires_asset_ref:
             aref=s.get("asset_ref")
             if not aref: raise ValueError(f"{sid}: evidence scene requires asset_ref")
             if aref not in refs: raise ValueError(f"{sid}: asset_ref must also appear in evidence_refs")
@@ -66,14 +102,14 @@ def validate_episode(
             start=media["start_seconds"]
             if type(start) not in (int,float) or not math.isfinite(start) or start<0:
                 raise ValueError(f"{sid}: media.start_seconds must be finite and non-negative")
-            if s["type"] not in EVIDENCE_TYPES:
+            if not contract.allows_media_timing:
                 raise ValueError(f"{sid}: media.start_seconds requires an evidence scene")
-        elif s["type"] in EVIDENCE_TYPES and _TIMED_MEDIA_NOTE.search(s.get("notes", "")):
+        elif contract.allows_media_timing and _TIMED_MEDIA_NOTE.search(s.get("notes", "")):
             raise ValueError(f"{sid}: video offset in notes must be media.start_seconds")
         captions=s.get("captions",{})
         if not isinstance(captions,dict) or ("enabled" in captions and type(captions["enabled"]) is not bool):
             raise ValueError(f"{sid}: captions.enabled must be boolean")
-        if s["type"] in DIAGRAM_TYPES:
+        if contract.requires_diagram:
             diagram=s.get("diagram")
             if not isinstance(diagram,dict): raise ValueError(f"{sid}: diagram must be an object")
             nodes=diagram.get("nodes") or diagram.get("steps")

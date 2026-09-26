@@ -21,7 +21,8 @@ CLAIMS = [
 
 
 def ask(shared_ref: bool = False):
-    entries = [{"ref": f"E{i:04d}", "kind": "document", "relative_path": f"docs/{i}.md",
+    entries = [{"ref": f"E{i:04d}", "kind": "media" if i <= 2 else "document",
+                "relative_path": f"media/{i}.png" if i <= 2 else f"docs/{i}.md",
                 "evidence_role": "primary", "excerpt": claim}
                for i, claim in enumerate(CLAIMS, 1)]
     if shared_ref:
@@ -172,12 +173,12 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
                 with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
                     planner._normalize_outline(value, self.allowed, self.ask)
 
-    def test_non_asset_scene_rejects_visual_asset(self):
+    def test_non_asset_scene_discards_visual_asset(self):
         self.add_visual_asset()
         value = outline()
         value["scene_intents"][0]["asset_ref"] = "E0090"
-        with self.assertRaisesRegex(StructuredOutputError, "asset_ref is not allowed"):
-            planner._normalize_outline(value, self.allowed, self.ask)
+        canonical = planner._normalize_outline(value, self.allowed, self.ask)
+        self.assertNotIn("asset_ref", canonical["scene_intents"][0])
 
     def test_omitted_asset_never_supplies_narration_facts(self):
         self.add_visual_asset()

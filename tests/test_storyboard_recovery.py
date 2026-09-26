@@ -28,8 +28,8 @@ INSTRUCTIONS = (
 
 def _source():
     inventory = {"evidence": [
-        {"ref": f"E{i:04d}", "kind": "media" if i == 2 else "document",
-         "relative_path": f"file-{i}.mp4" if i == 2 else f"file-{i}.md",
+        {"ref": f"E{i:04d}", "kind": "media" if i in (1, 2) else "document",
+         "relative_path": f"file-{i}.mp4" if i == 2 else "file-1.png" if i == 1 else f"file-{i}.md",
          "evidence_role": "primary" if i <= 4 else "generated_artifact"}
         for i in range(1, 7)
     ] + [{"ref": "E0099", "kind": "document", "relative_path": "not-researched.md",
@@ -45,8 +45,8 @@ def _source():
 
 def _source_with_two_ref_hero():
     inventory, research = _source()
-    inventory["evidence"].append({"ref": "E0020", "kind": "document",
-                                  "relative_path": "second-proof.md", "evidence_role": "primary"})
+    inventory["evidence"].append({"ref": "E0020", "kind": "media",
+                                  "relative_path": "second-proof.png", "evidence_role": "primary"})
     research["facts"].append({"claim": "Grounded fact 20", "evidence_refs": ["E0020"],
                               "support": [{"evidence_ref": "E0020", "text": "Grounded fact 20"}],
                               "phase": "final", "confidence": "high"})
@@ -184,7 +184,7 @@ class StoryboardRecoveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "evidence_refs|asset_ref"):
                     planner._complete_episode(FullProvider(refs, "E0099"), "storyboard", ask,
                                               {"E0001", "E0002"}, 0)
-        with self.assertRaisesRegex(ValueError, "selected fact_ids or selected asset_ref"):
+        with self.assertRaisesRegex(ValueError, "asset_ref"):
             planner._complete_episode(FullProvider(..., "E0002"), "storyboard", ask,
                                       {"E0001", "E0002"}, 0)
         with self.assertRaisesRegex(ValueError, "evidence_refs"):
@@ -592,16 +592,18 @@ class StoryboardRecoveryTests(unittest.TestCase):
             self.assertTrue((part_dir / "part-001-b.json").exists())
             self.assertTrue((part_dir / "part-002.json").exists())
 
-    def test_invalid_part_cannot_cite_globally_valid_out_of_scope_ref(self):
+    def test_out_of_scope_scene_ref_is_discarded_before_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = _project(Path(tmp))
             provider = StoryboardProvider(count=6)
             provider.bad_part = 2
             inventory, research = _source()
-            with self.assertRaisesRegex((ValueError, RuntimeError), "E0099|invalid structured output"):
-                plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
-                     max_retries=0)
-            self.assertFalse((project / "episode.json").exists())
+            episode = plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
+                           max_retries=0)
+            self.assertNotIn("E0099", {ref for scene in episode["scenes"]
+                                        for ref in scene["evidence_refs"]})
+            part = json_load(project / "manifests" / "storyboard-parts" / "part-002.json")
+            self.assertNotIn("E0099", str(part["result"]))
 
     def test_missing_scene_and_misordered_ids_cannot_silently_assemble(self):
         for broken in ("missing", "reordered"):

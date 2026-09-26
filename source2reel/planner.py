@@ -13,7 +13,8 @@ from .grounding import GROUNDING_CONTRACT, GroundingError, verify_claims
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
 from .research import _consolidate, _fact_scope, _reference_focus
-from .schema import DIAGRAM_TYPES, EVIDENCE_TYPES, SCENE_TYPES, validate_episode, validate_presentation
+from .schema import (DIAGRAM_TYPES, EVIDENCE_TYPES, SCENE_CONTRACTS, SCENE_TYPES,
+                     validate_episode, validate_presentation)
 from .util import json_dump, json_load
 
 
@@ -23,6 +24,21 @@ def _media_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
         for e in inventory["evidence"]
         if e["kind"] == "media"
     ]
+
+
+_RENDERABLE_VISUAL_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif",
+                           ".mp4", ".mov", ".mkv", ".webm"}
+
+
+def _visual_asset_refs(evidence_index: list[dict[str, Any]]) -> list[str]:
+    """Only inventory media that the current renderer can display is visual."""
+    return list(dict.fromkeys(
+        entry["ref"] for entry in evidence_index
+        if entry.get("kind") == "media" and (
+            not entry.get("relative_path") or
+            Path(entry["relative_path"]).suffix.lower() in _RENDERABLE_VISUAL_EXTS
+        )
+    ))
 
 
 def _evidence_index(inventory: dict[str, Any], refs: set[str] | None = None) -> list[dict[str, Any]]:
@@ -147,6 +163,8 @@ def _make_ask(
     resource_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     identified = _identified_research(research, evidence_index)
+    visual_refs = [ref for ref in _visual_asset_refs(evidence_index)
+                   if ref in _research_refs(identified)]
     roles = {entry["ref"]: entry.get("evidence_role") or "primary" for entry in evidence_index}
     requested = _explicit_topic_words(instructions) - _topic_words(title_hint)
     ranked = sorted((
@@ -156,11 +174,33 @@ def _make_ask(
         _fact_scope(fact["evidence_refs"], roles) == "main_subject"
     ), reverse=True)
     priorities = [fact_id for score, _index, fact_id in ranked if score >= 1][:12]
+    first = identified["facts"][0] if identified["facts"] else None
+    example_asset = next((ref for ref in visual_refs if first and (
+        ref in first["evidence_refs"] or any(
+            asset.get("evidence_ref") == ref for asset in identified.get("assets", [])
+        )
+    )), None)
+    example_scene = {
+        "id": "s001", "type": "HERO" if example_asset else "SUMMARY",
+        "title": "English on-screen title", "narration": "English narration",
+        "fact_ids": [first["fact_id"]] if first else [],
+        "evidence_refs": list(dict.fromkeys((first["evidence_refs"][:1] if first else []) +
+                                            ([example_asset] if example_asset else []))),
+    }
+    if example_asset:
+        example_scene["asset_ref"] = example_asset
     return {
         "grounding_contract": GROUNDING_CONTRACT,
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
-        "allowed_scene_types": sorted(SCENE_TYPES),
+        "allowed_scene_types": sorted(
+            SCENE_TYPES if visual_refs else SCENE_TYPES - EVIDENCE_TYPES
+        ),
+        "visual_asset_refs": visual_refs,
+        "visual_asset_requirement": (
+            "Evidence scenes need a visual_asset_refs member selected by a fact or "
+            "research.assets. If none, use a non-evidence type; documents are not visuals."
+        ),
         "research": identified,
         "priority_fact_ids": priorities,
         "priority_requirement": (
@@ -192,19 +232,7 @@ def _make_ask(
                 "headline": ["1–3 evidence-supported lines"],
                 "links": [{"label": "supported resource", "url": ["supported URL"]}],
             }},
-            "scenes": [{
-                "id": "s001",
-                "type": "HERO",
-                "title": "English on-screen title",
-                "narration": "English narration",
-                "fact_ids": ["F0001"],
-                "evidence_refs": ["E0001"],
-                "asset_ref": "E0001",
-                "annotations": [],
-                "pad_after_seconds": 0.5,
-                "diagram": {},
-                "notes": "",
-            }],
+            "scenes": [example_scene],
         },
         "presentation_requirement": (
             "For an OUTRO, include episode.presentation.outro with 1–3 grounded "
@@ -595,7 +623,7 @@ def _repair_episode_shape(
             if not isinstance(raw_scene, dict):
                 repaired.append(raw_scene)
                 continue
-            scene = dict(raw_scene)
+            scene = _canonical_scene_fields(raw_scene)
             if not scene.get("id"):
                 scene["id"] = f"s{index:03d}"
             refs = scene.get("evidence_refs")
@@ -610,10 +638,7 @@ def _repair_episode_shape(
                     unique_refs.append(ref)
                 refs = unique_refs
                 scene["evidence_refs"] = refs
-            evidence_scene = scene.get("type") in {
-                "HERO", "PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"
-            }
-            if evidence_scene:
+            if scene.get("type") in EVIDENCE_TYPES:
                 asset_ref = scene.get("asset_ref")
                 if refs is None:
                     refs = []
@@ -632,13 +657,42 @@ def _repair_episode_shape(
     return ep
 
 
+def _canonical_scene_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Discard fields with no meaning for this scene type before validation."""
+    kind = raw.get("type")
+    contract = SCENE_CONTRACTS.get(kind) if isinstance(kind, str) else None
+    if contract is None:
+        return dict(raw)  # The schema reports the invalid type.
+    fields = {"id", "type", "title", "narration", "fact_ids", "evidence_refs"}
+    fields.update(contract.canonical_optional_fields)
+    if contract.allows_asset_ref:
+        fields.add("asset_ref")
+    scene = {key: value for key, value in raw.items() if key in fields}
+    for optional in contract.canonical_optional_fields:
+        if scene.get(optional) is None:
+            scene.pop(optional, None)
+    return scene
+
+
+def _draft_evidence_refs(raw: dict[str, Any]) -> list[str]:
+    """Treat a missing/null list as omitted refs, with a bounded raw draft."""
+    refs = raw.get("evidence_refs")
+    if refs is None:
+        return []
+    if not isinstance(refs, list) or len(refs) > 64 or any(
+        not isinstance(ref, str) for ref in refs
+    ):
+        raise ValueError("evidence_refs must be a bounded list of strings")
+    return refs
+
+
 def _validate_scene_facts(scene: dict[str, Any], ask: dict[str, Any],
                           fixed_ids: list[str] | None = None) -> None:
     """Bind cited refs to selected claims and an explicitly selected asset."""
     facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
     refs = scene.get("evidence_refs", [])
     ids = scene.get("fact_ids", [])
-    needs_facts = scene.get("type") not in {"SECTION_TITLE", "OUTRO"} or bool(refs)
+    needs_facts = SCENE_CONTRACTS[scene["type"]].requires_facts or bool(refs)
     if not isinstance(ids, list) or len(ids) > 6 or (needs_facts and not ids) or any(
         not isinstance(fact_id, str) or fact_id not in facts for fact_id in ids
     ) or len(set(ids)) != len(ids):
@@ -647,7 +701,7 @@ def _validate_scene_facts(scene: dict[str, Any], ask: dict[str, Any],
         raise ValueError(f"{scene.get('id', 'Scene')}: scene fact_ids differ from fixed outline selection")
     supported = {ref for fact_id in ids for ref in facts[fact_id]["evidence_refs"]}
     asset_ref = scene.get("asset_ref")
-    if scene.get("type") in EVIDENCE_TYPES and asset_ref in {
+    if SCENE_CONTRACTS[scene["type"]].allows_asset_ref and asset_ref in {
         asset.get("evidence_ref") for asset in ask["research"].get("assets", [])
     }:
         supported.add(asset_ref)
@@ -723,6 +777,61 @@ class _EpisodeValidationExhausted(ValueError):
     """Full episode output stayed schema-invalid after bounded retries."""
 
 
+def _canonical_full_episode(episode: dict[str, Any], ask: dict[str, Any],
+                            allowed: set[str]) -> dict[str, Any]:
+    """Give full responses the same fact and asset authority as outline parts."""
+    scenes = episode.get("scenes")
+    if not isinstance(scenes, list):
+        return episode  # The schema reports the missing or malformed scenes.
+    canonical = []
+    for index, raw in enumerate(scenes, 1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Scene {index} must be an object")
+        scene = _canonical_scene_fields(raw)
+        kind = scene.get("type")
+        if not isinstance(kind, str) or kind not in SCENE_CONTRACTS:
+            raise ValueError(f"Scene {index} has an invalid scene type")
+        try:
+            refs = _draft_evidence_refs(scene)
+        except ValueError as exc:
+            raise ValueError(f"{scene['id']}: {exc}") from exc
+        scene["evidence_refs"] = refs
+        if not _valid_outline_fact_ids(scene.get("fact_ids"), scene, ask) and any(
+            ref not in allowed for ref in refs
+        ):
+            raise ValueError(f"{scene['id']}: evidence outside planner scope with invalid fact_ids")
+        scene["fact_ids"] = _outline_fact_ids(scene.get("fact_ids"), scene, ask)
+        scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
+        if len(scene["evidence_refs"]) > 6:
+            raise ValueError(f"{scene['id']}: evidence_refs exceeds six selected refs")
+        _validate_scene_facts(scene, ask)
+        canonical.append(scene)
+    return {**episode, "scenes": canonical}
+
+
+def _retry_feedback(error: Exception) -> str:
+    """Keep retries focused on the contract the previous answer actually broke."""
+    message = str(error)[:260]
+    if "allowed_fact_ids:" in message:
+        return f"{message} Copy only those exact existing IDs; preserve their cited evidence."
+    if "no planner-scoped visual" in message:
+        return (f"Previous storyboard rejected: {message}. This source has no usable "
+                "visual asset for that scene. Keep its selected facts and choose a "
+                "compatible non-evidence scene type.")
+    if "asset_ref" in message or "visual asset" in message:
+        return (f"Previous storyboard rejected: {message}. For evidence scenes, choose a "
+                "renderable visual in visual_asset_refs selected by a fact or research.assets; "
+                "otherwise choose a compatible non-evidence type. Preserve fixed outline assets.")
+    if "evidence" in message or "planner scope" in message:
+        return (f"Previous storyboard rejected: {message}. Select fact_ids first; cite only "
+                "their scoped evidence refs and the authorized visual asset, at most six.")
+    if "unsupported factual" in message or "grounding" in message:
+        return f"Previous storyboard rejected: {message}. Rewrite only unsupported prose using the selected facts."
+    if "presentation" in message or "OUTRO" in message or "link" in message:
+        return f"Previous storyboard rejected: {message}. Repair the OUTRO order and supplied presentation URLs."
+    return f"Previous storyboard rejected: {message}. Repair the stated field and return the required JSON object."
+
+
 def _complete_episode(
     provider: LLMProvider,
     system: str,
@@ -736,16 +845,12 @@ def _complete_episode(
     for attempt in range(attempts):
         payload = dict(ask)
         if last_error is not None:
-            payload["validation_feedback"] = (
-                "The previous storyboard response failed schema validation: "
-                f"{last_error}. Return the requested top-level episode object exactly."
-            )
+            payload["validation_feedback"] = _retry_feedback(last_error)
         raw = provider.complete_json(system, json.dumps(payload, ensure_ascii=False))
         try:
             episode = _repair_episode_shape(raw, valid_refs)
+            episode = _canonical_full_episode(episode, ask, valid_refs)
             validate_episode(episode, valid_refs, require_integrated_presentation=True)
-            for scene in episode["scenes"]:
-                _validate_scene_facts(scene, ask)
             _validate_focus_coverage(episode["scenes"], ask)
             _validate_resource_links(episode.get("presentation", {}), ask)
             _validate_final_narration(episode, ask)
@@ -775,7 +880,7 @@ _OUTLINE_SYSTEM = (
     "Normal workflow scenes must select normal workflow facts, not just setup "
     "or optional maintenance facts. Each intent needs type, purpose (at most "
     "160 characters), and at most six evidence_refs. For each evidence scene "
-    "type, choose one fixed asset_ref from its selected fact refs or selected "
+    "type, choose one fixed visual asset_ref from selected fact refs or "
     "research assets within planner scope, and cite it in evidence_refs; "
     "omit asset_ref for other types. Do not write scene narration yet. "
     "If you plan an OUTRO, it must be the single final scene, with grounded "
@@ -816,6 +921,7 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "project_title_hint": ask["project_title_hint"],
         "optional_instructions": ask["optional_instructions"],
         "allowed_scene_types": ask["allowed_scene_types"],
+        "visual_asset_refs": ask.get("visual_asset_refs", _visual_asset_refs(ask["evidence_index"])),
         "research": ask["research"],
         "media_inventory": ask["media_inventory"],
         "evidence_index": ask["evidence_index"],
@@ -826,7 +932,7 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "priority_requirement": ask["priority_requirement"],
         "scene_type_requirements": {
             "asset_ref_required_types": sorted(EVIDENCE_TYPES),
-            "asset_ref": "For these types, choose one scoped ref from selected fact_ids' fact_evidence_map refs or research.assets evidence_ref; also cite it in evidence_refs. Omit for other types.",
+            "asset_ref": "Choose one visual_asset_refs member from selected fact_ids' fact_evidence_map refs or research.assets evidence_ref; cite it in evidence_refs. Omit for other types.",
         },
         "required_output": {
             "version": 1, "title": "English title", "slug": "short-slug",
@@ -838,7 +944,8 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
                 "fact_ids": ([ask["research"]["facts"][0]["fact_id"]]
                              if ask["research"]["facts"] else []),
                 "evidence_refs": ["a supplied evidence ref"],
-                "asset_ref": "selected fact ref or selected research asset if type requires an asset_ref; omit otherwise",
+                **({"asset_ref": "renderable selected fact ref or selected research asset, for evidence types only"}
+                   if ask.get("visual_asset_refs", _visual_asset_refs(ask["evidence_index"])) else {}),
             }],
         },
     }
@@ -858,7 +965,7 @@ def _final_requests_fit(
 
 
 def _valid_outline_fact_ids(raw: Any, intent: dict[str, Any], ask: dict[str, Any]) -> bool:
-    needs_facts = intent["type"] not in {"SECTION_TITLE", "OUTRO"} or bool(intent["evidence_refs"])
+    needs_facts = SCENE_CONTRACTS[intent["type"]].requires_facts or bool(intent["evidence_refs"])
     if raw is None:
         return not needs_facts
     allowed = {fact["fact_id"] for fact in ask["research"]["facts"]}
@@ -916,26 +1023,32 @@ def _canonical_evidence_refs(
     ))
     selected_asset = intent.get("asset_ref")
     asset_refs = {asset.get("evidence_ref") for asset in ask["research"].get("assets", [])}
-    if intent["type"] in EVIDENCE_TYPES and (
+    contract = SCENE_CONTRACTS[intent["type"]]
+    visual_refs = set(_visual_asset_refs(ask["evidence_index"])) & _research_refs(ask["research"])
+    if contract.requires_asset_ref and not visual_refs:
+        raise ValueError(f"{intent['id']}: no planner-scoped visual asset_ref supports this evidence scene; choose a compatible non-evidence scene type")
+    if contract.requires_asset_ref and (
         not isinstance(selected_asset, str) or not selected_asset.strip() or
-        selected_asset not in allowed or
+        selected_asset not in allowed or selected_asset not in visual_refs or
         (selected_asset not in fact_refs and selected_asset not in asset_refs)
     ):
-        raise ValueError(f"{intent['id']}: asset_ref lacks scoped selected fact or research asset support")
+        raise ValueError(f"{intent['id']}: asset_ref must be a renderable, scoped selected fact or research asset")
     authorized = set(fact_refs)
-    if intent["type"] in EVIDENCE_TYPES and selected_asset in asset_refs:
+    if contract.requires_asset_ref and selected_asset in asset_refs:
         authorized.add(selected_asset)
     kept = list(dict.fromkeys(ref for ref in intent["evidence_refs"] if ref in authorized))
     if selected_asset is not None and selected_asset not in kept:
         if selected_asset not in authorized or len(kept) >= 6:
             raise ValueError(f"{intent['id']}: no room for selected asset_ref in evidence_refs")
         kept.append(selected_asset)
-    if intent["type"] not in {"SECTION_TITLE", "OUTRO"} and not any(
+    if contract.requires_facts and not any(
         ref in fact_refs for ref in kept
     ):
         if not fact_refs or len(kept) >= 6:
             raise ValueError(f"{intent['id']}: selected facts have no room for scoped evidence")
         kept.append(fact_refs[0])
+    if len(kept) > 6:
+        raise ValueError(f"{intent['id']}: evidence_refs exceeds six selected refs")
     return kept
 
 
@@ -945,23 +1058,19 @@ def _canonical_outline_intent(
     """Turn one raw intent into the only form accepted by downstream validators."""
     if not isinstance(raw, dict) or not isinstance(raw.get("type"), str) or raw["type"] not in SCENE_TYPES:
         raise StructuredOutputError(f"Storyboard intent {index} has an invalid scene type")
-    purpose, refs = raw.get("purpose"), raw.get("evidence_refs", [])
+    purpose = raw.get("purpose")
     if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 160:
         raise StructuredOutputError(f"Storyboard intent {index} needs a short purpose")
-    if not isinstance(refs, list) or len(refs) > 6 or any(
-        not isinstance(ref, str) for ref in refs
-    ):
-        raise StructuredOutputError(f"Storyboard intent {index} has invalid evidence_refs")
+    try:
+        refs = _draft_evidence_refs(raw)
+    except ValueError as exc:
+        raise StructuredOutputError(f"Storyboard intent {index} has invalid {exc}") from exc
     intent = {"id": f"s{index:03d}", "type": raw["type"],
               "purpose": purpose.strip(), "evidence_refs": list(dict.fromkeys(refs))}
-    if raw["type"] in EVIDENCE_TYPES:
+    if SCENE_CONTRACTS[raw["type"]].allows_asset_ref:
         # Carry the choice for unique fact-ID recovery, but authorize it only
         # after the selected fact IDs have been fixed.
         intent["asset_ref"] = raw.get("asset_ref")
-    elif "asset_ref" in raw:
-        raise StructuredOutputError(
-            f"Storyboard intent {index} asset_ref is not allowed for {raw['type']}"
-        )
     valid_fact_ids = _valid_outline_fact_ids(raw.get("fact_ids"), intent, ask)
     if not valid_fact_ids and any(ref not in allowed for ref in intent["evidence_refs"]):
         raise StructuredOutputError(f"Storyboard intent {index} cites evidence outside planner scope")
@@ -1088,9 +1197,10 @@ def _scene_part_payload(
                  "narration": "concise evidence-grounded narration",
                  "fact_ids": intent["fact_ids"],
                  "evidence_refs": intent["evidence_refs"]}
-        if intent["type"] in EVIDENCE_TYPES:
+        contract = SCENE_CONTRACTS[intent["type"]]
+        if contract.requires_asset_ref:
             scene["asset_ref"] = intent["asset_ref"]
-        if intent["type"] in DIAGRAM_TYPES:
+        if contract.requires_diagram:
             scene["diagram"] = {"nodes": [
                 "first labeled relationship or step grounded in supplied evidence",
                 "second labeled relationship or step grounded in supplied evidence",
@@ -1141,15 +1251,16 @@ def _normalize_scene_part(
     if not isinstance(scenes, list) or len(scenes) != len(intents):
         raise StructuredOutputError(f"Storyboard part requires exactly {len(intents)} scenes")
     normalized_scenes = []
-    for scene, intent in zip(scenes, intents):
-        if not isinstance(scene, dict) or scene.get("id") != intent["id"] or scene.get("type") != intent["type"]:
+    for raw, intent in zip(scenes, intents):
+        if not isinstance(raw, dict) or raw.get("id") != intent["id"] or raw.get("type") != intent["type"]:
             raise StructuredOutputError(f"Storyboard part scene order/id/type differs from {intent['id']}")
-        refs = scene.get("evidence_refs", [])
-        if not isinstance(refs, list) or len(refs) > 6 or any(
-            not isinstance(ref, str) or ref not in allowed for ref in refs
-        ):
-            raise StructuredOutputError(f"{intent['id']}: evidence refs outside this part's planner scope: {refs}")
-        if intent["type"] in EVIDENCE_TYPES:
+        scene = _canonical_scene_fields(raw)
+        try:
+            refs = _draft_evidence_refs(scene)
+        except ValueError as exc:
+            raise StructuredOutputError(f"{intent['id']}: {exc}") from exc
+        contract = SCENE_CONTRACTS[intent["type"]]
+        if contract.requires_asset_ref:
             fixed = intent["asset_ref"]
             if fixed not in allowed:
                 raise StructuredOutputError(f"{intent['id']}: fixed asset_ref outside this part's planner scope")
@@ -1159,19 +1270,18 @@ def _normalize_scene_part(
                     raise StructuredOutputError(f"{intent['id']}: asset_ref outside this part's planner scope")
                 if returned != fixed:
                     raise StructuredOutputError(f"{intent['id']}: asset_ref differs from fixed outline choice {fixed}")
-            scene = {**scene, "asset_ref": fixed}
-            if fixed not in refs:
-                if len(set(refs)) >= 6:
-                    raise StructuredOutputError(f"{intent['id']}: no room for fixed asset_ref in scene evidence_refs")
-                scene["evidence_refs"] = list(dict.fromkeys(refs)) + [fixed]
-        elif "asset_ref" in scene:
-            raise StructuredOutputError(f"{intent['id']}: asset_ref is not allowed for {intent['type']}")
-        if intent["type"] in DIAGRAM_TYPES:
+            scene["asset_ref"] = fixed
+        if contract.requires_diagram:
             diagram = scene.get("diagram")
             nodes = (diagram.get("nodes") or diagram.get("steps")) if isinstance(diagram, dict) else None
             if not isinstance(nodes, list) or not 2 <= len(nodes) <= 8:
                 raise StructuredOutputError(f"{intent['id']}: diagram nodes/steps require 2–8 labeled entries")
         try:
+            if "fact_ids" not in scene:
+                scene["fact_ids"] = intent["fact_ids"]
+            scene["evidence_refs"] = _canonical_evidence_refs(
+                {**intent, "evidence_refs": refs}, ask, allowed,
+            )
             _validate_scene_facts(scene, ask, intent["fact_ids"])
         except ValueError as exc:
             raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
@@ -1235,11 +1345,7 @@ def _multipart_episode(
                 _validate_outline_grounding(provider, normalized, ask, project_dir, progress)
                 return normalized
             except StructuredOutputError as exc:
-                if "allowed_fact_ids:" in str(exc):
-                    feedback = f"{exc} Copy only these exact existing IDs; keep the evidence refs."
-                else:
-                    feedback = (f"Previous outline rejected: {str(exc)[:190]}. "
-                                "Rewrite the unsupported summary or purpose using only selected facts.")
+                feedback = _retry_feedback(exc)
                 raise
 
         outline = checkpointed_complete_json(
@@ -1270,18 +1376,35 @@ def _multipart_episode(
     used: set[Path] = set()
     for number, group in enumerate(groups, 1):
         checkpoint = part_dir / f"part-{number:03d}.json"
+        part_feedback: dict[tuple[str, ...], str] = {}
+
+        class SceneRetryProvider:
+            def complete_json(self, request_system: str, user: str) -> dict[str, Any]:
+                request = json.loads(user)
+                key = tuple(item["id"] for item in request["scene_intents"])
+                if key in part_feedback:
+                    revised = json.dumps({**request, "validation_feedback": part_feedback[key]},
+                                         ensure_ascii=False)
+                    if fits_context(request_system, revised, context_size,
+                                    output_reserve_tokens, safety_tokens):
+                        user = revised
+                return provider.complete_json(request_system, user)
 
         def payload_for(items: list[dict[str, Any]]) -> dict[str, Any]:
             return _scene_part_payload(ask, outline, items, number, len(groups), scope_id)
 
         def normalize_for(value: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
             part_allowed = {entry["ref"] for entry in payload_for(items)["evidence_index"]}
-            return _normalize_scene_part(value, items, part_allowed, outline, ask,
-                                         provider, project_dir, progress)
+            try:
+                return _normalize_scene_part(value, items, part_allowed, outline, ask,
+                                             provider, project_dir, progress)
+            except StructuredOutputError as exc:
+                part_feedback[tuple(item["id"] for item in items)] = _retry_feedback(exc)
+                raise
 
         try:
             results = checkpointed_split_json(
-                provider, scene_system, group, payload_for, checkpoint, normalize_for,
+                SceneRetryProvider(), scene_system, group, payload_for, checkpoint, normalize_for,
                 max_retries=max_retries, progress=progress,
                 label=f"Storyboard part {number}/{len(groups)}", used=used,
             )
