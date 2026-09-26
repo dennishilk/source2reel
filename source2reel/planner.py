@@ -922,6 +922,10 @@ def _normalize_outline_evidence_refs(
     if intent["type"] in EVIDENCE_TYPES and selected_asset in asset_refs:
         authorized.add(selected_asset)
     kept = [ref for ref in intent["evidence_refs"] if ref in authorized]
+    if selected_asset is not None and selected_asset not in kept:
+        if selected_asset not in authorized or len(kept) >= 6:
+            raise ValueError(f"{intent['id']}: no room for selected asset_ref in evidence_refs")
+        kept.append(selected_asset)
     if intent["type"] not in {"SECTION_TITLE", "OUTRO"} and not any(
         ref in fact_refs for ref in kept
     ):
@@ -966,15 +970,30 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
             raise StructuredOutputError(f"Storyboard intent {index} needs evidence refs")
         if raw["type"] in EVIDENCE_TYPES:
             asset_ref = raw.get("asset_ref")
-            if not isinstance(asset_ref, str) or asset_ref not in refs or asset_ref not in allowed:
+            selected_assets = {asset.get("evidence_ref")
+                               for asset in ask["research"].get("assets", [])}
+            if (not isinstance(asset_ref, str) or not asset_ref.strip() or
+                    asset_ref not in allowed or
+                    (asset_ref not in refs and asset_ref not in selected_assets)):
                 raise StructuredOutputError(
-                    f"Storyboard intent {index} asset_ref must be one of its scoped evidence_refs"
+                    f"Storyboard intent {index} asset_ref must be scoped; "
+                    "an omitted asset_ref must be a selected research asset"
                 )
             intent["asset_ref"] = asset_ref
+        elif "asset_ref" in raw:
+            raise StructuredOutputError(
+                f"Storyboard intent {index} asset_ref is not allowed for {raw['type']}"
+            )
         try:
             intent["fact_ids"] = _outline_fact_ids(raw.get("fact_ids"), intent, ask)
             if valid_fact_ids:
                 intent["evidence_refs"] = _normalize_outline_evidence_refs(intent, ask, allowed)
+            elif "asset_ref" in intent and intent["asset_ref"] not in intent["evidence_refs"]:
+                if len(intent["evidence_refs"]) >= 6:
+                    raise StructuredOutputError(
+                        f"Storyboard intent {index} asset_ref exceeds six evidence_refs"
+                    )
+                intent["evidence_refs"].append(intent["asset_ref"])
             _validate_scene_facts(intent, ask)
         except StructuredOutputError:
             raise

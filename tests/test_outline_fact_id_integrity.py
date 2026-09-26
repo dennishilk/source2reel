@@ -98,6 +98,109 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
         next(item for item in self.ask["evidence_index"]
              if item["ref"] == "E0003")["excerpt"] = CLAIMS[1] + " " + CLAIMS[2]
 
+    def add_visual_asset(self):
+        self.ask["evidence_index"].append({"ref": "E0090", "kind": "media",
+                                           "evidence_role": "primary"})
+        self.ask["research"]["assets"].append({"evidence_ref": "E0090",
+                                                 "purpose": "Visual only"})
+        self.allowed.add("E0090")
+
+    def test_omitted_research_asset_is_added_to_first_evidence_intent(self):
+        self.add_visual_asset()
+        value = outline()
+        value["scene_intents"][0].update({"type": "PROJECT_EVIDENCE", "asset_ref": "E0090"})
+        provider = OutlineProvider([value])
+        episode = self.run_parts(provider)
+        first = episode["scenes"][0]
+        self.assertEqual(first["fact_ids"], ["F0001"])
+        self.assertEqual(first["evidence_refs"], ["E0001", "E0090"])
+        self.assertEqual(first["asset_ref"], "E0090")
+        saved = json_load(self.project / "manifests" / "storyboard-parts" / "outline.json")
+        self.assertEqual(saved["result"]["scene_intents"][0]["evidence_refs"],
+                         ["E0001", "E0090"])
+        self.assertEqual(provider.scene_calls[0]["scene_intents"][0]["asset_ref"], "E0090")
+
+    def test_present_asset_stays_in_returned_order_without_duplication(self):
+        self.add_visual_asset()
+        value = outline()
+        value["scene_intents"][0].update({
+            "type": "HERO", "evidence_refs": ["E0001", "E0090"], "asset_ref": "E0090",
+        })
+        first = planner._normalize_outline(value, self.allowed, self.ask)["scene_intents"][0]
+        self.assertEqual(first["evidence_refs"], ["E0001", "E0090"])
+
+    def test_globally_known_stray_ref_drops_before_missing_asset_is_added(self):
+        self.add_visual_asset()
+        self.ask["evidence_index"].append({"ref": "E9990", "kind": "document",
+                                           "evidence_role": "primary"})
+        self.allowed.add("E9990")
+        value = outline()
+        value["scene_intents"][0].update({
+            "type": "HERO", "evidence_refs": ["E9990", "E0001"], "asset_ref": "E0090",
+        })
+        first = planner._normalize_outline(value, self.allowed, self.ask)["scene_intents"][0]
+        self.assertEqual(first["fact_ids"], ["F0001"])
+        self.assertEqual(first["evidence_refs"], ["E0001", "E0090"])
+
+    def test_six_raw_slots_are_filtered_before_asset_inclusion(self):
+        self.add_visual_asset()
+        extras = [f"E{i:04d}" for i in range(70, 75)]
+        self.ask["evidence_index"].extend({"ref": ref, "kind": "document",
+                                           "evidence_role": "primary"} for ref in extras)
+        self.allowed.update(extras)
+        value = outline()
+        value["scene_intents"][0].update({
+            "type": "HERO", "evidence_refs": extras + ["E0001"], "asset_ref": "E0090",
+        })
+        first = planner._normalize_outline(value, self.allowed, self.ask)["scene_intents"][0]
+        self.assertEqual(first["evidence_refs"], ["E0001", "E0090"])
+        self.assertLessEqual(len(first["evidence_refs"]), 6)
+
+        # Six legitimate fact refs plus a visual asset cannot fit; never drop the asset.
+        source = self.ask["research"]["facts"][0]
+        source["evidence_refs"].extend(extras)
+        source["support"].extend({"evidence_ref": ref, "text": CLAIMS[0]}
+                                 for ref in extras)
+        with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+            planner._normalize_outline(value, self.allowed, self.ask)
+
+    def test_missing_invalid_or_unselected_asset_is_not_repaired(self):
+        for asset in ("E9999", "E0002", 90, ""):
+            with self.subTest(asset=asset):
+                value = outline()
+                value["scene_intents"][0].update({"type": "HERO", "asset_ref": asset})
+                with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+                    planner._normalize_outline(value, self.allowed, self.ask)
+
+    def test_non_asset_scene_rejects_visual_asset(self):
+        self.add_visual_asset()
+        value = outline()
+        value["scene_intents"][0]["asset_ref"] = "E0090"
+        with self.assertRaisesRegex(StructuredOutputError, "asset_ref is not allowed"):
+            planner._normalize_outline(value, self.allowed, self.ask)
+
+    def test_omitted_asset_never_supplies_narration_facts(self):
+        self.add_visual_asset()
+        value = outline()
+        value["scene_intents"][0].update({"type": "HERO", "asset_ref": "E0090"})
+        first = planner._normalize_outline(value, self.allowed, self.ask)["scene_intents"][0]
+        with self.assertRaisesRegex(ValueError, "unsupported factual proposition"):
+            planner._validate_narration_grounding(
+                OutlineProvider([]), [{**first,
+                                       "narration": "WidgetEngine streams unsupported live footage."}],
+                self.ask, self.project,
+            )
+
+    def test_omitted_asset_with_uniquely_recovered_fact_id(self):
+        self.add_visual_asset()
+        value = outline()
+        value["scene_intents"][0].update({
+            "type": "HERO", "fact_ids": ["F0004"], "asset_ref": "E0090",
+        })
+        first = planner._normalize_outline(value, self.allowed, self.ask)["scene_intents"][0]
+        self.assertEqual(first["fact_ids"], ["F0001"])
+        self.assertEqual(first["evidence_refs"], ["E0001", "E0090"])
+
     def test_payload_lists_exact_allowed_fact_ids_and_a_real_example(self):
         request = planner._outline_payload(self.ask)
         self.assertEqual(request["allowed_fact_ids"], ["F0001", "F0002", "F0003"])
