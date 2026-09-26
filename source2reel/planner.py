@@ -851,6 +851,7 @@ def _complete_episode(
             episode = _repair_episode_shape(raw, valid_refs)
             episode = _canonical_full_episode(episode, ask, valid_refs)
             validate_episode(episode, valid_refs, require_integrated_presentation=True)
+            episode = _canonical_full_summary(provider, episode, ask, project_dir, progress)
             _validate_focus_coverage(episode["scenes"], ask)
             _validate_resource_links(episode.get("presentation", {}), ask)
             _validate_final_narration(episode, ask)
@@ -863,6 +864,8 @@ def _complete_episode(
 
 
 _MAX_STORYBOARD_SCENES = 32
+_MAX_OUTLINE_SUMMARY_CHARS = 1600
+_MAX_OUTLINE_PURPOSE_CHARS = 160
 _SCENES_PER_PART = 2
 _OUTLINE_SYSTEM = (
     "\n\nMultipart storyboard outline: return one compact JSON object containing "
@@ -872,7 +875,8 @@ _OUTLINE_SYSTEM = (
     "its purpose and evidence_refs must follow only those selected claims. "
     "Every factual proposition in summary must follow supplied planner facts, "
     "and every factual proposition in an intent purpose must follow that "
-    "intent's selected fact_ids. Unsupported outline prose fails before scene generation. "
+    "intent's selected fact_ids. Unsupported planning labels are replaced "
+    "with exact selected claims or editorial scene labels before scene generation. "
     "Select every fact_id verbatim from allowed_fact_ids; never continue the "
     "numeric sequence or use an ID from a previous request. "
     "Choose evidence_refs from selected fact_ids in fact_evidence_map, plus a "
@@ -1059,8 +1063,8 @@ def _canonical_outline_intent(
     if not isinstance(raw, dict) or not isinstance(raw.get("type"), str) or raw["type"] not in SCENE_TYPES:
         raise StructuredOutputError(f"Storyboard intent {index} has an invalid scene type")
     purpose = raw.get("purpose")
-    if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 160:
-        raise StructuredOutputError(f"Storyboard intent {index} needs a short purpose")
+    if not isinstance(purpose, str) or not purpose.strip():
+        raise StructuredOutputError(f"Storyboard intent {index} needs a purpose")
     try:
         refs = _draft_evidence_refs(raw)
     except ValueError as exc:
@@ -1089,9 +1093,11 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
     if not isinstance(value, dict) or value.get("version") not in (1, "1"):
         raise StructuredOutputError("Storyboard outline must have version 1")
     outline = {"version": 1}
-    for key, limit in (("title", 240), ("slug", 100), ("summary", 1600)):
+    for key, limit in (("title", 240), ("slug", 100), ("summary", None)):
         item = value.get(key)
-        if not isinstance(item, str) or not item.strip() or len(item) > limit:
+        if not isinstance(item, str) or not item.strip() or (
+            limit is not None and len(item) > limit
+        ):
             raise StructuredOutputError(f"Storyboard outline requires a concise {key}")
         outline[key] = item.strip()
     raw_intents = value.get("scene_intents")
@@ -1133,10 +1139,15 @@ _EDITORIAL_ONLY = re.compile(
     r"(?:(?:the|a|an)\s+)?(?:introduction|opening|closing|conclusion|outro|"
     r"summary|transition|section|point\s+\d+)", re.I
 )
+_EDITORIAL_SCENE_PURPOSES = {
+    kind: f"Plan a {kind.lower().replace('_', ' ')} scene" for kind in SCENE_TYPES
+}
 
 
 def _outline_factual_text(purpose: str) -> str:
     """Discard an editorial verb, never the factual object it introduces."""
+    if purpose in _EDITORIAL_SCENE_PURPOSES.values():
+        return ""
     content = _EDITORIAL_PREFIX.sub("", purpose.strip()).strip().rstrip(". ")
     if _EDITORIAL_ONLY.fullmatch(content):
         return ""
@@ -1145,26 +1156,113 @@ def _outline_factual_text(purpose: str) -> str:
     return content
 
 
-def _validate_outline_grounding(
+def _selected_fact_summary(
+    intents: list[dict[str, Any]], ask: dict[str, Any], *, label: str,
+) -> str:
+    """Concatenate only complete, supported claims in episode order."""
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    ids = dict.fromkeys(fact_id for intent in intents for fact_id in intent["fact_ids"])
+    claims: list[str] = []
+    length = 0
+    for fact_id in ids:
+        fact = facts[fact_id]
+        claim = fact.get("claim")
+        if not isinstance(claim, str) or not claim.strip() or not fact.get("support"):
+            continue
+        extra = len(claim) + (1 if claims else 0)
+        if length + extra <= _MAX_OUTLINE_SUMMARY_CHARS:
+            claims.append(claim)
+            length += extra
+    if not claims:
+        raise StructuredOutputError(
+            f"{label}: no selected grounded fact claim fits the {_MAX_OUTLINE_SUMMARY_CHARS}-character summary bound"
+        )
+    return " ".join(claims)
+
+
+def _safe_intent_purpose(intent: dict[str, Any], facts: dict[str, dict[str, Any]]) -> str:
+    for fact_id in intent["fact_ids"]:
+        fact = facts[fact_id]
+        claim = fact.get("claim")
+        if (isinstance(claim, str) and claim.strip() and
+                len(claim) <= _MAX_OUTLINE_PURPOSE_CHARS and fact.get("support")):
+            return claim
+    return _EDITORIAL_SCENE_PURPOSES[intent["type"]]
+
+
+def _canonicalize_outline_metadata(
     provider: LLMProvider, outline: dict[str, Any], ask: dict[str, Any],
     project_dir: Path, progress: Progress | None = None,
-) -> None:
-    """Verify outline labels against planner facts before they reach scene parts."""
+) -> dict[str, Any]:
+    """Verify model labels once, then replace rejected prose without new claims."""
     facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
-    checks = [{"id": "outline-summary", "claim": outline["summary"],
-               "facts": list(facts.values())}]
+    try:
+        safe_summary = _selected_fact_summary(
+            outline["scene_intents"], ask, label="outline-summary",
+        )
+    except StructuredOutputError:
+        safe_summary = None
+    accepted = set()
+    checks = []
+    if outline["summary"] == safe_summary:
+        accepted.add("outline-summary")
+    elif len(outline["summary"]) <= _MAX_OUTLINE_SUMMARY_CHARS:
+        checks.append({"id": "outline-summary", "claim": outline["summary"],
+                       "facts": list(facts.values())})
     for intent in outline["scene_intents"]:
-        claim = _outline_factual_text(intent["purpose"])
-        if claim:
+        purpose = intent["purpose"]
+        claim = _outline_factual_text(purpose)
+        if not claim:
+            continue
+        if len(purpose) <= _MAX_OUTLINE_PURPOSE_CHARS and any(
+            purpose == facts[fact_id]["claim"] and facts[fact_id].get("support")
+            for fact_id in intent["fact_ids"]
+        ):
+            accepted.add(f"outline-{intent['id']}")
+        elif len(purpose) <= _MAX_OUTLINE_PURPOSE_CHARS:
             checks.append({"id": f"outline-{intent['id']}", "claim": claim,
                            "facts": [facts[fact_id] for fact_id in intent["fact_ids"]]})
-    accepted = verify_claims(provider, checks, project_dir, "outline", progress)
-    for check in checks:
-        if check["id"] not in accepted:
+    if checks:
+        accepted.update(verify_claims(provider, checks, project_dir, "outline", progress))
+    canonical = dict(outline)
+    if "outline-summary" not in accepted:
+        if safe_summary is None:
             raise StructuredOutputError(
-                f"{check['id']}: unsupported factual proposition in storyboard outline: "
-                f"{check['claim'][:160]}"
+                f"outline-summary: no selected grounded fact claim fits the "
+                f"{_MAX_OUTLINE_SUMMARY_CHARS}-character summary bound"
             )
+        canonical["summary"] = safe_summary
+    intents = []
+    for intent in outline["scene_intents"]:
+        if (_outline_factual_text(intent["purpose"]) and
+                f"outline-{intent['id']}" not in accepted):
+            intents.append({**intent, "purpose": _safe_intent_purpose(intent, facts)})
+        else:
+            intents.append(intent)
+    canonical["scene_intents"] = intents
+    return canonical
+
+
+def _canonical_full_summary(
+    provider: LLMProvider, episode: dict[str, Any], ask: dict[str, Any],
+    project_dir: Path | None, progress: Progress | None,
+) -> dict[str, Any]:
+    """Full responses use the same non-authoritative summary policy."""
+    if "summary" not in episode:
+        return episode
+    summary = episode["summary"]
+    if isinstance(summary, str) and summary.strip() and len(summary) <= _MAX_OUTLINE_SUMMARY_CHARS:
+        facts = ask["research"]["facts"]
+        check = [{"id": "episode-summary", "claim": summary, "facts": facts}]
+        if project_dir is None:
+            with tempfile.TemporaryDirectory() as tmp:
+                accepted = verify_claims(provider, check, Path(tmp), "episode-summary", progress)
+        else:
+            accepted = verify_claims(provider, check, project_dir, "episode-summary", progress)
+        if "episode-summary" in accepted:
+            return episode
+    fallback = _selected_fact_summary(episode["scenes"], ask, label="episode-summary")
+    return {**episode, "summary": fallback}
 
 
 def _scene_part_payload(
@@ -1342,16 +1440,22 @@ def _multipart_episode(
             nonlocal feedback
             try:
                 normalized = _normalize_outline(value, allowed, ask)
-                _validate_outline_grounding(provider, normalized, ask, project_dir, progress)
-                return normalized
+                return _canonicalize_outline_metadata(provider, normalized, ask,
+                                                      project_dir, progress)
             except StructuredOutputError as exc:
                 feedback = _retry_feedback(exc)
                 raise
 
+        outline_checkpoint = part_dir / "outline.json"
         outline = checkpointed_complete_json(
-            OutlineRetryProvider(), outline_system, outline_payload, part_dir / "outline.json",
+            OutlineRetryProvider(), outline_system, outline_payload, outline_checkpoint,
             normalize_outline, max_retries=max_retries,
         )
+        # A checkpoint from an older planner may contain prose that now needs
+        # safe canonicalization. Replace its result before scene generation.
+        cached = json_load(outline_checkpoint)
+        if cached["result"] != outline:
+            json_dump(outline_checkpoint, {**cached, "result": outline})
 
     scene_system = system + _SCENES_SYSTEM
     intents = outline["scene_intents"]

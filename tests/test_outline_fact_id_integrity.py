@@ -300,8 +300,8 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
             "evidence_refs": ["E0002"], "purpose": CLAIMS[0],
         })
         provider = OutlineProvider([value])
-        with patch("source2reel.planner._validate_outline_grounding",
-                   wraps=planner._validate_outline_grounding) as grounding:
+        with patch("source2reel.planner._canonicalize_outline_metadata",
+                   wraps=planner._canonicalize_outline_metadata) as grounding:
             episode = self.run_parts(provider)
         grounding.assert_called_once()
         self.assertEqual(len(episode["scenes"]), 6)
@@ -321,8 +321,8 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
 
     def test_unique_ref_repairs_only_id_then_normal_grounding_runs(self):
         provider = OutlineProvider([outline("F0004")])
-        with patch("source2reel.planner._validate_outline_grounding",
-                   wraps=planner._validate_outline_grounding) as grounding:
+        with patch("source2reel.planner._canonicalize_outline_metadata",
+                   wraps=planner._canonicalize_outline_metadata) as grounding:
             episode = self.run_parts(provider)
         grounding.assert_called_once()
         self.assertEqual(episode["scenes"][2]["fact_ids"], ["F0003"])
@@ -330,13 +330,15 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
         checkpoint = json_load(self.project / "manifests" / "storyboard-parts" / "outline.json")
         self.assertEqual(checkpoint["result"]["scene_intents"][2]["fact_ids"], ["F0003"])
 
-    def test_unique_id_repair_does_not_repair_unsupported_purpose(self):
+    def test_unique_id_repair_keeps_fact_authority_when_purpose_is_replaced(self):
         value = outline("F0004")
         value["scene_intents"][2]["purpose"] = "WidgetEngine guarantees automatic success."
         provider = OutlineProvider([value])
-        with self.assertRaisesRegex(StructuredOutputError, "outline-s003"):
-            self.run_parts(provider)
-        self.assertFalse((self.project / "manifests" / "storyboard-parts" / "outline.json").exists())
+        episode = self.run_parts(provider)
+        checkpoint = json_load(self.project / "manifests" / "storyboard-parts" / "outline.json")
+        self.assertEqual(checkpoint["result"]["scene_intents"][2]["purpose"], CLAIMS[2])
+        self.assertEqual(checkpoint["result"]["scene_intents"][2]["fact_ids"], ["F0003"])
+        self.assertEqual(episode["scenes"][2]["narration"], CLAIMS[2])
 
     def test_ambiguous_reference_requires_retry_and_fails_closed(self):
         scope = ask(shared_ref=True)

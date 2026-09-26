@@ -287,17 +287,19 @@ class SourceProfileTests(unittest.TestCase):
             self.assertNotIn("E0028", {ref for scene in episode["scenes"]
                                        for ref in scene["evidence_refs"]})
 
-    def test_bad_outline_purpose_fails_before_scene_checkpoint(self):
+    def test_bad_outline_purpose_is_replaced_before_scene_checkpoint(self):
         inventory, research = source(["SourceDoc records local input.",
                                       "SourceDoc validates output fields."])
         with tempfile.TemporaryDirectory() as tmp:
             path = project(Path(tmp))
             provider = ProfileProvider(bad_purpose=True)
-            with self.assertRaisesRegex(StructuredOutputError, "unsupported factual proposition"):
-                planner.plan(provider, research, inventory, path, "SourceDoc", "",
-                             max_retries=0)
-            self.assertFalse((path / "manifests" / "storyboard-parts" / "outline.json").exists())
-            self.assertFalse((path / "episode.json").exists())
+            episode = planner.plan(provider, research, inventory, path, "SourceDoc", "",
+                                   max_retries=0)
+            saved = json_load(path / "manifests" / "storyboard-parts" / "outline.json")
+            self.assertEqual(saved["result"]["scene_intents"][0]["purpose"], research["facts"][0]["claim"])
+            self.assertEqual(saved["result"]["scene_intents"][0]["fact_ids"], ["F0001"])
+            self.assertEqual(episode["scenes"][0]["narration"], research["facts"][0]["claim"])
+            self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 1)
 
     def test_unsupported_narration_fails_even_with_canonical_refs(self):
         inventory, research = source(["SourceDoc records local input.",

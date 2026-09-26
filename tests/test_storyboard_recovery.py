@@ -191,7 +191,7 @@ class StoryboardRecoveryTests(unittest.TestCase):
             planner._complete_episode(FullProvider("E0001"), "storyboard", ask,
                                       {"E0001", "E0002"}, 0)
 
-    def test_bad_outline_retries_before_any_scene_and_is_not_checkpointed(self):
+    def test_unsupported_outline_purpose_is_replaced_without_outline_retry(self):
         class BadFirst(StoryboardProvider):
             bad = True
 
@@ -210,28 +210,17 @@ class StoryboardRecoveryTests(unittest.TestCase):
                 provider = BadFirst(count=3)
                 project = _project(Path(tmp))
                 inventory, research = _source()
-                if retry:
-                    episode = plan(provider, research, inventory, project, "DemoEngine",
-                                   INSTRUCTIONS, max_retries=1)
-                    self.assertEqual(episode["scenes"][0]["id"], "s001")
-                    modes = [call.get("storyboard_mode") for call in provider.calls]
-                    self.assertEqual(modes.count("outline"), 2)
-                    self.assertGreater(modes.index("scenes"), modes.index("outline", modes.index("outline")+1))
-                    second = [call for call in provider.calls if call.get("storyboard_mode") == "outline"][1]
-                    self.assertIn("outline-s001", second["validation_feedback"])
-                    self.assertEqual(json_load(project / "manifests" / "storyboard-parts" /
-                                               "outline.json")["result"]["scene_intents"][0]["purpose"],
-                                     "Grounded fact 1")
-                else:
-                    with self.assertRaisesRegex(StructuredOutputError, "outline-s001"):
-                        plan(provider, research, inventory, project, "DemoEngine",
-                             INSTRUCTIONS, max_retries=0)
-                    saved = project / "manifests" / "storyboard-parts"
-                    self.assertFalse((saved / "outline.json").exists())
-                    self.assertFalse((project / "episode.json").exists())
-                    self.assertNotIn("scenes", [call.get("storyboard_mode") for call in provider.calls])
+                episode = plan(provider, research, inventory, project, "DemoEngine",
+                               INSTRUCTIONS, max_retries=int(retry))
+                self.assertEqual(episode["scenes"][0]["id"], "s001")
+                modes = [call.get("storyboard_mode") for call in provider.calls]
+                self.assertEqual(modes.count("outline"), 1)
+                self.assertIn("scenes", modes)
+                self.assertEqual(json_load(project / "manifests" / "storyboard-parts" /
+                                           "outline.json")["result"]["scene_intents"][0]["purpose"],
+                                 "Grounded fact 1")
 
-    def test_cached_outline_is_revalidated_even_with_current_hash(self):
+    def test_cached_outline_metadata_is_recanonicalized_even_with_current_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = _project(Path(tmp))
             provider = StoryboardProvider(count=3)
@@ -241,13 +230,19 @@ class StoryboardRecoveryTests(unittest.TestCase):
             path = project / "manifests" / "storyboard-parts" / "outline.json"
             saved = json_load(path)
             saved["result"]["summary"] = "AI enrichment provides guaranteed results."
+            saved["result"]["scene_intents"][0]["purpose"] = (
+                "The project predicts every future result."
+            )
             path.write_text(json.dumps(saved))
             before = len([call for call in provider.calls if call.get("storyboard_mode") == "outline"])
             plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
                  max_retries=0)
             after = len([call for call in provider.calls if call.get("storyboard_mode") == "outline"])
-            self.assertEqual(after, before + 1)
-            self.assertEqual(json_load(path)["result"]["summary"], "Grounded fact 1")
+            self.assertEqual(after, before)
+            self.assertEqual(json_load(path)["result"]["summary"],
+                             "Grounded fact 1 Grounded fact 3")
+            self.assertEqual(json_load(path)["result"]["scene_intents"][0]["purpose"],
+                             "Grounded fact 1")
 
     def test_map_reduce_output_limit_reuses_scoped_compaction_on_resume(self):
         class CompactThenRecover(StoryboardProvider):

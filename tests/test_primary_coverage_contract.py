@@ -143,7 +143,7 @@ class PrimaryCoverageTests(unittest.TestCase):
                 selected = next(fact for fact in request["research"]["facts"]
                                 if ref in fact["evidence_refs"])
                 return {"version": 1, "title": "WidgetEngine", "slug": "widget-engine",
-                        "summary": "Evidence-backed summary", "scenes": [{
+                        "summary": selected["claim"], "scenes": [{
                             "id": "s001", "type": "SUMMARY", "narration": selected["claim"],
                             "fact_ids": [selected["fact_id"]], "evidence_refs": [ref],
                         }]}
@@ -301,7 +301,8 @@ class IntegratedOutroTests(unittest.TestCase):
                 if mode is None:
                     if self.full_error:
                         raise self.full_error("oversized complete episode")
-                    return IntegratedOutroTests._episode(PRESENTATION)
+                    return {**IntegratedOutroTests._episode(PRESENTATION),
+                            "summary": "Documented subject"}
                 if mode == "outline":
                     outline = {"version": 1, "title": "Grounded result", "slug": "grounded-result",
                                "summary": "Documented subject", "scene_intents": [{

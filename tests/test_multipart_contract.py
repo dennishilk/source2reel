@@ -257,8 +257,8 @@ class MultipartContractIntegrationTests(unittest.TestCase):
 
     def test_full_overflow_enters_multipart_and_checkpoints_canonical_intents(self):
         provider = MultipartContractProvider()
-        with patch("source2reel.planner._validate_outline_grounding",
-                   wraps=planner._validate_outline_grounding) as outline_grounding, patch(
+        with patch("source2reel.planner._canonicalize_outline_metadata",
+                   wraps=planner._canonicalize_outline_metadata) as outline_grounding, patch(
                    "source2reel.planner._validate_narration_grounding",
                    wraps=planner._validate_narration_grounding) as narration_grounding:
             episode = self.run_plan(provider)

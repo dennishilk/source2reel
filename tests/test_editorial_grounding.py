@@ -10,7 +10,7 @@ import unittest
 from source2reel.planner import (
     _authoritative_resource_urls, _complete_episode, _final_narration_suffix,
     _final_requests_fit, _make_ask, _normalize_outline, _normalize_scene_part,
-    _validate_outline_grounding,
+    _canonicalize_outline_metadata,
     _scene_part_payload, plan,
 )
 from source2reel.chunking import fits_context
@@ -130,7 +130,7 @@ class GroundedProvider:
 
 
 class EditorialGroundingTests(unittest.TestCase):
-    def test_outline_summary_and_purpose_must_follow_their_scoped_facts(self):
+    def test_outline_summary_and_purpose_revert_to_their_scoped_facts(self):
         definition = "WidgetEngine is a reusable evidence-first explainer engine."
         rendering = "The normal workflow renders planned output with local tools."
         facts = [definition, rendering]
@@ -157,7 +157,7 @@ class EditorialGroundingTests(unittest.TestCase):
             clean = outline(definition,
                             "Introduce WidgetEngine as a reusable evidence-first explainer engine.",
                             ["F0001"])
-            _validate_outline_grounding(provider, clean, ask, root)
+            self.assertEqual(_canonicalize_outline_metadata(provider, clean, ask, root), clean)
             for summary, purpose, ids, expected in (
                 (definition, "Turn project sources into finished technical documentaries.",
                  ["F0001"], "outline-s001"),
@@ -168,9 +168,13 @@ class EditorialGroundingTests(unittest.TestCase):
                 (definition, rendering, ["F0001"], "outline-s001"),
             ):
                 with self.subTest(expected=expected, purpose=purpose, summary=summary):
-                    with self.assertRaisesRegex(StructuredOutputError, expected):
-                        _validate_outline_grounding(provider, outline(summary, purpose, ids),
-                                                    ask, root)
+                    raw = outline(summary, purpose, ids)
+                    fixed = _canonicalize_outline_metadata(provider, raw, ask, root)
+                    self.assertEqual(fixed["summary"], definition)
+                    self.assertEqual(fixed["scene_intents"][0]["purpose"], definition)
+                    self.assertEqual(fixed["scene_intents"][0]["fact_ids"], ids)
+                    self.assertEqual(fixed["scene_intents"][0]["evidence_refs"],
+                                     raw["scene_intents"][0]["evidence_refs"])
 
             scene = {"id": "s001", "type": "SUMMARY", "narration":
                      "WidgetEngine guarantees fully autonomous video production.",
