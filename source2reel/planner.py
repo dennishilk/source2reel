@@ -1059,9 +1059,11 @@ def _validate_structured_grounding(
     provider: LLMProvider | None, scenes: list[dict[str, Any]], ask: dict[str, Any],
     project_dir: Path | None, progress: Progress | None = None,
 ) -> None:
-    """Selected fact claims bound every displayed factual structured field."""
+    """Reject unsupported structured fields; omit unsupported optional annotations."""
     facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
     checks = []
+    annotation_checks = []
+    annotation_candidates = []
     for scene in scenes:
         claims = selected_claims(scene, facts)
         for field, label in structured_fields(scene, facts):
@@ -1072,6 +1074,22 @@ def _validate_structured_grounding(
                                "facts": [{"claim": facts[fact_id]["claim"],
                                           "support": facts[fact_id]["support"]}
                                          for fact_id in scene["fact_ids"]]})
+        if "annotations" in scene:
+            candidates = []
+            raw = scene["annotations"]
+            for index, annotation in enumerate(raw if isinstance(raw, list) else []):
+                label = annotation.get("text") if isinstance(annotation, dict) else annotation
+                if not isinstance(label, str) or not label.strip():
+                    continue
+                if not deterministic_field_guard(label, claims):
+                    continue
+                check_id = f"{scene['id']}:annotations[{index}]"
+                candidates.append((check_id, annotation))
+                annotation_checks.append({"id": check_id, "claim": label,
+                                          "facts": [{"claim": facts[fact_id]["claim"],
+                                                     "support": facts[fact_id]["support"]}
+                                                    for fact_id in scene["fact_ids"]]})
+            annotation_candidates.append((scene, candidates))
     if checks:
         if project_dir is None:
             with tempfile.TemporaryDirectory() as tmp:
@@ -1081,6 +1099,30 @@ def _validate_structured_grounding(
         for item in checks:
             if item["id"] not in verified:
                 raise ValueError(f"{item['id']} has unsupported factual content from selected fact_ids")
+    if provider is None:
+        # No semantic verifier: retain only quotes accepted deterministically.
+        accepted_annotations = {item["id"] for item in annotation_checks
+                                if deterministic_decision(item["claim"],
+                                    [fact["claim"] for fact in item["facts"]]) == "accept"}
+    elif annotation_checks:
+        try:
+            if project_dir is None:
+                with tempfile.TemporaryDirectory() as tmp:
+                    accepted_annotations = verify_claims(provider, annotation_checks,
+                                                         Path(tmp), "scene-annotations", progress,
+                                                         max_retries=0, max_split_depth=0)
+            else:
+                accepted_annotations = verify_claims(provider, annotation_checks,
+                                                     project_dir, "scene-annotations", progress,
+                                                     max_retries=0, max_split_depth=0)
+        except Exception:
+            # An unavailable verifier cannot authorize optional model-authored text.
+            accepted_annotations = set()
+    else:
+        accepted_annotations = set()
+    for scene, candidates in annotation_candidates:
+        scene["annotations"] = [annotation for check_id, annotation in candidates
+                                if check_id in accepted_annotations]
 
 
 def _recover_narration_after_retries(

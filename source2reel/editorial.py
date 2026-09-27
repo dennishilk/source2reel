@@ -265,7 +265,7 @@ def _number_in_claim(number: float, claim: str) -> bool:
 
 
 def structured_fields(scene: dict[str, Any], facts: dict[str, dict[str, Any]]) -> list[tuple[str, str]]:
-    """Return factual labels, validating numerical data and displayed code first."""
+    """Return strictly validated structured labels, excluding optional annotations."""
     fields: list[tuple[str, str]] = []
     diagram = scene.get("diagram") or {}
     if not isinstance(diagram, dict):
@@ -280,11 +280,6 @@ def structured_fields(scene: dict[str, Any], facts: dict[str, dict[str, Any]]) -
             if not isinstance(label, str) or not label.strip():
                 raise ValueError(f"{scene['id']}: diagram.{key}[{index}] needs a factual label")
             fields.append((f"diagram.{key}[{index}]", label))
-    for index, annotation in enumerate(scene.get("annotations") or []):
-        label = annotation.get("text") if isinstance(annotation, dict) else annotation
-        if not isinstance(label, str) or not label.strip():
-            raise ValueError(f"{scene['id']}: annotations[{index}] needs text")
-        fields.append((f"annotations[{index}]", label))
     for key in ("title", "x_label", "y_label", "series", "caption"):
         if key in diagram:
             label = diagram[key]

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .chunking import checkpointed_split_json
+from .chunking import MAX_SPLIT_DEPTH, checkpointed_split_json
 from .flow_language import FLOW_ACTION
 from .progress import Progress
 from .providers import LLMProvider, StructuredOutputError
@@ -278,6 +278,7 @@ def _editorial_entailment_candidate(claim: str, support: list[str]) -> bool:
 def verify_claims(
     provider: LLMProvider, items: list[dict[str, Any]], project_dir: Path,
     stage: str, progress: Progress | None = None, *, editorial_omission: bool = False,
+    max_retries: int = 1, max_split_depth: int = MAX_SPLIT_DEPTH,
 ) -> set[str]:
     """Accept deterministic quotes or exact-input checkpointed semantic verdicts.
 
@@ -381,7 +382,8 @@ def verify_claims(
         try:
             results = checkpointed_split_json(
                 provider, system, batch, lambda part: {"checks": part}, checkpoint,
-                normalize, max_retries=1, progress=progress,
+                normalize, max_retries=max_retries, max_split_depth=max_split_depth,
+                progress=progress,
                 label=f"Checking {stage} grounding",
             )
         except Exception:
