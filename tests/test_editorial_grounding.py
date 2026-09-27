@@ -348,7 +348,8 @@ class EditorialGroundingTests(unittest.TestCase):
                            max_retries=0)
             self.assertEqual([s["type"] for s in episode["scenes"]],
                              ["HERO", "DATA_FLOW", "SUMMARY", "SUMMARY", "OUTRO"])
-            self.assertEqual(episode["scenes"][-1]["narration"], "Closing. " + SUFFIX)
+            self.assertEqual(episode["scenes"][-1]["narration"],
+                             research["facts"][0]["claim"] + " " + SUFFIX)
             self.assertEqual(episode["presentation"]["outro"]["links"][0]["url"], [SOURCE_URL])
             self.assertEqual(episode["scenes"][1]["fact_ids"], ["F0001", "F0004"])
             self.assertEqual(episode["scenes"][2]["narration"], research["facts"][2]["claim"])

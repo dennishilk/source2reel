@@ -42,6 +42,9 @@ _CAUSE = re.compile(
 )
 _EXCLUSIVE = re.compile(r"\b(?:only|solely|exclusively|always|never|every)\b", re.I)
 _NEGATIVE = re.compile(r"\b(?:not|no|never|without|excludes?|doesn't|isn't|cannot)\b", re.I)
+_EDITORIAL_SCOPE = re.compile(
+    r"\b(?:all|any|each|every|only|always|solely|exclusively|never|must|cannot)\b", re.I,
+)
 _STOP = set((
     "a an and are as at be been by can do does for from has have in into is it "
     "its of on or our that the their there these this those to was were what when "
@@ -241,9 +244,40 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
     return "verify"
 
 
+def _editorial_entailment_candidate(claim: str, support: list[str]) -> bool:
+    """Select close paraphrases for a verifier; overlap alone never removes a fact.
+
+    This guard is exclusively for omitting repeated editorial content. It does
+    not authorize research, narration, or structured fields. In particular,
+    new names, literals, polarity, and explicit quantifiers block omission.
+    """
+    if len(support) != 1 or not _declarative_text(support[0]):
+        return False
+    source = support[0]
+    words = _words(claim)
+    earlier = _words(source)
+    if len(words) < 4 or len(words & earlier) * 10 < len(words) * 7:
+        return False
+    folded = source.casefold()
+    if any(literal.casefold() not in folded for literal in
+           [*_BACKTICK.findall(claim), *_LITERAL.findall(claim)]):
+        return False
+    if any(match.group().casefold() not in folded for match in _NAMED.finditer(claim)
+           if match.group() not in _INITIAL_WORDS):
+        return False
+    if bool(_NEGATIVE.search(claim)) != bool(_NEGATIVE.search(source)):
+        return False
+    if _CAUSE.search(claim) and not _CAUSE.search(source):
+        return False
+    if any(match.group().casefold() not in folded for match in _EDITORIAL_SCOPE.finditer(claim)
+           if match.group().casefold() != "never"):
+        return False
+    return all(_member_present(member, support) for member in _enumeration_members(claim))
+
+
 def verify_claims(
     provider: LLMProvider, items: list[dict[str, Any]], project_dir: Path,
-    stage: str, progress: Progress | None = None,
+    stage: str, progress: Progress | None = None, *, editorial_omission: bool = False,
 ) -> set[str]:
     """Accept deterministic quotes or exact-input checkpointed semantic verdicts.
 
@@ -264,7 +298,8 @@ def verify_claims(
         decision = deterministic_decision(item["claim"], texts)
         if decision == "accept":
             accepted.add(item["id"])
-        elif decision == "verify":
+        elif decision == "verify" or (editorial_omission and
+                                      _editorial_entailment_candidate(item["claim"], texts)):
             pending.append({**item, "required_propositions": _propositions(item["claim"])})
     if not pending:
         return accepted
@@ -321,7 +356,9 @@ def verify_claims(
                         proposition = mapped["text"]
                         observed.append(proposition)
                         selected = [sources[index] for index in indices]
-                        if deterministic_decision(proposition, selected) == "reject":
+                        if (deterministic_decision(proposition, selected) == "reject" and
+                                not (editorial_omission and
+                                     _editorial_entailment_candidate(proposition, selected))):
                             valid = False
                             break
                         if "facts" in item and any(

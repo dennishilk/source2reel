@@ -95,7 +95,8 @@ class MetadataCanonicalizationTests(unittest.TestCase):
         verify.assert_called_once()  # The exact fallback never returns to the verifier.
         self.assertEqual(fixed["summary"], claims[1] + " " + claims[0])
         self.assertEqual([item["purpose"] for item in fixed["scene_intents"]],
-                         [claims[1], claims[0], claims[1]])
+                         [claims[1], claims[0]])
+        self.assertEqual([item["id"] for item in fixed["scene_intents"]], ["s001", "s002"])
         self.assertNotIn(claims[2], fixed["summary"])
         self.assertEqual(original, snapshot)
         for returned, raw in zip(fixed["scene_intents"], original["scene_intents"]):

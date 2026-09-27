@@ -134,8 +134,13 @@ class RequestedStoryCoverageTests(unittest.TestCase):
                 self.assertEqual(set(caught.exception.missing),
                                  {"overview", "purpose", "workflow"})
 
-    def test_framing_only_does_not_count_and_disjoint_content_can_cover(self):
+    def test_factual_title_counts_as_content_and_disjoint_content_can_cover(self):
         bad = outline(self.ask, [1, 4, 2], ["SECTION_TITLE", "SUMMARY", "OUTRO"])
+        with self.assertRaises(planner._RequestedCoverageError) as caught:
+            planner._normalize_outline(bad, self.allowed, self.ask)
+        self.assertEqual(set(caught.exception.missing), {"purpose", "workflow"})
+        bad["scene_intents"][0].update({"fact_ids": [], "evidence_refs": [],
+                                        "purpose": "Opening"})
         with self.assertRaises(planner._RequestedCoverageError) as caught:
             planner._normalize_outline(bad, self.allowed, self.ask)
         self.assertEqual(set(caught.exception.missing), {"overview", "purpose", "workflow"})
@@ -220,8 +225,7 @@ class RequestedStoryCoverageTests(unittest.TestCase):
                           outline_calls[1]["validation_feedback"])
             checkpoint = json_load(path / "manifests/storyboard-parts/outline.json")
             self.assertEqual([s["fact_ids"] for s in checkpoint["result"]["scene_intents"]],
-                             [["F0004"], ["F0004"], ["F0001"],
-                              ["F0002"], ["F0003"], ["F0004"]])
+                             [["F0004"], ["F0001"], ["F0002"], ["F0003"], ["F0004"]])
             self.assertEqual(episode["scenes"][-1]["type"], "OUTRO")
             self.assertEqual({s["fact_ids"][0] for s in episode["scenes"]
                               if s["type"] not in {"SECTION_TITLE", "OUTRO"}},
@@ -254,8 +258,7 @@ class RequestedStoryCoverageTests(unittest.TestCase):
         self.assertEqual(len(full), 2)
         self.assertIn("purpose -> choose one of F0002", full[1]["validation_feedback"])
         self.assertEqual([s["fact_ids"] for s in episode["scenes"]],
-                         [["F0004"], ["F0004"], ["F0001"],
-                          ["F0002"], ["F0003"], ["F0004"]])
+                         [["F0004"], ["F0001"], ["F0002"], ["F0003"], ["F0004"]])
         self.assertEqual(episode["presentation"]["scene_titles"], {"s003": "The source"})
         self.assertEqual(episode["scenes"][-1]["id"], "s003")
         self.assertEqual({s["narration"] for s in episode["scenes"]
@@ -302,7 +305,7 @@ class RequestedStoryCoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             episode = planner._complete_episode(provider, "storyboard", self.ask,
                                                 self.allowed, 1, project_dir=Path(tmp))
-        added = episode["scenes"][2:5]
+        added = episode["scenes"][1:4]
         self.assertEqual([scene["narration"] for scene in added], CLAIMS[:3])
         self.assertEqual(len([request for request in provider.requests
                               if request.get("storyboard_mode") == "scenes"]), 6)

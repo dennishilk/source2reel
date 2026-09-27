@@ -151,7 +151,7 @@ class EditorialTests(unittest.TestCase):
 
     def test_editorial_contract_is_in_both_checkpoint_inputs(self):
         contract = self.ask["editorial_contract"]
-        self.assertEqual(contract, "storyboard-editorial-grounding-v2")
+        self.assertEqual(contract, "storyboard-editorial-grounding-v3")
         self.assertEqual(planner._outline_payload(self.ask)["editorial_contract"], contract)
         selected = planner._normalize_outline({"version": 1, "title": "ETW", "slug": "etw",
             "summary": CLAIMS[1], "scene_intents": [intent("DATA_FLOW", 2)]},
@@ -159,7 +159,7 @@ class EditorialTests(unittest.TestCase):
         part = planner._scene_part_payload(self.ask, selected, selected["scene_intents"],
                                            1, 1, "scope")
         self.assertEqual(part["editorial_contract"], contract)
-        old = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v1"}
+        old = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v2"}
         digest = lambda value: hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
         self.assertNotEqual(digest(old), digest(self.ask))
 
@@ -179,7 +179,7 @@ class EditorialTests(unittest.TestCase):
             checkpoint = path / "manifests/storyboard-parts/outline.json"
             canonical = json_load(checkpoint)["result"]
             self.assertEqual([item["type"] for item in canonical["scene_intents"]],
-                             ["SECTION_TITLE", "SUMMARY", "DATA_FLOW", "SUMMARY", "OUTRO"])
+                             ["SUMMARY", "SUMMARY", "DATA_FLOW", "SUMMARY", "OUTRO"])
             self.assertEqual(canonical["scene_intents"][1]["fact_ids"], ["F0003"])
             self.assertEqual(canonical["scene_intents"][1]["evidence_refs"], ["E0002"])
             self.assertEqual([scene["type"] for scene in episode["scenes"]],
@@ -200,8 +200,8 @@ class EditorialTests(unittest.TestCase):
             self.assertEqual(run(self.ask), episode)
             self.assertEqual(len(provider.calls), calls)
 
-            # A v1 input hash cannot authorize the v2 canonical checkpoint.
-            older = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v1"}
+            # A v2 input hash cannot authorize the v3 canonical checkpoint.
+            older = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v2"}
             self.assertEqual(run(older), episode)
             self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 2)
             self.assertEqual(run(self.ask), episode)
@@ -222,7 +222,7 @@ class EditorialTests(unittest.TestCase):
             episode = planner._multipart_episode(provider, "storyboard", self.ask,
                 Path(tmp), 32768, 4096, 1024, 0, None, "novelty-scope")
         self.assertEqual([scene["type"] for scene in episode["scenes"]],
-                         ["SECTION_TITLE", "DATA_FLOW", "SUMMARY", "OUTRO"])
+                         ["SUMMARY", "DATA_FLOW", "SUMMARY", "OUTRO"])
         self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 1)
 
     def test_never_improving_provider_prunes_checkpoint_and_part_requests(self):
@@ -347,7 +347,7 @@ class EditorialTests(unittest.TestCase):
                                                check_coverage=False)
         self.assertEqual([scene["id"] for scene in canonical["scene_intents"]],
                          ["s001", "s002", "s003", "s005"])
-        self.assertEqual(canonical["scene_intents"][2]["fact_ids"], ["F0001", "F0002"])
+        self.assertEqual(canonical["scene_intents"][2]["fact_ids"], ["F0002"])
         self.assertEqual(canonical["scene_intents"][-1]["type"], "OUTRO")
         planner.validate_novelty(canonical["scene_intents"])
 

@@ -385,7 +385,14 @@ class CanonicalPropertyMatrix(unittest.TestCase):
                 }, allowed), ask, allowed)
                 part = planner._normalize_scene_part({"scenes": [scene]}, [intent], allowed,
                                                      outline, ask)["scenes"][0]
-                self.assertEqual(full["scenes"][0], part)
+                if kind == "SECTION_TITLE":
+                    # A standalone part uses its supplied intent; a complete
+                    # outline converts this factual title to content first.
+                    self.assertEqual(full["scenes"][0], {
+                        **part, "type": "SUMMARY", "evidence_refs": ["E0001"],
+                    })
+                else:
+                    self.assertEqual(full["scenes"][0], part)
                 self.assertEqual(planner._canonical_full_episode(full, ask, allowed), full)
                 validate_episode(full, allowed, require_integrated_presentation=True)
                 if not contract.allows_asset_ref:

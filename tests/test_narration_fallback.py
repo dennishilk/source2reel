@@ -331,8 +331,8 @@ class GroundedNarrationFallbackTests(unittest.TestCase):
                                    f"End with: “{suffix}”", max_retries=1)
             final = episode["scenes"][-1]
             self.assertEqual(final["type"], "OUTRO")
-            self.assertEqual(final["fact_ids"], [])
-            self.assertEqual(final["narration"], "Closing. " + suffix)
+            self.assertEqual(final["fact_ids"], ["F0001"])
+            self.assertEqual(final["narration"], claim + " " + suffix)
             self.assertEqual(final["narration"].count(suffix), 1)
             self.assertNotIn("perfect predictions", json.dumps(episode))
             validate_episode(episode, {"E0001"}, require_integrated_presentation=True)

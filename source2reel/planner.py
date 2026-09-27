@@ -14,7 +14,9 @@ from .editorial import (EDITORIAL_CONTRACT, SPECIALIZED_TYPES, SceneTypeUnsuitab
                         deterministic_field_guard, prune_redundant_content_scenes,
                         selected_claims, structured_fields, validate_novelty,
                         validate_scene_type)
-from .grounding import GROUNDING_CONTRACT, GroundingError, verify_claims
+from .grounding import (GROUNDING_CONTRACT, GroundingError,
+                        _editorial_entailment_candidate, deterministic_decision,
+                        verify_claims)
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
 from .research import (_consolidate, _fact_scope, _reference_focus,
@@ -514,6 +516,141 @@ def _prune_editorial_repetition(
     return kept, presentation
 
 
+def _canonical_story_composition(
+    scenes: list[dict[str, Any]], presentation: Any, ask: dict[str, Any],
+    allowed: set[str], *, full: bool = False, provider: LLMProvider | None = None,
+    project_dir: Path | None = None, progress: Progress | None = None,
+) -> tuple[list[dict[str, Any]], Any]:
+    """Turn selected, authorized facts into distinct content and a grounded ending."""
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    retained: list[dict[str, Any]] = []
+    exhausted: set[str] = set()
+    prior_ids: list[str] = []
+    used_assets: set[str] = set()
+    for original in scenes:
+        scene = original
+        if scene["type"] == "SECTION_TITLE" and scene.get("fact_ids"):
+            scene = {**scene, "type": "SUMMARY"}
+            scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
+            _validate_scene_facts(scene, ask)
+            if not full and scene["purpose"] == _EDITORIAL_SCENE_PURPOSES["SECTION_TITLE"]:
+                scene["purpose"] = _EDITORIAL_SCENE_PURPOSES["SUMMARY"]
+            if full:
+                scene = _canonical_scene_fields(scene)
+        if scene["type"] == "SECTION_TITLE":
+            if not retained or retained[-1]["type"] != "SECTION_TITLE":
+                retained.append(scene)
+            continue
+        if scene["type"] in {"HERO", "OUTRO"}:
+            retained.append(scene)
+            continue
+
+        asset = scene.get("asset_ref") if scene["type"] in EVIDENCE_TYPES else None
+        distinct_asset = isinstance(asset, str) and asset not in used_assets
+        selected = list(scene["fact_ids"])
+        if not distinct_asset:
+            selected = [fact_id for fact_id in selected if fact_id not in exhausted]
+            if selected and prior_ids:
+                comparisons = []
+                entailed: set[str] = set()
+                for fact_id in selected:
+                    claim = facts[fact_id]["claim"]
+                    for earlier_id in prior_ids:
+                        earlier = facts[earlier_id]["claim"]
+                        comparison_id = f"{scene['id']}:{fact_id}:{earlier_id}"
+                        if deterministic_decision(claim, [earlier]) == "accept":
+                            entailed.add(comparison_id)
+                        elif provider is not None and _editorial_entailment_candidate(
+                            claim, [earlier],
+                        ):
+                            comparisons.append({"id": comparison_id, "claim": claim,
+                                                "support": [earlier]})
+                if comparisons:
+                    if project_dir is None:
+                        with tempfile.TemporaryDirectory() as tmp:
+                            entailed.update(verify_claims(
+                                provider, comparisons, Path(tmp), "editorial-novelty-v3",
+                                progress, editorial_omission=True,
+                            ))
+                    else:
+                        entailed.update(verify_claims(
+                            provider, comparisons, project_dir, "editorial-novelty-v3",
+                            progress, editorial_omission=True,
+                        ))
+                missing_topics = set(_missing_story_topics(retained, ask))
+                selected = [fact_id for fact_id in selected if (
+                    not any(f"{scene['id']}:{fact_id}:{earlier_id}" in entailed
+                            for earlier_id in prior_ids) or
+                    any(fact_id in topic_ids and topic in missing_topics
+                        for topic, topic_ids in ask.get("requested_topic_fact_ids", {}).items())
+                )]
+        if not selected:
+            continue
+        if selected != scene["fact_ids"]:
+            scene = {**scene, "fact_ids": selected}
+            scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
+            if full:
+                # Prior diagram labels and narration may refer to the removed facts.
+                scene = _canonical_scene_fields({**scene, "type": "SUMMARY",
+                                                 "title": "Documented observation",
+                                                 "annotations": None, "notes": None})
+                scene["narration"] = _grounded_narration_fallback(scene, ask, is_final=False)
+            else:
+                scene["purpose"] = _safe_intent_purpose(scene, facts)
+                try:
+                    validate_scene_type(scene, facts, ask["evidence_index"])
+                except SceneTypeUnsuitable:
+                    scene = {**scene, "type": "SUMMARY",
+                             "purpose": _safe_intent_purpose({**scene, "type": "SUMMARY"}, facts)}
+            _validate_scene_facts(scene, ask)
+        retained.append(scene)
+        for fact_id in selected:
+            if fact_id not in exhausted:
+                prior_ids.append(fact_id)
+                exhausted.add(fact_id)
+        if asset:
+            used_assets.add(asset)
+
+    if retained and retained[-1]["type"] == "OUTRO" and not retained[-1]["fact_ids"]:
+        selected_content = list(dict.fromkeys(
+            fact_id for scene in retained if scene["type"] not in {"SECTION_TITLE", "HERO", "OUTRO"}
+            for fact_id in scene["fact_ids"]
+        ))
+        overview = ask.get("requested_topic_fact_ids", {}).get("overview", [])
+        candidates = [fact_id for fact_id in overview if fact_id in selected_content]
+        candidates += [fact_id for fact_id in selected_content if fact_id not in candidates]
+        for fact_id in candidates:
+            draft = {**retained[-1], "fact_ids": [fact_id],
+                     "evidence_refs": [ref for ref in facts[fact_id]["evidence_refs"]
+                                       if ref in allowed][:1]}
+            draft["evidence_refs"] = _canonical_evidence_refs(draft, ask, allowed)
+            _validate_scene_facts(draft, ask)
+            try:
+                narration = _grounded_narration_fallback(draft, ask, is_final=True)
+            except GroundingError:
+                continue
+            if full:
+                draft["narration"] = narration
+            retained[-1] = draft
+            break
+        if selected_content and not retained[-1]["fact_ids"]:
+            raise StructuredOutputError("OUTRO has no supported selected fact that fits its narration")
+
+    kept, presentation = _prune_editorial_repetition(retained, presentation, ask)
+    removed = {scene["id"] for scene in scenes} - {scene["id"] for scene in kept}
+    missing_before = _missing_story_topics(scenes, ask)
+    newly_missing = {topic: ids for topic, ids in _missing_story_topics(kept, ask).items()
+                     if topic not in missing_before}
+    if newly_missing:
+        raise _RequestedCoverageError(newly_missing)
+    if removed and isinstance(presentation, dict) and isinstance(presentation.get("scene_titles"), dict):
+        presentation = {**presentation, "scene_titles": {
+            scene_id: title for scene_id, title in presentation["scene_titles"].items()
+            if scene_id not in removed
+        }}
+    return kept, presentation
+
+
 def _primary_anchors(
     research: dict[str, Any], inventory: dict[str, Any], media_refs: set[str],
     title_hint: str = "", instructions: str = "",
@@ -998,8 +1135,11 @@ class _EpisodeValidationExhausted(ValueError):
     """Full episode output stayed schema-invalid after bounded retries."""
 
 
-def _canonical_full_episode(episode: dict[str, Any], ask: dict[str, Any],
-                            allowed: set[str]) -> dict[str, Any]:
+def _canonical_full_episode(
+    episode: dict[str, Any], ask: dict[str, Any], allowed: set[str],
+    *, provider: LLMProvider | None = None, project_dir: Path | None = None,
+    progress: Progress | None = None,
+) -> dict[str, Any]:
     """Give full responses the same fact and asset authority as outline parts."""
     scenes = episode.get("scenes")
     if not isinstance(scenes, list):
@@ -1034,8 +1174,9 @@ def _canonical_full_episode(episode: dict[str, Any], ask: dict[str, Any],
             # Retain them and discard structured fields tied to the unsuitable type.
             scene = _canonical_scene_fields({**scene, "type": "SUMMARY"})
         canonical.append(scene)
-    canonical, presentation = _prune_editorial_repetition(
-        canonical, episode.get("presentation"), ask,
+    canonical, presentation = _canonical_story_composition(
+        canonical, episode.get("presentation"), ask, allowed,
+        full=True, provider=provider, project_dir=project_dir, progress=progress,
     )
     validate_novelty(canonical)
     result = {**episode, "scenes": canonical}
@@ -1089,7 +1230,10 @@ def _complete_episode(
         raw = provider.complete_json(system, json.dumps(payload, ensure_ascii=False))
         try:
             episode = _repair_episode_shape(raw, valid_refs)
-            episode = _canonical_full_episode(episode, ask, valid_refs)
+            episode = _canonical_full_episode(
+                episode, ask, valid_refs, provider=provider,
+                project_dir=project_dir, progress=progress,
+            )
             validate_episode(episode, valid_refs, require_integrated_presentation=True)
             _validate_structured_grounding(provider, episode["scenes"], ask,
                                            project_dir, progress)
@@ -1424,7 +1568,10 @@ def _canonical_outline_intent(
 
 
 def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, Any],
-                       *, check_coverage: bool = True) -> dict[str, Any]:
+                       *, check_coverage: bool = True,
+                       provider: LLMProvider | None = None,
+                       project_dir: Path | None = None,
+                       progress: Progress | None = None) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") not in (1, "1"):
         raise StructuredOutputError("Storyboard outline must have version 1")
     outline = {"version": 1}
@@ -1490,8 +1637,9 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
                     purpose = _EDITORIAL_SCENE_PURPOSES["SUMMARY"]
                 intent = {**intent, "type": "SUMMARY", "purpose": purpose}
             canonical.append(intent)
-        intents, presentation = _prune_editorial_repetition(
-            canonical, outline.get("presentation"), ask,
+        intents, presentation = _canonical_story_composition(
+            canonical, outline.get("presentation"), ask, allowed,
+            provider=provider, project_dir=project_dir, progress=progress,
         )
         if presentation is not None:
             outline["presentation"] = presentation
@@ -1915,7 +2063,10 @@ def _multipart_episode(
             nonlocal feedback, coverage_candidate
             coverage_candidate = None
             try:
-                normalized = _normalize_outline(value, allowed, ask, check_coverage=False)
+                normalized = _normalize_outline(
+                    value, allowed, ask, check_coverage=False,
+                    provider=provider, project_dir=project_dir, progress=progress,
+                )
                 canonical = _canonicalize_outline_metadata(provider, normalized, ask,
                                                            project_dir, progress)
                 coverage_candidate = canonical
