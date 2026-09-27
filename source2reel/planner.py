@@ -34,8 +34,24 @@ def _media_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _compact_media_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep inspected visual cues without expanding every reduce-level ask."""
+    ai = item.get("ai_media")
+    if not isinstance(ai, dict):
+        return item
+    compact = {key: value[:240] for key in ("category", "caption", "visible_text")
+               if isinstance(value := ai.get(key), str) and value.strip()}
+    if isinstance(ai.get("visible_text"), list):
+        compact["visible_text"] = [str(value)[:120] for value in ai["visible_text"][:4]]
+    if ai.get("evidence_value") in {"high", "medium", "low"}:
+        compact["evidence_value"] = ai["evidence_value"]
+    return {**item, "ai_media": compact}
+
+
 _RENDERABLE_VISUAL_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif",
                            ".mp4", ".mov", ".mkv", ".webm"}
+_PLANNER_MEDIA_CONTRACT = "planner-authentic-media-v1"
+_PLANNER_MEDIA_LIMIT = 5
 
 
 def _visual_asset_refs(evidence_index: list[dict[str, Any]]) -> list[str]:
@@ -325,6 +341,7 @@ def _planner_records(
 def _compact_payload(level: int, part: int, records: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
     return {
         "grounding_contract": GROUNDING_CONTRACT,
+        "planner_media_contract": _PLANNER_MEDIA_CONTRACT,
         "level": level,
         "part": part,
         "project_title_hint": title_hint,
@@ -467,6 +484,97 @@ def _explicit_topic_words(instructions: str) -> set[str]:
                      r"distinguish|compare|how|why|what)\b", clause, re.I):
             subjects.append(clause)
     return _topic_words(" ".join(subjects))
+
+
+def _planner_visuals(
+    research: dict[str, Any], media: list[dict[str, Any]],
+    title_hint: str, instructions: str, inventory: dict[str, Any],
+    limit: int = _PLANNER_MEDIA_LIMIT, selected_hints: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Choose a bounded set of project visuals from original, scoped evidence."""
+    # A title's descriptive subtitle is not a project name. Inspect only the
+    # basename, caption and visible text: a website's shared directory name
+    # must not make every unrelated gallery image look like project evidence.
+    name = re.split(r"[:|\u2014\u2013]", title_hint, maxsplit=1)[0].strip()
+    name_words = re.findall(r"[^\W_]+", name.casefold())
+    name_key = "".join(name_words)
+    stem = (name_key[:-2] if len(name_words) == 1 and name_key.endswith("os")
+            and len(name_key) >= 8 else "")
+    roles = {entry["ref"]: entry.get("evidence_role") or "primary"
+             for entry in inventory["evidence"]}
+    fact_links: dict[str, list[str]] = {}
+    for number, fact in enumerate(research.get("facts", []), 1):
+        refs = fact.get("evidence_refs", [])
+        if _fact_scope(refs, roles) != "main_subject":
+            continue
+        for ref in refs:
+            fact_links.setdefault(ref, []).append(
+                fact.get("source_fact_id", f"R{number:04d}")
+            )
+
+    focus = _reference_focus(title_hint, instructions, inventory)
+    ranked = []
+    for index, item in enumerate(media):
+        ref = item["ref"]
+        if (ref not in roles or (roles[ref] != "primary" and not focus) or
+                ref not in _visual_asset_refs([item])):
+            continue
+        ai = item.get("ai_media") or {}
+        ai = ai if isinstance(ai, dict) else {}
+        caption = ai.get("caption") if isinstance(ai.get("caption"), str) else ""
+        visible = ai.get("visible_text") or ""
+        if isinstance(visible, list):
+            visible = " ".join(str(value) for value in visible)
+        visible = visible if isinstance(visible, str) else ""
+        basename = Path(item.get("relative_path") or "").stem
+        description = " ".join((caption, visible, basename))
+        words = re.findall(r"[^\W_]+", description.casefold())
+        joined = "".join(words)
+        software = bool(re.search(
+            r"\b(?:screenshot|screen|desktop|terminal|console|interface|"
+            r"editor|file\s*manager|file\s*browser|software|application|"
+            r"preview|output|logo|ui)\b",
+            re.sub(r"[_-]", " ", " ".join((str(ai.get("category") or ""), description))).casefold(),
+        ))
+        identity = bool(name_key and (name_key in joined or (
+            stem and any(word.startswith(stem) for word in words)
+        )))
+        hint = (selected_hints or {}).get(ref, "")
+        hint_words = re.findall(r"[^\W_]+", hint.casefold())
+        hinted_identity = bool(software and name_key and (
+            name_key in "".join(hint_words) or
+            (stem and any(word.startswith(stem) for word in hint_words))
+        ))
+        linked = ref in fact_links and bool(
+            software or caption or visible or identity
+        )
+        # Project identity by itself does not qualify an unrelated photo.
+        # A lower-level model hint can identify a real software screenshot,
+        # but cannot turn an inspected gallery photo into software evidence.
+        if not linked and not (identity and software) and not hinted_identity:
+            continue
+        tier = (3 if (identity or hinted_identity) and software
+                else 2 if linked and software else 1)
+        evidence_value = {"high": 2, "medium": 1}.get(ai.get("evidence_value"), 0)
+        ranked.append((-tier, -evidence_value, index, ref,
+                       hint if hinted_identity and not identity else caption or hint))
+
+    capsules = []
+    for _tier, _value, _index, ref, caption in sorted(ranked)[:limit]:
+        capsules.append({
+            "kind": "asset", "claim": "", "evidence_refs": [ref],
+            "media_refs": [ref], "visual_purpose": (caption or f"Authentic visual for {name}")[:160],
+            "phase": "unknown", "confidence": "low",
+        })
+    return capsules
+
+
+def _carry_planner_visuals(
+    capsules: list[dict[str, Any]], selected: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reattach the same authorized media after every model reduction level."""
+    return [{**capsule, "media_refs": []} for capsule in capsules
+            if capsule.get("kind") != "asset"] + selected
 
 
 class _RequestedCoverageError(StructuredOutputError):
@@ -778,6 +886,11 @@ def _evidence_scope(index: list[dict[str, Any]]) -> dict[str, list[str]]:
 
 
 def _capsules_to_research(capsules: list[dict[str, Any]]) -> dict[str, Any]:
+    fact_links: dict[str, list[str]] = {}
+    for capsule in capsules:
+        if capsule.get("kind") != "asset":
+            for ref in capsule["evidence_refs"]:
+                fact_links.setdefault(ref, []).append(capsule["source_fact_id"])
     return {
         "version": 1,
         "facts": [{
@@ -792,6 +905,7 @@ def _capsules_to_research(capsules: list[dict[str, Any]]) -> dict[str, Any]:
             "evidence_ref": ref,
             "purpose": c["visual_purpose"],
             "authentic_project_media": True,
+            **({"source_fact_ids": fact_links[ref]} if ref in fact_links else {}),
         } for c in capsules for ref in c["media_refs"]],
     }
 
@@ -2346,6 +2460,10 @@ def plan(
         [] if _reference_focus(title_hint, instructions, inventory)
         else _primary_anchors(research, inventory, media_ref_set, title_hint, instructions)
     )
+    # Small local contexts cannot carry the same number of media descriptions
+    # as full-size models; keep at least one direct project visual when usable.
+    media_limit = min(_PLANNER_MEDIA_LIMIT, max(1, context_size // 8192))
+    selected_visuals: list[dict[str, Any]] = []
     make_compact_payload = lambda level, part, batch: _compact_payload(level, part, batch, title_hint, instructions)
 
     for level in range(1, max(1, max_reduce_levels) + 1):
@@ -2377,7 +2495,21 @@ def plan(
             for result in results:
                 capsules.extend(result["capsules"])
 
-        capsules = _scope_capsules(capsules, anchors, inventory, title_hint, instructions)
+        if level == 1:
+            selected_hints: dict[str, str] = {}
+            for capsule in capsules:
+                for ref in capsule.get("media_refs", []):
+                    selected_hints[ref] = " ".join(filter(None, (
+                        selected_hints.get(ref, ""), capsule.get("visual_purpose", ""),
+                    )))
+            selected_visuals = _planner_visuals(
+                research, media, title_hint, instructions, inventory,
+                media_limit, selected_hints,
+            )
+        capsules = _carry_planner_visuals(
+            _scope_capsules(capsules, anchors, inventory, title_hint, instructions),
+            selected_visuals,
+        )
         if not capsules:
             raise RuntimeError("Planner compaction returned no evidence-grounded capsules")
 
@@ -2388,7 +2520,8 @@ def plan(
             for capsule in capsules
             for ref in capsule.get("media_refs", [])
         }
-        compact_media = [m for m in media if m["ref"] in selected_media_refs]
+        compact_media = [_compact_media_item(m) for m in media
+                         if m["ref"] in selected_media_refs]
         compact_index = _evidence_index(inventory, selected_refs | selected_media_refs)
         ask = _make_ask(compact_research, compact_media, compact_index,
                         title_hint, instructions, resource_urls)
