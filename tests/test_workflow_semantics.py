@@ -13,8 +13,9 @@ from source2reel.grounding import _declarative_text
 from source2reel.planner import _make_ask
 from source2reel.research import (
     COVERAGE_CONTRACT, RESEARCH_SEMANTICS_CONTRACT, _coverage_candidates,
-    _coverage_payload, _covers_request, _missing_requested_concepts, _payload,
-    _requested_concepts, _workflow_signal, _workflow_source_match,
+    _coverage_payload, _covers_request, _exact_workflow_fact,
+    _missing_requested_concepts, _payload, _requested_concepts,
+    _workflow_signal, _workflow_source_match, _workflow_source_passage, research,
 )
 from source2reel.util import json_dump, json_load
 
@@ -48,7 +49,9 @@ README = (
     "provider, restart elevated.\n\n"
     "Generate normal network traffic.\n\n"
     "Record Capture writes retained events.\n\n"
-    "The privacy workflow keeps processing local."
+    "The privacy workflow keeps processing local.\n\n"
+    "Passive observation and correlation are distinct from blocking, "
+    "interception, and proven causality."
 )
 
 
@@ -61,6 +64,34 @@ def fact(claim: str, ref: str = "E0002") -> dict:
 def digest(system: str, payload: dict) -> str:
     user = json.dumps(payload, ensure_ascii=False)
     return hashlib.sha256((system + "\0" + user).encode("utf-8")).hexdigest()
+
+
+MALFORMED_WORKFLOW_CLAIM = (
+    "ETW events are ingested, normalized, and correlated into structured events "
+    "with metadata including process, service, DNS, and task context."
+)
+MALFORMED_SUPPORT = (
+    "The platform-facing engine owns: ... PID/process metadata ... DNS ..."
+)
+
+
+class PhysicalCoverageProvider:
+    def __init__(self, recovered: list[dict]):
+        self.recovered = recovered
+        self.research_calls = 0
+        self.coverage_calls: list[dict] = []
+        self.verifier_calls = 0
+
+    def complete_json(self, _system: str, user: str) -> dict:
+        payload = json.loads(user)
+        if "checks" in payload:
+            self.verifier_calls += 1
+            return {"decisions": []}
+        if payload.get("research_mode") == "requested_coverage":
+            self.coverage_calls.append(payload)
+            return {"facts": self.recovered, "assets": []}
+        self.research_calls += 1
+        return {"facts": [fact(claim) for claim in OBSERVED[:3]], "assets": []}
 
 
 class WorkflowSemanticsTests(unittest.TestCase):
@@ -137,6 +168,8 @@ class WorkflowSemanticsTests(unittest.TestCase):
         prose = _declarative_text(README)
         self.assertTrue(_workflow_signal(prose))
         self.assertFalse(_workflow_source_match(README, self.spec))
+        self.assertIsNone(_workflow_source_passage(README, self.spec, strong_only=True,
+                                                  min_length=12, max_length=320))
         self.assertFalse(_workflow_source_match(
             "Select Start Capture. If Windows denies the ETW provider, restart elevated.",
             self.spec))
@@ -163,9 +196,15 @@ class WorkflowSemanticsTests(unittest.TestCase):
         self.assertIn(WORKER, prose)
         self.assertIn(GUI_SINK, prose)
         self.assertTrue(_workflow_source_match(ARCHITECTURE, self.spec))
+        passage = _workflow_source_passage(ARCHITECTURE, self.spec, strong_only=True,
+                                           min_length=12, max_length=320)
+        self.assertEqual(passage, CALLBACK)
+        self.assertIn(passage, ARCHITECTURE)
+        self.assertTrue(12 <= len(passage) <= 320)
+        self.assertLessEqual(len(passage), 360)
         self.assertTrue(_workflow_source_match(CALLBACK, self.spec))
         self.assertFalse(_workflow_source_match(WORKER, self.spec))
-        self.assertFalse(_covers_request(CALLBACK, self.spec))
+        self.assertTrue(_covers_request(CALLBACK, self.spec))
         self.assertTrue(_workflow_source_match(
             CALLBACK, {"kind": "workflow", "terms": ["etw", "event"]}))
         self.assertTrue(_workflow_source_match(
@@ -182,12 +221,24 @@ class WorkflowSemanticsTests(unittest.TestCase):
     def test_strong_flow_window_requires_adjacent_bounded_continuation(self):
         callback = "ETW callbacks normalize raw provider data."
         continuation = "These events are enqueued for processing."
-        self.assertTrue(_workflow_source_match(callback + " " + continuation, self.spec))
+        joined = callback + " " + continuation
+        self.assertEqual(_workflow_source_passage(joined, self.spec, strong_only=True),
+                         joined)
+        self.assertTrue(_workflow_source_match(joined, self.spec))
+        single = "ETW callbacks normalize and enqueue raw events."
+        self.assertEqual(_workflow_source_passage(joined + " " + single, self.spec,
+                                                  strong_only=True), single)
         self.assertFalse(_workflow_source_match(callback + "\n\n" + continuation,
                                                 self.spec))
         self.assertFalse(_workflow_source_match(
             callback + " These " + "intermediate " * 100 +
             "events are enqueued for processing.", self.spec))
+        self.assertIsNone(_workflow_source_passage(
+            callback + "\nraw = enqueue(event)\n" + continuation, self.spec,
+            strong_only=True))
+        ordinary = "The ETW network workflow starts with a single capture."
+        self.assertEqual(_workflow_source_passage(ordinary, self.spec), ordinary)
+        self.assertIsNone(_workflow_source_passage(ordinary, self.spec, strong_only=True))
 
     def test_distinct_actions_and_topical_overlap_are_both_required(self):
         self.assertEqual(distinct_flow_actions(
@@ -204,6 +255,38 @@ class WorkflowSemanticsTests(unittest.TestCase):
             "A worker updates counters, resolves metadata, and writes sinks.", self.spec))
         self.assertTrue(_workflow_source_match(
             "ETW events are read, transformed and written to sinks.", self.spec))
+        self.assertFalse(_covers_request(
+            "Select Start Capture. If Windows denies the ETW provider, restart elevated.",
+            self.spec))
+        self.assertFalse(_covers_request("Record Capture writes retained events.", self.spec))
+        self.assertFalse(_covers_request(
+            "A worker updates counters, resolves metadata, and writes sinks.", self.spec))
+        self.assertFalse(_covers_request(
+            "ETW callbacks normalize and normalized events.", self.spec))
+
+    def test_exact_passage_bounds_and_primary_authority(self):
+        primary = {"ref": "E0003", "kind": "document", "relative_path": "docs/ARCHITECTURE.md",
+                   "evidence_role": "primary", "excerpt": ARCHITECTURE}
+        exact = _exact_workflow_fact([primary], self.spec, {"E0003": "primary"})
+        self.assertEqual(exact["claim"], CALLBACK)
+        self.assertEqual(exact["support"], [{"evidence_ref": "E0003", "text": CALLBACK}])
+        self.assertEqual(exact["phase"], "unknown")
+        self.assertEqual(exact["subject_scope"], "main_subject")
+        for role in ("embedded_reference", "generated_artifact"):
+            with self.subTest(role=role):
+                self.assertIsNone(_exact_workflow_fact(
+                    [{**primary, "evidence_role": role}], self.spec, {"E0003": role}))
+        long_sentence = "ETW callbacks normalize " + "raw provider data " * 17 + "and enqueue events."
+        self.assertGreater(len(long_sentence), 320)
+        self.assertLessEqual(len(long_sentence), 480)
+        self.assertIsNone(_workflow_source_passage(long_sentence, self.spec,
+                                                  strong_only=True, min_length=12,
+                                                  max_length=320))
+        self.assertIsNone(_exact_workflow_fact(
+            [{**primary, "excerpt": long_sentence}], self.spec, {"E0003": "primary"}))
+        self.assertIsNone(_workflow_source_passage(
+            "events = normalize(etw_data)\nevents = enqueue(events)", self.spec,
+            strong_only=True, min_length=12, max_length=320))
 
     def test_flow_verbs_are_prose_but_code_stays_code(self):
         prose_lines = [
@@ -235,28 +318,29 @@ class WorkflowSemanticsTests(unittest.TestCase):
         ask = _make_ask(research, [], entries, TITLE, INSTRUCTIONS)
         groups = ask["requested_topic_fact_ids"]
         self.assertIn("F0001", groups["overview"])
-        # A selected source does not change conservative fact-level matching.
-        self.assertNotIn("workflow", groups)
+        self.assertNotIn("F0001", groups["workflow"])
+        self.assertIn("F0005", groups["workflow"])
+        self.assertNotIn("F0006", groups["workflow"])
         self.assertNotIn("purpose", groups)  # A requested why is not source evidence.
 
     def test_semantic_contracts_invalidate_old_checkpoint_digests(self):
         evidence = [{"ref": "E0001", "kind": "document", "relative_path": "README.md",
                      "evidence_role": "primary", "excerpt": "WidgetEngine is a tool."}]
         current = _payload(1, evidence, "WidgetEngine", "Explain what it is.")
-        previous = {**current, "research_semantics_contract": "requested-topic-semantics-v3"}
+        previous = {**current, "research_semantics_contract": "requested-topic-semantics-v4"}
         self.assertEqual(current["research_semantics_contract"],
                          RESEARCH_SEMANTICS_CONTRACT)
-        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v4")
+        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v5")
         self.assertNotEqual(digest("Research", previous), digest("Research", current))
 
         missing = {"workflow": {"kind": "workflow", "terms": ["event"]}}
         coverage = _coverage_payload(evidence, missing, "WidgetEngine", "How do events flow?")
-        old_coverage = {**coverage, "coverage_contract": "requested-primary-coverage-v3",
-                        "research_semantics_contract": "requested-topic-semantics-v3"}
+        old_coverage = {**coverage, "coverage_contract": "requested-primary-coverage-v4",
+                        "research_semantics_contract": "requested-topic-semantics-v4"}
         self.assertEqual(coverage["coverage_contract"], COVERAGE_CONTRACT)
-        self.assertEqual(COVERAGE_CONTRACT, "requested-primary-coverage-v4")
+        self.assertEqual(COVERAGE_CONTRACT, "requested-primary-coverage-v5")
         self.assertNotEqual(digest("Research", {**coverage,
-                                                "coverage_contract": "requested-primary-coverage-v3"}),
+                                                "coverage_contract": "requested-primary-coverage-v4"}),
                             digest("Research", coverage))
         self.assertNotEqual(digest("Research", old_coverage), digest("Research", coverage))
 
@@ -297,6 +381,86 @@ class WorkflowSemanticsTests(unittest.TestCase):
             self.assertEqual(provider.calls, 2)
             self.assertEqual(json_load(coverage_checkpoint)["input_sha256"],
                              digest("Research", coverage))
+
+
+class PhysicalCoverageChainTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        (root / "prompts").mkdir()
+        (root / "prompts" / "research.txt").write_text("Use exact supplied evidence.")
+        self.project = root / "projects" / "windows-telemetry-inspector"
+        self.entries = [
+            {"ref": "E0002", "kind": "document", "relative_path": "README.md",
+             "evidence_role": "primary", "excerpt": README + "\n\n" + "\n\n".join(OBSERVED[:3])},
+            {"ref": "E0003", "kind": "document", "relative_path": "docs/ARCHITECTURE.md",
+             "evidence_role": "primary", "excerpt": ARCHITECTURE},
+        ]
+        self.roles = {entry["ref"]: "primary" for entry in self.entries}
+
+    def run_research(self, provider):
+        return research(provider, {"evidence": self.entries}, self.project,
+                        title_hint="windows-telemetry-inspector",
+                        instructions=INSTRUCTIONS, max_retries=0)
+
+    def test_malformed_model_support_gets_exact_fallback_and_checkpoint_reuse(self):
+        invalid = {"claim": MALFORMED_WORKFLOW_CLAIM, "evidence_refs": ["E0003"],
+                   "support": [{"evidence_ref": "E0003", "text": MALFORMED_SUPPORT}]}
+        self.assertNotIn(MALFORMED_SUPPORT, ARCHITECTURE)
+        provider = PhysicalCoverageProvider([fact(OBSERVED[1]), invalid])
+        result = self.run_research(provider)
+        claims = [item["claim"] for item in result["facts"]]
+        for expected in (OBSERVED[0], OBSERVED[1], OBSERVED[2], CALLBACK):
+            self.assertIn(expected, claims)
+        self.assertNotIn(MALFORMED_WORKFLOW_CLAIM, claims)
+        callback_facts = [item for item in result["facts"] if item["claim"] == CALLBACK]
+        self.assertEqual(len(callback_facts), 1)
+        self.assertEqual(callback_facts[0]["evidence_refs"], ["E0003"])
+        self.assertEqual(callback_facts[0]["support"],
+                         [{"evidence_ref": "E0003", "text": CALLBACK}])
+        self.assertEqual(callback_facts[0]["subject_scope"], "main_subject")
+        self.assertEqual(callback_facts[0]["phase"], "unknown")
+        missing = _missing_requested_concepts(result["facts"], INSTRUCTIONS,
+                                              "windows-telemetry-inspector", self.roles)
+        self.assertNotIn("workflow", missing)
+        self.assertIn("purpose", missing)
+        ask = _make_ask(result, [], self.entries, "windows-telemetry-inspector",
+                        INSTRUCTIONS)
+        by_id = {item["fact_id"]: item["claim"] for item in ask["research"]["facts"]}
+        self.assertIn(CALLBACK, [by_id[fid] for fid in
+                                 ask["requested_topic_fact_ids"]["workflow"]])
+        self.assertNotIn("purpose", ask["requested_topic_fact_ids"])
+
+        self.assertEqual(len(provider.coverage_calls), 1)
+        self.assertEqual({entry["ref"] for entry in
+                          provider.coverage_calls[0]["evidence"]}, {"E0002", "E0003"})
+        coverage_checkpoint = self.project / "manifests" / "research-coverage" / "part-001.json"
+        canonical = json_load(coverage_checkpoint)["result"]
+        self.assertIn(OBSERVED[1], [item["claim"] for item in canonical["facts"]])
+        self.assertEqual([item["claim"] for item in canonical["facts"]].count(CALLBACK), 1)
+        self.assertNotIn(MALFORMED_WORKFLOW_CLAIM,
+                         [item["claim"] for item in canonical["facts"]])
+
+        self.assertEqual(self.run_research(provider), result)
+        self.assertEqual(provider.research_calls, 1)
+        self.assertEqual(len(provider.coverage_calls), 1)
+        self.assertEqual(provider.verifier_calls, 0)
+        self.assertEqual(json_load(coverage_checkpoint)["result"], canonical)
+        self.assertEqual(len(callback_facts[0]["support"]), 1)
+
+    def test_valid_natural_workflow_fact_prevents_redundant_fallback(self):
+        provider = PhysicalCoverageProvider([fact(OBSERVED[1]), fact(CALLBACK, "E0003")])
+        result = self.run_research(provider)
+        callback_facts = [item for item in result["facts"] if item["claim"] == CALLBACK]
+        self.assertEqual(len(callback_facts), 1)
+        self.assertEqual(callback_facts[0]["phase"], "final")
+        checkpoint = json_load(self.project / "manifests" / "research-coverage" / "part-001.json")
+        coverage_facts = [item for item in checkpoint["result"]["facts"]
+                          if item["claim"] == CALLBACK]
+        self.assertEqual(len(coverage_facts), 1)
+        self.assertEqual(coverage_facts[0]["phase"], "final")
+        self.assertEqual(len(provider.coverage_calls), 1)
 
 
 if __name__ == "__main__":

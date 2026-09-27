@@ -21,8 +21,8 @@ MAX_ASSETS_PER_REQUEST = 6
 MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v4"
-COVERAGE_CONTRACT = "requested-primary-coverage-v4"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v5"
+COVERAGE_CONTRACT = "requested-primary-coverage-v5"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -233,8 +233,10 @@ def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
         right = set(spec["right"]) - set(spec["left"])
         return bool(words & set(spec["left"]) and right and right <= words)
     terms = set(spec["terms"])
-    return bool(_workflow_signal(claim) and
-                len(words & terms) >= min(2, len(terms)))
+    overlap = words & terms
+    return bool((_workflow_signal(claim) and
+                 len(overlap) >= min(2, len(terms))) or
+                (overlap and len(distinct_flow_actions(claim)) >= 2))
 
 
 def _missing_requested_concepts(
@@ -282,25 +284,44 @@ _FOLLOWING_FLOW_SENTENCE = re.compile(
 )
 
 
-def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
-    """Match a topical workflow or a strong operational flow in local prose."""
+def _workflow_source_passage(
+    excerpt: str, spec: dict[str, Any], *, strong_only: bool = False,
+    min_length: int = 0, max_length: int | None = None,
+) -> str | None:
+    """Find the shortest exact local prose passage proving workflow relevance."""
     terms = set(spec["terms"])
     needed = min(2, len(terms))
+    singles: list[str] = []
+    windows: list[str] = []
+
+    def eligible(length: int) -> bool:
+        return length >= min_length and (max_length is None or length <= max_length)
+
     for paragraph in re.split(r"\n[ \t]*\n+", excerpt):
         prose = _declarative_text(paragraph)
         if not prose:
             continue
         sentences = [part.strip() for part in _SOURCE_SENTENCE_BREAK.split(prose)
                      if part.strip()]
+        positions: list[tuple[int, int] | None] = []
+        cursor = 0
+        for sentence in sentences:
+            start = paragraph.find(sentence, cursor)
+            positions.append((start, start + len(sentence)) if start >= 0 else None)
+            if start >= 0:
+                cursor = start + len(sentence)
         for index, sentence in enumerate(sentences):
             if len(sentence) > _MAX_WORKFLOW_SOURCE_SENTENCE:
                 continue
             overlap = _request_words(sentence) & terms
             signal = _workflow_signal(sentence)
             actions = distinct_flow_actions(sentence)
-            if ((signal and len(overlap) >= needed) or
-                    (overlap and len(actions) >= 2)):
-                return True
+            strong = bool(overlap and len(actions) >= 2)
+            ordinary = bool(signal and len(overlap) >= needed)
+            if positions[index] and eligible(len(sentence)) and (
+                strong or (ordinary and not strong_only)
+            ):
+                singles.append(sentence)
             if index + 1 == len(sentences):
                 continue
             following = sentences[index + 1]
@@ -308,16 +329,26 @@ def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
                     not _FOLLOWING_FLOW_SENTENCE.match(following)):
                 continue
             following_overlap = _request_words(following) & terms
-            if (len(overlap | following_overlap) >= needed and
-                    ((signal and overlap) or
-                     (_workflow_signal(following) and following_overlap))):
-                return True
             following_actions = distinct_flow_actions(following)
-            if (len(actions | following_actions) >= 2 and
-                    ((actions and overlap) or
-                     (following_actions and following_overlap))):
-                return True
-    return False
+            strong_window = bool(len(actions | following_actions) >= 2 and
+                                 ((actions and overlap) or
+                                  (following_actions and following_overlap)))
+            ordinary_window = bool(len(overlap | following_overlap) >= needed and
+                                   ((signal and overlap) or
+                                    (_workflow_signal(following) and following_overlap)))
+            if not (strong_window or (ordinary_window and not strong_only)):
+                continue
+            first, second = positions[index], positions[index + 1]
+            if first and second and not paragraph[first[1]:second[0]].strip():
+                window = paragraph[first[0]:second[1]]
+                if len(window) <= _MAX_WORKFLOW_SOURCE_WINDOW and eligible(len(window)):
+                    windows.append(window)
+    return min(singles, key=len) if singles else min(windows, key=len) if windows else None
+
+
+def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
+    """Match a topical workflow or strong operational flow in local prose."""
+    return _workflow_source_passage(excerpt, spec) is not None
 
 
 def _coverage_candidates(
@@ -390,6 +421,32 @@ def _coverage_payload(
     return {**_payload(1, batch, title_hint, instructions),
             "research_mode": "requested_coverage", "coverage_contract": COVERAGE_CONTRACT,
             "missing_requested_topics": missing}
+
+
+def _exact_workflow_fact(
+    batch: list[dict[str, Any]], spec: dict[str, Any], roles: dict[str, str],
+) -> dict[str, Any] | None:
+    """Build one bounded verbatim workflow fact from selected primary prose."""
+    for entry in batch:
+        ref, excerpt = entry.get("ref"), entry.get("excerpt")
+        if (entry.get("kind") != "document" or not isinstance(ref, str) or
+                roles.get(ref) != "primary" or
+                entry.get("evidence_role", "primary") != "primary" or
+                not isinstance(excerpt, str)):
+            continue
+        passage = _workflow_source_passage(
+            excerpt, spec, strong_only=True, min_length=12, max_length=320,
+        )
+        if passage is None or len(passage) > 360 or passage not in excerpt:
+            continue
+        return {
+            "claim": passage,
+            "evidence_refs": [ref],
+            "subject_scope": "main_subject",
+            "support": [{"evidence_ref": ref, "text": passage}],
+            "phase": "unknown", "confidence": "high",
+        }
+    return None
 
 
 def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
@@ -797,10 +854,32 @@ def research(
         if batch:
             payload = _coverage_payload(batch, missing, title_hint, instructions)
             checkpoint = project_dir / "manifests" / "research-coverage" / "part-001.json"
+
+            def normalize_coverage(value: dict[str, Any]) -> dict[str, Any]:
+                canonical = normalize(value, batch)
+                remaining = _missing_requested_concepts(
+                    allfacts + canonical["facts"], instructions, title_hint, roles,
+                )
+                if "workflow" not in remaining:
+                    return canonical
+                exact = _exact_workflow_fact(batch, remaining["workflow"], roles)
+                if exact is None or "C0001" not in verify_claims(provider, [{
+                    "id": "C0001", "claim": exact["claim"],
+                    "support": [exact["support"][0]["text"]],
+                }], project_dir, "research", progress):
+                    return canonical
+                ranked = _rank_requested_facts(
+                    canonical["facts"] + [exact], instructions, title_hint,
+                )
+                canonical["facts"] = _limit_by_ref(
+                    ranked, lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
+                )[:MAX_FACTS_PER_REQUEST]
+                return canonical
+
             with step(progress, "Recovering requested coverage"):
                 recovered = checkpointed_complete_json(
                     provider, coverage_system, payload, checkpoint,
-                    lambda value: normalize(value, batch), max_retries=max_retries,
+                    normalize_coverage, max_retries=max_retries,
                 )["facts"]
             if recovered:
                 allfacts = _dedupe(allfacts + recovered, lambda fact: (
