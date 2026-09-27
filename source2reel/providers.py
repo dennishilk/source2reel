@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, json, mimetypes, urllib.request
+import base64, json, math, mimetypes, urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,23 @@ class LLMProvider(ABC):
 
     def complete_json_with_image(self, system: str, user: str, image_path) -> dict[str, Any]:
         raise NotImplementedError("This provider has no vision adapter")
+
+    def visual_cache_signature(self) -> dict[str, Any] | None:
+        """Identify vision request semantics; unknown providers do not reuse results.
+
+        Subclasses with additional semantic options should override this method.
+        Transport location and timeout do not change the model request.
+        """
+        model = getattr(self, "model", None)
+        temperature = getattr(self, "temperature", None)
+        limit = getattr(self, "max_output_tokens", None)
+        if (not isinstance(model, str) or not model or
+                type(temperature) not in (int, float) or not math.isfinite(temperature) or
+                type(limit) is not int or limit <= 0):
+            return None
+        return {"provider": f"{type(self).__module__}.{type(self).__qualname__}",
+                "model": model, "temperature": temperature,
+                "max_output_tokens": limit}
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
