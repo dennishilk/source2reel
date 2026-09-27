@@ -11,8 +11,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
 from .editorial import (EDITORIAL_CONTRACT, SPECIALIZED_TYPES, SceneTypeUnsuitable,
-                        deterministic_field_guard, selected_claims, structured_fields,
-                        validate_novelty, validate_scene_type)
+                        deterministic_field_guard, prune_redundant_content_scenes,
+                        selected_claims, structured_fields, validate_novelty,
+                        validate_scene_type)
 from .grounding import GROUNDING_CONTRACT, GroundingError, verify_claims
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
@@ -489,6 +490,28 @@ def _validate_focus_coverage(scenes: list[dict[str, Any]], ask: dict[str, Any]) 
     missing = _missing_story_topics(scenes, ask)
     if missing:
         raise _RequestedCoverageError(missing)
+
+
+def _prune_editorial_repetition(
+    scenes: list[dict[str, Any]], presentation: Any, ask: dict[str, Any],
+) -> tuple[list[dict[str, Any]], Any]:
+    """Drop exhausted content while preserving coverage and presentation references."""
+    kept = prune_redundant_content_scenes(scenes)
+    removed = {scene["id"] for scene in scenes} - {scene["id"] for scene in kept}
+    if not removed:
+        return kept, presentation
+    missing_before = _missing_story_topics(scenes, ask)
+    missing_after = _missing_story_topics(kept, ask)
+    newly_missing = {topic: ids for topic, ids in missing_after.items()
+                     if topic not in missing_before}
+    if newly_missing:
+        raise _RequestedCoverageError(newly_missing)
+    if isinstance(presentation, dict) and isinstance(presentation.get("scene_titles"), dict):
+        presentation = {**presentation, "scene_titles": {
+            scene_id: title for scene_id, title in presentation["scene_titles"].items()
+            if scene_id not in removed
+        }}
+    return kept, presentation
 
 
 def _primary_anchors(
@@ -1011,8 +1034,14 @@ def _canonical_full_episode(episode: dict[str, Any], ask: dict[str, Any],
             # Retain them and discard structured fields tied to the unsuitable type.
             scene = _canonical_scene_fields({**scene, "type": "SUMMARY"})
         canonical.append(scene)
+    canonical, presentation = _prune_editorial_repetition(
+        canonical, episode.get("presentation"), ask,
+    )
     validate_novelty(canonical)
-    return {**episode, "scenes": canonical}
+    result = {**episode, "scenes": canonical}
+    if presentation is not None:
+        result["presentation"] = presentation
+    return result
 
 
 def _retry_feedback(error: Exception) -> str:
@@ -1362,6 +1391,7 @@ def _canonical_evidence_refs(
 
 def _canonical_outline_intent(
     raw: Any, index: int, allowed: set[str], ask: dict[str, Any],
+    *, scene_id: str | None = None,
 ) -> dict[str, Any]:
     """Turn one raw intent into the only form accepted by downstream validators."""
     if not isinstance(raw, dict) or not isinstance(raw.get("type"), str) or raw["type"] not in SCENE_TYPES:
@@ -1373,7 +1403,7 @@ def _canonical_outline_intent(
         refs = _draft_evidence_refs(raw)
     except ValueError as exc:
         raise StructuredOutputError(f"Storyboard intent {index} has invalid {exc}") from exc
-    intent = {"id": f"s{index:03d}", "type": raw["type"],
+    intent = {"id": scene_id or f"s{index:03d}", "type": raw["type"],
               "purpose": purpose.strip(), "evidence_refs": list(dict.fromkeys(refs))}
     if SCENE_CONTRACTS[raw["type"]].allows_asset_ref:
         # Carry the choice for unique fact-ID recovery, but authorize it only
@@ -1410,9 +1440,23 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
         raise StructuredOutputError(
             f"Storyboard outline requires 1–{_MAX_STORYBOARD_SCENES} scene intents"
         )
+    # A canonical checkpoint can have gaps after pruning. Keep its ordered IDs
+    # on re-normalization so its presentation and scene parts remain stable.
+    supplied_ids = [raw.get("id") if isinstance(raw, dict) else None
+                    for raw in raw_intents]
+    preserve_ids = all(isinstance(scene_id, str) and
+                       re.fullmatch(r"s\d{3}", scene_id) and
+                       1 <= int(scene_id[1:]) <= _MAX_STORYBOARD_SCENES
+                       for scene_id in supplied_ids) and all(
+                           int(left[1:]) < int(right[1:])
+                           for left, right in zip(supplied_ids, supplied_ids[1:])
+                       )
     intents = []
     for index, raw in enumerate(raw_intents, 1):
-        intents.append(_canonical_outline_intent(raw, index, allowed, ask))
+        intents.append(_canonical_outline_intent(
+            raw, index, allowed, ask,
+            scene_id=supplied_ids[index - 1] if preserve_ids else None,
+        ))
     outline["scene_intents"] = intents
     if "presentation" in value:
         outline["presentation"] = value["presentation"]
@@ -1446,16 +1490,22 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
                     purpose = _EDITORIAL_SCENE_PURPOSES["SUMMARY"]
                 intent = {**intent, "type": "SUMMARY", "purpose": purpose}
             canonical.append(intent)
-        intents = canonical
+        intents, presentation = _prune_editorial_repetition(
+            canonical, outline.get("presentation"), ask,
+        )
+        if presentation is not None:
+            outline["presentation"] = presentation
+    except _RequestedCoverageError:
+        raise
     except ValueError as exc:
         raise StructuredOutputError(f"Storyboard outline invalid: {exc}") from exc
     outline["scene_intents"] = intents
-    if check_coverage:
-        _validate_focus_coverage(intents, ask)
     try:
         validate_novelty(intents)
     except ValueError as exc:
         raise StructuredOutputError(f"Storyboard outline invalid: {exc}") from exc
+    if check_coverage:
+        _validate_focus_coverage(intents, ask)
     return outline
 
 

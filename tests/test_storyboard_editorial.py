@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from source2reel import planner
-from source2reel.editorial import SceneTypeUnsuitable
+from source2reel.editorial import SceneTypeUnsuitable, prune_redundant_content_scenes
 from source2reel.providers import StructuredOutputError
 from source2reel.schema import validate_episode
 from source2reel.util import json_load
@@ -107,25 +107,46 @@ class EditorialTests(unittest.TestCase):
     def setUp(self):
         self.ask, self.allowed = physical_ask()
 
-    def test_physical_seven_scene_outline_fails_and_short_story_is_valid(self):
+    def test_physical_seven_scene_outline_prunes_only_exhausted_content(self):
         bad = outline([
             intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),
             intent("ARCHITECTURE_DIAGRAM", 3), intent("TIMELINE", 4, 5),
             intent("CODE", 2), intent("GRAPH", 4, 5), intent("OUTRO", 3, 4, 5),
         ])
-        with self.assertRaisesRegex(StructuredOutputError, "TIMELINE|ARCHITECTURE_DIAGRAM|CODE|repeats"):
-            planner._normalize_outline(bad, self.allowed, self.ask)
-        # Even when the unsuited templates are changed, the duplicated content remains invalid.
-        for row in bad["scene_intents"]:
-            if row["type"] in {"ARCHITECTURE_DIAGRAM", "TIMELINE", "CODE", "GRAPH"}:
-                row["type"] = "SUMMARY"
-        with self.assertRaisesRegex(StructuredOutputError, "s005: content repeats"):
-            planner._normalize_outline(bad, self.allowed, self.ask, check_coverage=False)
+        bad["presentation"]["scene_titles"] = {
+            f"s{index:03d}": f"Original title {index}" for index in range(1, 8)
+        }
+        result = planner._normalize_outline(bad, self.allowed, self.ask)
+        scenes = result["scene_intents"]
+        ids = [scene["id"] for scene in scenes]
+        self.assertNotIn("s005", ids)
+        self.assertNotIn("s006", ids)
+        self.assertIn("s002", ids)
+        self.assertIn("s003", ids)
+        self.assertIn("s004", ids)
+        self.assertEqual(scenes[-1]["id"], "s007")
+        self.assertEqual(scenes[-1]["type"], "OUTRO")
+        self.assertEqual(next(scene["type"] for scene in scenes if scene["id"] == "s002"),
+                         "DATA_FLOW")
+        self.assertEqual([scene["type"] for scene in scenes if scene["id"] in {"s003", "s004"}],
+                         ["SUMMARY", "SUMMARY"])
+        self.assertEqual(sum(scene["type"] not in {"SECTION_TITLE", "HERO", "OUTRO"}
+                             and scene["fact_ids"] == ["F0002"] for scene in scenes), 1)
+        self.assertEqual(sum(scene["type"] not in {"SECTION_TITLE", "HERO", "OUTRO"}
+                             and scene["fact_ids"] == ["F0004", "F0005"] for scene in scenes), 1)
+        self.assertEqual(set(result["presentation"]["scene_titles"]), set(ids))
+        self.assertEqual(result["presentation"]["scene_titles"]["s007"],
+                         "Original title 7")
+        self.assertEqual(result["presentation"]["outro"], bad["presentation"]["outro"])
+        self.assertEqual(planner._missing_story_topics(scenes, self.ask), {})
+        planner.validate_novelty(scenes)
+        self.assertEqual(planner._normalize_outline(result, self.allowed, self.ask), result)
+
         short = outline([intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),
                          intent("SUMMARY", 3, 6), intent("SUMMARY", 4, 5),
                          intent("OUTRO", 3, 4, 5)])
-        result = planner._normalize_outline(short, self.allowed, self.ask)
-        self.assertEqual(len(result["scene_intents"]), 5)
+        concise = planner._normalize_outline(short, self.allowed, self.ask)
+        self.assertEqual(len(concise["scene_intents"]), 5)
         self.assertIn("F0002", self.ask["requested_topic_fact_ids"]["workflow"])
 
     def test_editorial_contract_is_in_both_checkpoint_inputs(self):
@@ -189,31 +210,66 @@ class EditorialTests(unittest.TestCase):
             self.assertEqual(run(self.ask), episode)
             self.assertEqual(len(provider.calls), calls)
 
-    def test_downgraded_duplicate_still_requires_outline_retry(self):
+    def test_downgraded_duplicate_is_removed_with_no_retry(self):
         bad = outline([intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),
                        intent("CODE", 2), intent("SUMMARY", 3), intent("OUTRO", 3)])
-        with self.assertRaisesRegex(StructuredOutputError, "s003: content repeats"):
-            planner._normalize_outline(bad, self.allowed, self.ask, check_coverage=False)
-        good = outline([intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),
-                        intent("SUMMARY", 3), intent("OUTRO", 3)])
-
-        class ImprovingProvider(PhysicalOutlineProvider):
-            def complete_json(self, system, user):
-                request = json.loads(user)
-                if request.get("storyboard_mode") == "outline" and "validation_feedback" in request:
-                    self.calls.append(request)
-                    return copy.deepcopy(good)
-                return super().complete_json(system, user)
-
-        provider = ImprovingProvider(bad)
+        canonical = planner._normalize_outline(bad, self.allowed, self.ask,
+                                               check_coverage=False)
+        self.assertEqual([scene["id"] for scene in canonical["scene_intents"]],
+                         ["s001", "s002", "s004", "s005"])
+        provider = PhysicalOutlineProvider(bad)
         with tempfile.TemporaryDirectory() as tmp:
             episode = planner._multipart_episode(provider, "storyboard", self.ask,
-                Path(tmp), 32768, 4096, 1024, 1, None, "novelty-scope")
+                Path(tmp), 32768, 4096, 1024, 0, None, "novelty-scope")
         self.assertEqual([scene["type"] for scene in episode["scenes"]],
                          ["SECTION_TITLE", "DATA_FLOW", "SUMMARY", "OUTRO"])
-        self.assertIn("content repeats", next(call["validation_feedback"] for call in provider.calls
-                                               if "validation_feedback" in call))
-        self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 2)
+        self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 1)
+
+    def test_never_improving_provider_prunes_checkpoint_and_part_requests(self):
+        raw = outline([intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),
+                       intent("SUMMARY", 3), intent("SUMMARY", 4, 5),
+                       intent("CODE", 2), intent("OUTRO", 3, 4, 5)])
+        raw["presentation"]["scene_titles"] = {
+            f"s{index:03d}": f"Scene title {index}" for index in range(1, 7)
+        }
+        provider = PhysicalOutlineProvider(raw)
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp)
+
+            def run():
+                return planner._multipart_episode(provider, "storyboard", self.ask,
+                    project_dir, 32768, 4096, 1024, 0, None, "never-improves")
+
+            episode = run()
+            checkpoint = json_load(project_dir / "manifests/storyboard-parts/outline.json")
+            canonical = checkpoint["result"]
+            ids = [scene["id"] for scene in canonical["scene_intents"]]
+            self.assertEqual(ids, ["s001", "s002", "s003", "s004", "s006"])
+            self.assertEqual([scene["id"] for scene in episode["scenes"]], ids)
+            self.assertEqual(episode["scenes"][1]["type"], "DATA_FLOW")
+            self.assertEqual(episode["scenes"][1]["fact_ids"], ["F0002"])
+            self.assertEqual(episode["scenes"][-1]["type"], "OUTRO")
+            self.assertEqual(planner._missing_story_topics(canonical["scene_intents"], self.ask), {})
+            planner.validate_novelty(canonical["scene_intents"])
+            self.assertNotIn("s005", canonical["presentation"]["scene_titles"])
+            self.assertEqual(canonical["presentation"]["scene_titles"]["s006"],
+                             "Scene title 6")
+            self.assertEqual(canonical["presentation"]["outro"], raw["presentation"]["outro"])
+            scene_requests = [call for call in provider.calls
+                              if call.get("storyboard_mode") == "scenes"]
+            self.assertTrue(scene_requests)
+            self.assertEqual([item["id"] for call in scene_requests
+                              for item in call["required_output"]["scenes"]], ids)
+            self.assertTrue(all(item["type"] != "CODE" and item["type"] != "GRAPH"
+                                for call in scene_requests
+                                for item in call["required_output"]["scenes"]))
+            self.assertEqual(sum(call.get("storyboard_mode") == "outline"
+                                 for call in provider.calls), 1)
+            calls = len(provider.calls)
+            self.assertEqual(run(), episode)
+            self.assertEqual(len(provider.calls), calls)
+            self.assertEqual(json_load(project_dir / "manifests/storyboard-parts/outline.json"),
+                             checkpoint)
 
     def test_full_response_downgrade_discards_stale_diagram_but_keeps_facts(self):
         raw = {"version": 1, "title": "Passive observation", "scenes": [{
@@ -225,6 +281,75 @@ class EditorialTests(unittest.TestCase):
         self.assertEqual(fixed["scenes"][0]["type"], "SUMMARY")
         self.assertEqual(fixed["scenes"][0]["fact_ids"], ["F0003"])
         self.assertNotIn("diagram", fixed["scenes"][0])
+
+    def test_full_response_prunes_same_duplicate_and_title(self):
+        selected = [intent("DATA_FLOW", 2), intent("SUMMARY", 3),
+                    intent("CODE", 2), intent("OUTRO", 3)]
+        scenes = []
+        for index, item in enumerate(selected, 1):
+            scene = {"id": f"s{index:03d}", "type": item["type"],
+                     "title": f"Scene {index}", "narration": item["purpose"],
+                     "fact_ids": item["fact_ids"], "evidence_refs": item["evidence_refs"]}
+            if item["type"] == "DATA_FLOW":
+                scene["diagram"] = {"nodes": ["ETW callbacks normalize raw provider data",
+                                              "small internal events"]}
+            if item["type"] == "CODE":
+                scene["diagram"] = {"code": "unsupported code"}
+            scenes.append(scene)
+        raw = {"version": 1, "title": "Documented observations", "scenes": scenes,
+               "presentation": {"scene_titles": {
+                   f"s{index:03d}": f"Title {index}" for index in range(1, 5)
+               }, "outro": outline([])["presentation"]["outro"]}}
+        canonical = planner._canonical_full_episode(raw, self.ask, self.allowed)
+        self.assertEqual([scene["id"] for scene in canonical["scenes"]],
+                         ["s001", "s002", "s004"])
+        self.assertEqual(list(canonical["presentation"]["scene_titles"]),
+                         ["s001", "s002", "s004"])
+        self.assertEqual(canonical["presentation"]["outro"], raw["presentation"]["outro"])
+        self.assertEqual(planner._missing_story_topics(canonical["scenes"], self.ask), {})
+        planner.validate_novelty(canonical["scenes"])
+        validate_episode(canonical, self.allowed, require_integrated_presentation=True)
+
+        class FixedFullProvider(PhysicalOutlineProvider):
+            def complete_json(self, system, user):
+                request = json.loads(user)
+                if "storyboard_mode" not in request and "checks" not in request:
+                    self.calls.append(request)
+                    return copy.deepcopy(raw)
+                return super().complete_json(system, user)
+
+        provider = FixedFullProvider(outline([]))
+        with tempfile.TemporaryDirectory() as tmp:
+            completed = planner._complete_episode(provider, "storyboard", self.ask,
+                self.allowed, 0, project_dir=Path(tmp))
+        self.assertEqual([scene["id"] for scene in completed["scenes"]],
+                         ["s001", "s002", "s004"])
+        self.assertEqual(sum("storyboard_mode" not in call and "checks" not in call
+                             for call in provider.calls), 1)
+
+    def test_partial_novelty_and_framing_are_not_pruned(self):
+        visual = copy.deepcopy(self.ask)
+        visual["evidence_index"].append({"ref": "E0090", "kind": "media",
+                                         "relative_path": "authentic.png"})
+        visual["research"]["assets"] = [{"evidence_ref": "E0090", "purpose": "Capture"}]
+        raw = outline([intent("HERO", 1), intent("SUMMARY", 1),
+                       intent("SUMMARY", 1, 2), intent("SUMMARY", 1),
+                       intent("OUTRO", 1)])
+        raw["scene_intents"][0]["asset_ref"] = "E0090"
+        raw["scene_intents"][0]["evidence_refs"].append("E0090")
+        raw_scenes = [{"id": f"s{index:03d}", **scene}
+                      for index, scene in enumerate(raw["scene_intents"], 1)]
+        with self.assertRaisesRegex(ValueError, "s004: content repeats"):
+            planner.validate_novelty(raw_scenes)
+        self.assertEqual([scene["id"] for scene in prune_redundant_content_scenes(raw_scenes)],
+                         ["s001", "s002", "s003", "s005"])
+        canonical = planner._normalize_outline(raw, self.allowed | {"E0090"}, visual,
+                                               check_coverage=False)
+        self.assertEqual([scene["id"] for scene in canonical["scene_intents"]],
+                         ["s001", "s002", "s003", "s005"])
+        self.assertEqual(canonical["scene_intents"][2]["fact_ids"], ["F0001", "F0002"])
+        self.assertEqual(canonical["scene_intents"][-1]["type"], "OUTRO")
+        planner.validate_novelty(canonical["scene_intents"])
 
     def test_type_fallback_does_not_repair_bad_authority(self):
         raw = outline([intent("ARCHITECTURE_DIAGRAM", 3)])
@@ -339,10 +464,20 @@ class EditorialTests(unittest.TestCase):
         reused = {"id": "s002", "type": "PROJECT_EVIDENCE", "fact_ids": ["F0001"],
                   "purpose": CLAIMS[0], "evidence_refs": ["E0002", "E0090"],
                   "asset_ref": "E0090"}
-        planner._normalize_outline({"version": 1, "title": "Proof", "slug": "proof",
+        retained = planner._normalize_outline({"version": 1, "title": "Proof", "slug": "proof",
             "summary": CLAIMS[0], "scene_intents": [
                 intent("SUMMARY", 1), {key: value for key, value in reused.items() if key != "id"},
             ]}, {"E0002", "E0003", "E0090"}, visual, check_coverage=False)
+        self.assertEqual([scene["id"] for scene in retained["scene_intents"]],
+                         ["s001", "s002"])
+        self.assertEqual(retained["scene_intents"][1]["asset_ref"], "E0090")
+        repeated_asset = planner._normalize_outline({"version": 1, "title": "Proof",
+            "slug": "proof", "summary": CLAIMS[0], "scene_intents": [
+                intent("SUMMARY", 1), {key: value for key, value in reused.items() if key != "id"},
+                {key: value for key, value in reused.items() if key != "id"},
+            ]}, {"E0002", "E0003", "E0090"}, visual, check_coverage=False)
+        self.assertEqual([scene["id"] for scene in repeated_asset["scene_intents"]],
+                         ["s001", "s002"])
         framed = [{"id": f"s{i:03d}", **intent(kind, 1)} for i, kind in
                   enumerate(("HERO", "SUMMARY", "OUTRO"), 1)]
         planner.validate_novelty(framed)

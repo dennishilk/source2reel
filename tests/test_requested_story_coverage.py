@@ -325,17 +325,20 @@ class RequestedStoryCoverageTests(unittest.TestCase):
         self.assertEqual({scene["fact_ids"][0] for scene in episode["scenes"][:-1]},
                          {"F0001", "F0002", "F0003"})
 
-    def test_full_recovery_respects_scene_limit(self):
+    def test_full_recovery_prunes_duplicates_before_scene_limit(self):
         class TooMany(RepeatingProvider):
             def __init__(self, ask):
                 super().__init__(ask, full=True)
                 self.bad = outline(ask, [4] * 32)
 
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(planner._EpisodeValidationExhausted,
-                                        "content repeats"):
-                planner._complete_episode(TooMany(self.ask), "storyboard", self.ask,
-                                          self.allowed, 0, project_dir=Path(tmp))
+            episode = planner._complete_episode(TooMany(self.ask), "storyboard", self.ask,
+                                                self.allowed, 0, project_dir=Path(tmp))
+        self.assertLessEqual(len(episode["scenes"]), planner._MAX_STORYBOARD_SCENES)
+        self.assertEqual(planner._missing_story_topics(episode["scenes"], self.ask), {})
+        self.assertEqual(sum(scene["fact_ids"] == ["F0004"]
+                             for scene in episode["scenes"]), 1)
+        planner.validate_novelty(episode["scenes"])
 
 
 if __name__ == "__main__":

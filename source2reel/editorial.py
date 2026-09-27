@@ -107,21 +107,48 @@ def validate_scene_type(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
         raise SceneTypeUnsuitable(f"{scene['id']}: GRAPH requires selected graphable numerical data")
 
 
-def validate_novelty(scenes: list[dict[str, Any]]) -> None:
-    """An authentic new visual may explain a prior fact; a new template alone cannot."""
+def _novelty_scan(
+    scenes: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Classify repetitions using only selected facts and distinct evidence assets."""
     exhausted: set[str] = set()
     used_assets: set[str] = set()
+    kept = []
+    redundant = []
     for scene in scenes:
         if scene["type"] in FRAMING_TYPES:
+            kept.append(scene)
             continue
         selected = set(scene.get("fact_ids", []))
         asset = scene.get("asset_ref") if scene["type"] in EVIDENCE_TYPES else None
         new_asset = isinstance(asset, str) and asset not in used_assets
         if selected and selected <= exhausted and not new_asset:
-            raise ValueError(f"{scene['id']}: content repeats already covered fact_ids without distinct authentic evidence")
+            redundant.append(scene)
+            continue
+        kept.append(scene)
         exhausted.update(selected)
         if asset:
             used_assets.add(asset)
+    return kept, redundant
+
+
+def prune_redundant_content_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove later content that adds neither a selected fact nor an authentic asset.
+
+    Call only after fact IDs and evidence assets have been canonicalized and checked.
+    """
+    kept, _ = _novelty_scan(scenes)
+    return kept
+
+
+def validate_novelty(scenes: list[dict[str, Any]]) -> None:
+    """An authentic new visual may explain a prior fact; a new template alone cannot."""
+    _, redundant = _novelty_scan(scenes)
+    if redundant:
+        raise ValueError(
+            f"{redundant[0]['id']}: content repeats already covered fact_ids "
+            "without distinct authentic evidence"
+        )
 
 
 def _words(value: str) -> set[str]:
