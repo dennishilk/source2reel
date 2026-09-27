@@ -32,6 +32,34 @@ _TEMPORAL = re.compile(
     r"subsequent(?:ly)?|prior to|later|earlier|chronolog(?:y|ical)|"
     r"timestamp|time-ordered|sequence|at \d{1,2}:\d{2})\b", re.I,
 )
+_TEMPORAL_DATE = re.compile(
+    r"\b(?:\d{4}-\d{1,2}-\d{1,2}|"
+    r"(?:on|in|by|during|as of)\s+(?:19|20)\d{2}|"
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?)\b(?:\s+\d{1,2})?(?:,?\s+(?:19|20)\d{2})?|"
+    r"\d{1,2}\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|"
+    r"jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)(?:\s+(?:19|20)\d{2})?|"
+    r"\d{1,2}:\d{2}(?::\d{2})?)\b", re.I,
+)
+_TEMPORAL_BRIDGE = re.compile(
+    r"\b(?:before|after|followed\s+by|follows?|followed|"
+    r"precedes?|preceded|prior\s+to|subsequent\s+to|then)\b", re.I,
+)
+_TEMPORAL_ID = re.compile(
+    r"\b(?:M\d+|v\d+(?:\.\d+)*|"
+    r"(?:version|milestone|release|phase|stage)\s+[A-Za-z0-9]+(?:\.\d+)*)\b", re.I,
+)
+_TEMPORAL_WORD = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", re.I)
+_TEMPORAL_GENERIC = {
+    "a", "an", "the", "and", "as", "at", "by", "for", "from", "in", "into",
+    "of", "on", "to", "was", "were", "is", "are", "it", "its", "this", "that",
+    "version", "milestone", "project", "phase", "stage", "process", "system",
+    "event", "events", "physical", "runtime", "image", "commit", "data",
+    "first", "last", "next", "then", "later", "earlier", "shipped",
+    "launched", "started", "completed", "happened", "occurred", "again",
+}
 # Match complete relationship clauses, rather than a word found anywhere in
 # the concatenation of otherwise unrelated selected facts.
 _ARCHITECTURE_RELATIONS = (
@@ -153,6 +181,90 @@ def _architecture_suitable(claims: list[str]) -> bool:
     return all(left in connected and right in connected for left, right in edges)
 
 
+def _timeline_terms(phrase: str) -> set[str]:
+    terms = {word.casefold() for word in _TEMPORAL_WORD.findall(phrase)
+             if word.casefold() not in _TEMPORAL_GENERIC}
+    # Preserve the identifier in "Version A", while a sentence's article
+    # "A" remains too generic to connect two otherwise unrelated claims.
+    if phrase.strip() == "A" or re.search(
+        r"\b(?:version|milestone|release|model|stage|phase)\s+A\b", phrase, re.I
+    ):
+        terms.add("a")
+    return terms
+
+
+def _timeline_endpoint_names_fact(endpoint: str, claim: str) -> bool:
+    """Require a named event/version, not an incidental shared project noun."""
+    # A shared action such as "writes files" cannot connect M63 to M66.
+    endpoint_ids = {match.group().split()[-1].casefold()
+                    for match in _TEMPORAL_ID.finditer(endpoint)}
+    if endpoint_ids and not endpoint_ids & {
+        match.group().split()[-1].casefold() for match in _TEMPORAL_ID.finditer(claim)
+    }:
+        return False
+    names = _timeline_terms(endpoint)
+    overlap = names & _timeline_terms(claim)
+    if len(overlap) >= 2:
+        return True
+    if any(len(name) == 1 or (any(char.isdigit() for char in name) and
+                              any(char.isalpha() for char in name))
+           for name in overlap):
+        return True
+    if len(names) != 1 or not overlap:
+        return False
+    name = next(iter(names))
+    return len(name) >= 4
+
+
+def _timeline_dated(claim: str) -> bool:
+    for match in _TEMPORAL_DATE.finditer(claim):
+        # A date-shaped release or version identifier is not a dated event.
+        if not re.search(r"\b(?:version|milestone|build|model|revision|release)\s*$",
+                         claim[:match.start()], re.I):
+            return True
+    return False
+
+
+def _timeline_suitable(claims: list[str]) -> bool:
+    """Every selected fact needs a shared clock or an explicitly named order edge.
+
+    An internal sequence in one claim cannot place another claim on that
+    sequence. Milestone and version numbers are identities, never ordering.
+    """
+    if not claims:
+        return False
+    if len(claims) == 1:
+        return bool(_TEMPORAL.search(claims[0]) or _timeline_dated(claims[0]))
+
+    dates = {index for index, claim in enumerate(claims) if _timeline_dated(claim)}
+    if len(dates) == len(claims):
+        return True
+    edges: dict[int, set[int]] = {index: set() for index in range(len(claims))}
+    for index in dates:
+        edges[index].update(dates - {index})
+    for index, claim in enumerate(claims):
+        for marker in _TEMPORAL_BRIDGE.finditer(claim):
+            # A "then" near the end of a long, comma-separated list does not
+            # relate an earlier named milestone to a second selected fact.
+            left = re.split(r"[.!?;,]", claim[:marker.start()].rstrip(" ,"))[-1]
+            right = re.split(r"[.!?;,]", claim[marker.end():])[0]
+            if not _timeline_terms(left) or not _timeline_terms(right):
+                continue
+            for other, selected in enumerate(claims):
+                if other != index and (
+                    _timeline_endpoint_names_fact(left, selected) or
+                    _timeline_endpoint_names_fact(right, selected)
+                ):
+                    edges[index].add(other)
+                    edges[other].add(index)
+    reached = {0}
+    while True:
+        expanded = reached | {neighbor for index in reached for neighbor in edges[index]}
+        if expanded == reached:
+            return len(reached) == len(claims)
+        reached = expanded
+
+
 def validate_scene_type(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
                         evidence_index: list[dict[str, Any]]) -> None:
     """Reject special templates whose selected facts cannot supply their semantics."""
@@ -165,7 +277,7 @@ def validate_scene_type(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
         re.search(r"\bworkflow\b.+\bthen\b", text, re.I)
     ):
         raise SceneTypeUnsuitable(f"{scene['id']}: DATA_FLOW requires selected facts describing an actual flow")
-    if kind == "TIMELINE" and not _TEMPORAL.search(text):
+    if kind == "TIMELINE" and not _timeline_suitable(claims):
         raise SceneTypeUnsuitable(f"{scene['id']}: TIMELINE requires explicit temporal or order evidence")
     if kind == "ARCHITECTURE_DIAGRAM" and not _architecture_suitable(claims):
         raise SceneTypeUnsuitable(f"{scene['id']}: ARCHITECTURE_DIAGRAM requires a coherent selected structural relationship")
