@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from source2reel import planner
+from source2reel import planner, research
 from source2reel.editorial import SceneTypeUnsuitable, prune_redundant_content_scenes
 from source2reel.providers import StructuredOutputError
 from source2reel.schema import validate_episode
@@ -29,6 +29,41 @@ INSTRUCTIONS = (
     "evidence and do not invent capabilities. Clearly distinguish passive observation and "
     "correlation from blocking, interception, or proven causality."
 )
+BORINGOS_CLAIMS = {
+    3: "BoringOS does not use Linux, BSD, or any other kernel; its components are written primarily in C with isolated x86_64 assembly.",
+    5: "RAMFS stores file data in the BoringKernel heap and does not add a separate allocator.",
+    8: "BoringOS includes a native Ring-3 display service called `boring-display`, installed as `/bin/boring-display`.",
+    9: "BoringOS Milestone 22 implements a modern VirtIO block device path using a single PCI device under QEMU.",
+}
+
+
+def boringos_ask():
+    refs = {3: "E0036", 5: "E0097", 8: "E0049", 9: "E0049"}
+    filler = "The repository documents this project milestone."
+    facts = []
+    for number in range(1, 10):
+        claim = BORINGOS_CLAIMS.get(number, filler)
+        ref = refs.get(number, "E0036")
+        facts.append({"claim": claim, "evidence_refs": [ref],
+                      "support": [{"evidence_ref": ref, "text": claim}],
+                      "phase": "final", "confidence": "high"})
+    evidence = [{"ref": ref, "kind": "document", "relative_path": f"docs/{ref}.md",
+                 "evidence_role": "primary"} for ref in ("E0036", "E0097", "E0049")]
+    ask = planner._make_ask({"version": 1, "facts": facts, "assets": []}, [],
+                            evidence, "BoringOS", "Explain the documented project.")
+    return ask, {entry["ref"] for entry in evidence}
+
+
+def boringos_outline():
+    return {"version": 1, "title": "BoringOS", "slug": "boringos",
+            "summary": BORINGOS_CLAIMS[3], "scene_intents": [
+                {"id": "s001", "type": "SUMMARY", "purpose": "Project context",
+                 "fact_ids": ["F0001"], "evidence_refs": ["E0036"]},
+                {"id": "s002", "type": "ARCHITECTURE_DIAGRAM",
+                 "purpose": BORINGOS_CLAIMS[3],
+                 "fact_ids": ["F0003", "F0005", "F0008", "F0009"],
+                 "evidence_refs": ["E0036", "E0097", "E0049"]},
+            ]}
 
 
 def physical_ask():
@@ -151,7 +186,7 @@ class EditorialTests(unittest.TestCase):
 
     def test_editorial_contract_is_in_both_checkpoint_inputs(self):
         contract = self.ask["editorial_contract"]
-        self.assertEqual(contract, "storyboard-editorial-grounding-v3")
+        self.assertEqual(contract, "storyboard-editorial-grounding-v4")
         self.assertEqual(planner._outline_payload(self.ask)["editorial_contract"], contract)
         selected = planner._normalize_outline({"version": 1, "title": "ETW", "slug": "etw",
             "summary": CLAIMS[1], "scene_intents": [intent("DATA_FLOW", 2)]},
@@ -159,9 +194,19 @@ class EditorialTests(unittest.TestCase):
         part = planner._scene_part_payload(self.ask, selected, selected["scene_intents"],
                                            1, 1, "scope")
         self.assertEqual(part["editorial_contract"], contract)
-        old = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v2"}
+        old = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v3"}
         digest = lambda value: hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
-        self.assertNotEqual(digest(old), digest(self.ask))
+        self.assertNotEqual(digest(planner._outline_payload(old)),
+                            digest(planner._outline_payload(self.ask)))
+        old_part = planner._scene_part_payload(old, selected, selected["scene_intents"],
+                                               1, 1, "scope")
+        self.assertNotEqual(digest(old_part), digest(part))
+        research_request = research._payload(1, [], "BoringOS", "Explain the project.")
+        self.assertEqual(research_request["research_semantics_contract"],
+                         "requested-topic-semantics-v5")
+        self.assertNotIn("editorial_contract", research_request)
+        self.assertNotIn("editorial_contract",
+                         planner._compact_payload(1, 1, [], "BoringOS", "Explain the project."))
 
     def test_physical_bad_architecture_recovers_through_multipart_and_checkpoint(self):
         raw = outline([intent("SECTION_TITLE", 1), intent("ARCHITECTURE_DIAGRAM", 3),
@@ -199,16 +244,103 @@ class EditorialTests(unittest.TestCase):
             calls = len(provider.calls)
             self.assertEqual(run(self.ask), episode)
             self.assertEqual(len(provider.calls), calls)
+            v4_digest = json_load(checkpoint)["input_sha256"]
 
-            # A v2 input hash cannot authorize the v3 canonical checkpoint.
-            older = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v2"}
+            # A v3 input hash cannot authorize the v4 canonical checkpoint.
+            older = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v3"}
             self.assertEqual(run(older), episode)
+            v3_digest = json_load(checkpoint)["input_sha256"]
+            self.assertNotEqual(v3_digest, v4_digest)
             self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 2)
             self.assertEqual(run(self.ask), episode)
+            self.assertEqual(json_load(checkpoint)["input_sha256"], v4_digest)
             self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 3)
             calls = len(provider.calls)
             self.assertEqual(run(self.ask), episode)
             self.assertEqual(len(provider.calls), calls)
+
+    def test_physical_boringos_architecture_downgrades_without_losing_authority(self):
+        ask, allowed = boringos_ask()
+        raw = boringos_outline()
+        selected = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+        self.assertEqual({number: selected[f"F{number:04d}"]["claim"]
+                          for number in BORINGOS_CLAIMS}, BORINGOS_CLAIMS)
+        with self.assertRaisesRegex(SceneTypeUnsuitable, "coherent selected structural"):
+            planner.validate_scene_type({"id": "s002", **raw["scene_intents"][1]},
+                                        selected, ask["evidence_index"])
+        invented = {"id": "s002", **raw["scene_intents"][1],
+                    "diagram": {"nodes": ["BoringKernel → RAMFS → boring-display",
+                                          "boring-display sends frames to VirtIO block"]}}
+        with self.assertRaisesRegex(ValueError,
+                                    r"s002: diagram\.nodes\[0\] has unsupported factual content"):
+            planner._validate_structured_grounding(None, [invented], ask, None)
+        canonical = planner._normalize_outline(raw, allowed, ask, check_coverage=False)
+        second = canonical["scene_intents"][1]
+        self.assertEqual(second["id"], "s002")
+        self.assertEqual(second["type"], "SUMMARY")
+        self.assertEqual(second["fact_ids"], ["F0003", "F0005", "F0008", "F0009"])
+        self.assertEqual(second["evidence_refs"], ["E0036", "E0097", "E0049"])
+        payload = planner._scene_part_payload(ask, canonical, [second], 2, 2, "scope")
+        self.assertEqual(payload["scene_intents"], [second])
+        self.assertEqual(payload["required_output"]["scenes"][0]["fact_ids"],
+                         second["fact_ids"])
+        self.assertEqual(payload["required_output"]["scenes"][0]["evidence_refs"],
+                         second["evidence_refs"])
+        self.assertNotIn("diagram", payload["required_output"]["scenes"][0])
+
+        provider = PhysicalOutlineProvider(raw)
+        with tempfile.TemporaryDirectory() as tmp:
+            episode = planner._multipart_episode(provider, "storyboard", ask,
+                Path(tmp), 32768, 4096, 1024, 0, None, "boringos-scope")
+        self.assertEqual(episode["scenes"][1]["type"], "SUMMARY")
+        self.assertEqual(episode["scenes"][1]["fact_ids"], second["fact_ids"])
+        self.assertNotIn("diagram", episode["scenes"][1])
+        self.assertTrue(all("diagram" not in item
+                            for call in provider.calls if call.get("storyboard_mode") == "scenes"
+                            for item in call["required_output"]["scenes"]))
+
+    def test_architecture_requires_explicit_connected_entities(self):
+        def check(claims, suitable):
+            facts = {f"F{index:04d}": {"claim": claim}
+                     for index, claim in enumerate(claims, 1)}
+            scene = {"id": "s001", "type": "ARCHITECTURE_DIAGRAM",
+                     "fact_ids": list(facts)}
+            if suitable:
+                planner.validate_scene_type(scene, facts, [])
+            else:
+                with self.assertRaises(SceneTypeUnsuitable):
+                    planner.validate_scene_type(scene, facts, [])
+
+        for claims in (["Project includes component X."],
+                       ["Subsystem Y exists."],
+                       ["RAMFS uses the kernel heap."],
+                       ["Component A sends events to Component B.",
+                        "Service X depends on subsystem Y."],
+                       ["The pipeline consists of Capture, Aggregation, and GUI stages.",
+                        "A separate sensor exists."]):
+            with self.subTest(claims=claims):
+                check(claims, False)
+        for claims in (["Component A sends events to Component B."],
+                       ["Service X depends on subsystem Y."],
+                       ["Events flow from capture into aggregation."],
+                       ["The display service receives buffers from the compositor."],
+                       ["Project X includes Component A and Component B."],
+                       ["The pipeline consists of Capture, Aggregation, and GUI stages."],
+                       ["ETW providers send normalized events to the core capture worker.",
+                        "The core capture worker feeds bounded application state used by the GUI."]):
+            with self.subTest(claims=claims):
+                check(claims, True)
+
+        valid = {"F0001": {"claim": "Component A sends events to Component B."}}
+        scene = {"id": "s001", "type": "ARCHITECTURE_DIAGRAM",
+                 "fact_ids": ["F0001"], "diagram": {"nodes": [
+                     "Component A sends events to Component B",
+                     "Component C performs undocumented dispatch"]}}
+        planner.validate_scene_type(scene, valid, [])
+        with self.assertRaisesRegex(ValueError,
+                                    r"diagram\.nodes\[1\] has unsupported factual content"):
+            planner._validate_structured_grounding(None, [scene],
+                {"research": {"facts": [{"fact_id": "F0001", **valid["F0001"]}]}}, None)
 
     def test_downgraded_duplicate_is_removed_with_no_retry(self):
         bad = outline([intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),

@@ -10,7 +10,7 @@ from .flow_language import distinct_flow_actions
 from .grounding import deterministic_decision
 
 
-EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v3"
+EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v4"
 FRAMING_TYPES = {"SECTION_TITLE", "HERO", "OUTRO"}
 EVIDENCE_TYPES = {"PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"}
 SPECIALIZED_TYPES = {"ARCHITECTURE_DIAGRAM", "DATA_FLOW", "TIMELINE", "GRAPH", "CODE"}
@@ -32,10 +32,24 @@ _TEMPORAL = re.compile(
     r"subsequent(?:ly)?|prior to|later|earlier|chronolog(?:y|ical)|"
     r"timestamp|time-ordered|sequence|at \d{1,2}:\d{2})\b", re.I,
 )
-_ARCHITECTURE = re.compile(
-    r"\b(?:connect\w*|routes?|sends?|receives?|passes?|feeds?|calls?|"
-    r"consists? of|comprises?|composed of|depends? on|contains?|includes?)\b", re.I,
+# Match complete relationship clauses, rather than a word found anywhere in
+# the concatenation of otherwise unrelated selected facts.
+_ARCHITECTURE_RELATIONS = (
+    re.compile(r"^(?P<source>.+?)\s+(?:sends?|routes?|passes?)\s+.+?\s+(?:to|into)\s+(?P<target>.+)$", re.I),
+    re.compile(r"^(?P<source>.+?)\s+(?:feeds?|calls?|depends?\s+on|connects?\s+(?:to|with)|is\s+connected\s+to)\s+(?P<target>.+)$", re.I),
+    re.compile(r"^(?P<target>.+?)\s+receives?\s+.+?\s+from\s+(?P<source>.+)$", re.I),
+    re.compile(r"^.+?\s+flows?\s+from\s+(?P<source>.+?)\s+(?:to|into|through)\s+(?P<target>.+)$", re.I),
 )
+_ARCHITECTURE_PARTS = re.compile(
+    r"^(?P<source>.+?)\s+(?:consists?\s+of|comprises?|is\s+composed\s+of|includes?|contains?)\s+(?P<members>.+)$", re.I,
+)
+_ARCHITECTURE_MEMBER = re.compile(r",\s*|\s+and\s+", re.I)
+_ARCHITECTURE_WORD = re.compile(r"[\w-]+", re.U)
+_ARCHITECTURE_GENERIC = {
+    "component", "components", "subsystem", "subsystems", "part", "parts",
+    "module", "modules", "service", "services", "stage", "stages",
+    "event", "events", "data", "state", "system", "project",
+}
 _GRAPHABLE = re.compile(
     r"\b(?:measurements?|data points?|series|samples?|charts?|graphs?|"
     r"values?|counts? (?:at|for|by|over)|rates? (?:at|for|by|over))\b|"
@@ -83,6 +97,62 @@ def _code_evidence(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
     return False
 
 
+def _architecture_entity(phrase: str) -> str | None:
+    """Keep literal endpoint names; generic component nouns alone are not nodes."""
+    words = _ARCHITECTURE_WORD.findall(phrase.strip().strip("`'\" "))
+    if len(words) > 1 and words[0].casefold() in {"a", "an", "the"}:
+        words.pop(0)
+    if not words or all(word.casefold() in _ARCHITECTURE_GENERIC for word in words):
+        return None
+    return " ".join(word.casefold() for word in words)
+
+
+def _architecture_suitable(claims: list[str]) -> bool:
+    """Every selected fact must contribute to one connected, explicit topology.
+
+    Endpoint matching is deliberately literal: when two facts use different
+    names, the planner can present them as a summary without guessing an edge.
+    """
+    if not claims:
+        return False
+    edges: set[tuple[str, str]] = set()
+    for claim in claims:
+        claim_edges: set[tuple[str, str]] = set()
+        for clause in re.split(r"[.;]\s*", claim):
+            clause = clause.strip().rstrip(".!? ")
+            if not clause:
+                continue
+            parts = _ARCHITECTURE_PARTS.fullmatch(clause)
+            if parts:
+                source = _architecture_entity(parts["source"])
+                members = [_architecture_entity(member) for member in
+                           _ARCHITECTURE_MEMBER.split(parts["members"])]
+                # Named enumeration establishes topology; generic membership
+                # ("Project includes component X") does not.
+                if source and len(members) >= 2 and all(members) and len(set(members)) >= 2:
+                    claim_edges.update((source, member) for member in members if member != source)
+                continue
+            for relation in _ARCHITECTURE_RELATIONS:
+                match = relation.fullmatch(clause)
+                if match:
+                    source = _architecture_entity(match["source"])
+                    target = _architecture_entity(match["target"])
+                    if source and target and source != target:
+                        claim_edges.add((source, target))
+                    break
+        if not claim_edges:
+            return False
+        edges.update(claim_edges)
+    connected = {next(iter(edges))[0]}
+    while True:
+        expanded = connected | {right for left, right in edges if left in connected}
+        expanded |= {left for left, right in edges if right in connected}
+        if expanded == connected:
+            break
+        connected = expanded
+    return all(left in connected and right in connected for left, right in edges)
+
+
 def validate_scene_type(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
                         evidence_index: list[dict[str, Any]]) -> None:
     """Reject special templates whose selected facts cannot supply their semantics."""
@@ -97,8 +167,8 @@ def validate_scene_type(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
         raise SceneTypeUnsuitable(f"{scene['id']}: DATA_FLOW requires selected facts describing an actual flow")
     if kind == "TIMELINE" and not _TEMPORAL.search(text):
         raise SceneTypeUnsuitable(f"{scene['id']}: TIMELINE requires explicit temporal or order evidence")
-    if kind == "ARCHITECTURE_DIAGRAM" and not _ARCHITECTURE.search(text):
-        raise SceneTypeUnsuitable(f"{scene['id']}: ARCHITECTURE_DIAGRAM requires a selected structural relationship")
+    if kind == "ARCHITECTURE_DIAGRAM" and not _architecture_suitable(claims):
+        raise SceneTypeUnsuitable(f"{scene['id']}: ARCHITECTURE_DIAGRAM requires a coherent selected structural relationship")
     if kind == "CODE" and not _code_evidence(scene, facts, evidence_index):
         raise SceneTypeUnsuitable(f"{scene['id']}: CODE requires selected code or literal source evidence")
     if kind == "GRAPH" and not (
