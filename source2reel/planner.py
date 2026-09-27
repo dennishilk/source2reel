@@ -10,6 +10,8 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
+from .editorial import (EDITORIAL_CONTRACT, deterministic_field_guard, selected_claims,
+                        structured_fields, validate_novelty, validate_scene_type)
 from .grounding import GROUNDING_CONTRACT, GroundingError, verify_claims
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
@@ -203,6 +205,7 @@ def _make_ask(
         example_scene["asset_ref"] = example_asset
     return {
         "grounding_contract": GROUNDING_CONTRACT,
+        "editorial_contract": EDITORIAL_CONTRACT,
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
         "allowed_scene_types": sorted(
@@ -869,6 +872,11 @@ def _validate_narration_grounding(
             narration, re.I,
         ):
             continue
+        claims = [fact["claim"] for fact in selected]
+        if narration != " ".join(claims) and not deterministic_field_guard(narration, claims):
+            raise _NarrationGroundingRejected(
+                scene["id"], "narration introduces an unsupported factual proposition",
+            )
         checks.append({"id": scene["id"], "claim": narration, "facts": [{
             "claim": fact["claim"], "support": fact["support"]
         } for fact in selected]})
@@ -884,6 +892,34 @@ def _validate_narration_grounding(
             raise _NarrationGroundingRejected(
                 item["id"], "narration introduces an unsupported factual proposition",
             )
+
+
+def _validate_structured_grounding(
+    provider: LLMProvider | None, scenes: list[dict[str, Any]], ask: dict[str, Any],
+    project_dir: Path | None, progress: Progress | None = None,
+) -> None:
+    """Selected fact claims bound every displayed factual structured field."""
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    checks = []
+    for scene in scenes:
+        claims = selected_claims(scene, facts)
+        for field, label in structured_fields(scene, facts):
+            if not deterministic_field_guard(label, claims):
+                raise ValueError(f"{scene['id']}: {field} has unsupported factual content from selected fact_ids")
+            if provider is not None:
+                checks.append({"id": f"{scene['id']}:{field}", "claim": label,
+                               "facts": [{"claim": facts[fact_id]["claim"],
+                                          "support": facts[fact_id]["support"]}
+                                         for fact_id in scene["fact_ids"]]})
+    if checks:
+        if project_dir is None:
+            with tempfile.TemporaryDirectory() as tmp:
+                verified = verify_claims(provider, checks, Path(tmp), "scene-fields", progress)
+        else:
+            verified = verify_claims(provider, checks, project_dir, "scene-fields", progress)
+        for item in checks:
+            if item["id"] not in verified:
+                raise ValueError(f"{item['id']} has unsupported factual content from selected fact_ids")
 
 
 def _recover_narration_after_retries(
@@ -966,7 +1002,10 @@ def _canonical_full_episode(episode: dict[str, Any], ask: dict[str, Any],
         if len(scene["evidence_refs"]) > 6:
             raise ValueError(f"{scene['id']}: evidence_refs exceeds six selected refs")
         _validate_scene_facts(scene, ask)
+        validate_scene_type(scene, {fact["fact_id"]: fact for fact in ask["research"]["facts"]},
+                            ask["evidence_index"])
         canonical.append(scene)
+    validate_novelty(canonical)
     return {**episode, "scenes": canonical}
 
 
@@ -1017,6 +1056,8 @@ def _complete_episode(
             episode = _repair_episode_shape(raw, valid_refs)
             episode = _canonical_full_episode(episode, ask, valid_refs)
             validate_episode(episode, valid_refs, require_integrated_presentation=True)
+            _validate_structured_grounding(provider, episode["scenes"], ask,
+                                           project_dir, progress)
             episode = _canonical_full_summary(provider, episode, ask, project_dir, progress)
             _validate_resource_links(episode.get("presentation", {}), ask)
             _validate_final_narration(episode, ask)
@@ -1186,6 +1227,7 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "authoritative_resource_urls": ask["authoritative_resource_urls"],
         "required_narration_suffix": ask["required_narration_suffix"],
         "fact_selection_requirement": ask["fact_selection_requirement"],
+        "editorial_contract": ask["editorial_contract"],
         "priority_fact_ids": ask["priority_fact_ids"],
         "priority_requirement": ask["priority_requirement"],
         "requested_topic_fact_ids": ask.get("requested_topic_fact_ids", {}),
@@ -1384,6 +1426,13 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
         raise StructuredOutputError(f"Storyboard outline presentation invalid: {exc}") from exc
     if check_coverage:
         _validate_focus_coverage(intents, ask)
+    try:
+        facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+        for intent in intents:
+            validate_scene_type(intent, facts, ask["evidence_index"])
+        validate_novelty(intents)
+    except ValueError as exc:
+        raise StructuredOutputError(f"Storyboard outline invalid: {exc}") from exc
     return outline
 
 
@@ -1658,6 +1707,7 @@ def _scene_part_payload(
             if intents[-1]["id"] == all_intents[-1]["id"] else None
         ),
         "fact_selection_requirement": ask["fact_selection_requirement"],
+        "editorial_contract": ask["editorial_contract"],
         "scene_intents": intents,
         **neighbors,
         "research": {"version": ask["research"].get("version", 1),
@@ -1721,6 +1771,8 @@ def _normalize_scene_part(
                 {**intent, "evidence_refs": refs}, ask, allowed,
             )
             _validate_scene_facts(scene, ask, intent["fact_ids"])
+            validate_scene_type(scene, {fact["fact_id"]: fact for fact in ask["research"]["facts"]},
+                                ask["evidence_index"])
         except ValueError as exc:
             raise StructuredOutputError(f"Storyboard part invalid: {exc}") from exc
         normalized_scenes.append(scene)
@@ -1733,6 +1785,7 @@ def _normalize_scene_part(
     try:
         partial = _repair_episode_shape(partial, allowed)
         validate_episode(partial, allowed, require_integrated_presentation=True)
+        _validate_structured_grounding(provider, partial["scenes"], ask, project_dir, progress)
         if intents[-1]["id"] == outline["scene_intents"][-1]["id"]:
             _validate_final_narration(partial, ask)
         if provider is not None:

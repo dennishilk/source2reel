@@ -95,7 +95,7 @@ class GroundedProvider:
                  "evidence_refs": refs[0]},
                 {"type": "DATA_FLOW", "purpose": facts[0]["claim"], "fact_ids": [ids[0], ids[3]],
                  "evidence_refs": refs[0] + refs[3]},
-                {"type": "CODE", "purpose": facts[2]["claim"], "fact_ids": [ids[2]],
+                {"type": "SUMMARY", "purpose": facts[2]["claim"], "fact_ids": [ids[2]],
                  "evidence_refs": refs[2]},
                 {"type": "SUMMARY", "purpose": facts[1]["claim"], "fact_ids": [ids[1]],
                  "evidence_refs": refs[1]},
@@ -198,13 +198,13 @@ class EditorialGroundingTests(unittest.TestCase):
         self.assertTrue(fits_context("storyboard", json.dumps(ask, ensure_ascii=False),
                                      1500, 0, 0))
         self.assertFalse(_final_requests_fit("storyboard", ask, 1500, 0, 0))
-        self.assertTrue(_final_requests_fit("storyboard", ask, 2000, 0, 0))
+        self.assertTrue(_final_requests_fit("storyboard", ask, 2100, 0, 0))
 
     def test_selected_fact_scope_excludes_unrelated_setup_profile_and_config(self):
         ask = _ask()
         outline = _normalize_outline({"version": 1, "title": "Widget", "slug": "widget",
                                       "summary": "Normal flow", "scene_intents": [{
-                                          "type": "CODE", "purpose": "Normal workflow",
+                                          "type": "SUMMARY", "purpose": "Normal workflow",
                                           "fact_ids": ["F0001"], "evidence_refs": ["E0001"],
                                       }]}, {f"E{i:04d}" for i in range(1, 6)}, ask)
         part = _scene_part_payload(ask, outline, outline["scene_intents"], 1, 1, "scope")
@@ -219,7 +219,7 @@ class EditorialGroundingTests(unittest.TestCase):
                 fixed = _normalize_outline({
                     "version": 1, "title": "Widget", "slug": "widget",
                     "summary": "Normal flow", "scene_intents": [{
-                        "type": "CODE", "purpose": "Normal workflow",
+                        "type": "SUMMARY", "purpose": "Normal workflow",
                         "evidence_refs": ["E0001"], **returned,
                     }],
                 }, {f"E{i:04d}" for i in range(1, 6)}, ask)
@@ -227,13 +227,13 @@ class EditorialGroundingTests(unittest.TestCase):
         for leak in ("E0002", "E0003", "E0005"):
             with self.subTest(leak=leak):
                 clean = _normalize_scene_part({"scenes": [{
-                    "id": "s001", "type": "CODE", "title": "Workflow", "narration": "Unsupported.",
+                    "id": "s001", "type": "SUMMARY", "title": "Workflow", "narration": "Unsupported.",
                     "fact_ids": ["F0001"], "evidence_refs": ["E0001", leak],
                 }]}, outline["scene_intents"], {f"E{i:04d}" for i in range(1, 6)}, outline, ask)
                 self.assertEqual(clean["scenes"][0]["evidence_refs"], ["E0001"])
         with self.assertRaisesRegex(StructuredOutputError, "differ from fixed outline"):
             _normalize_scene_part({"scenes": [{
-                "id": "s001", "type": "CODE", "title": "Workflow", "narration": "Optional repair.",
+                "id": "s001", "type": "SUMMARY", "title": "Workflow", "narration": "Optional repair.",
                 "fact_ids": ["F0002"], "evidence_refs": ["E0002"],
             }]}, outline["scene_intents"], {f"E{i:04d}" for i in range(1, 6)}, outline, ask)
 
@@ -347,7 +347,7 @@ class EditorialGroundingTests(unittest.TestCase):
             episode = plan(provider, research, inventory, project, "WidgetEngine", instructions,
                            max_retries=0)
             self.assertEqual([s["type"] for s in episode["scenes"]],
-                             ["HERO", "DATA_FLOW", "CODE", "SUMMARY", "OUTRO"])
+                             ["HERO", "DATA_FLOW", "SUMMARY", "SUMMARY", "OUTRO"])
             self.assertEqual(episode["scenes"][-1]["narration"], "Closing. " + SUFFIX)
             self.assertEqual(episode["presentation"]["outro"]["links"][0]["url"], [SOURCE_URL])
             self.assertEqual(episode["scenes"][1]["fact_ids"], ["F0001", "F0004"])

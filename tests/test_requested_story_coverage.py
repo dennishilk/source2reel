@@ -76,8 +76,8 @@ class RepeatingProvider:
         self.ask = ask
         self.full = full
         self.requests = []
-        self.bad = outline(ask, [4, 4, 4, 4],
-                           ["SECTION_TITLE", "DATA_FLOW", "ARCHITECTURE_DIAGRAM", "OUTRO"])
+        self.bad = outline(ask, [4, 4, 4],
+                           ["SECTION_TITLE", "SUMMARY", "OUTRO"])
 
     def complete_json(self, _system, user):
         request = json.loads(user)
@@ -199,8 +199,10 @@ class RequestedStoryCoverageTests(unittest.TestCase):
 
     def test_scene_limit_fails_clearly(self):
         bad = outline(self.ask, [4] * 32)
-        canonical = planner._normalize_outline(bad, self.allowed, self.ask,
-                                               check_coverage=False)
+        canonical = {**bad, "scene_intents": [
+            {**row, "id": f"s{index:03d}"}
+            for index, row in enumerate(bad["scene_intents"], 1)
+        ]}
         with self.assertRaisesRegex(planner.StructuredOutputError, "no room within 32 scenes"):
             planner._recover_outline_coverage(canonical, self.ask, self.allowed)
 
@@ -218,7 +220,7 @@ class RequestedStoryCoverageTests(unittest.TestCase):
                           outline_calls[1]["validation_feedback"])
             checkpoint = json_load(path / "manifests/storyboard-parts/outline.json")
             self.assertEqual([s["fact_ids"] for s in checkpoint["result"]["scene_intents"]],
-                             [["F0004"], ["F0004"], ["F0004"], ["F0001"],
+                             [["F0004"], ["F0004"], ["F0001"],
                               ["F0002"], ["F0003"], ["F0004"]])
             self.assertEqual(episode["scenes"][-1]["type"], "OUTRO")
             self.assertEqual({s["fact_ids"][0] for s in episode["scenes"]
@@ -229,9 +231,8 @@ class RequestedStoryCoverageTests(unittest.TestCase):
             self.assertEqual(len(provider.requests), before)
 
             # An older cached outline with repeated fact selection is never trusted.
-            checkpoint["result"] = planner._normalize_outline(
-                provider.bad, self.allowed, self.ask, check_coverage=False,
-            )
+            checkpoint["result"] = copy.deepcopy(checkpoint["result"])
+            checkpoint["result"]["scene_intents"][2]["fact_ids"] = ["F0004"]
             json_dump(path / "manifests/storyboard-parts/outline.json", checkpoint)
             self.assertEqual(run(), episode)
             self.assertEqual(len([r for r in provider.requests
@@ -253,10 +254,10 @@ class RequestedStoryCoverageTests(unittest.TestCase):
         self.assertEqual(len(full), 2)
         self.assertIn("purpose -> choose one of F0002", full[1]["validation_feedback"])
         self.assertEqual([s["fact_ids"] for s in episode["scenes"]],
-                         [["F0004"], ["F0004"], ["F0004"], ["F0001"],
+                         [["F0004"], ["F0004"], ["F0001"],
                           ["F0002"], ["F0003"], ["F0004"]])
-        self.assertEqual(episode["presentation"]["scene_titles"], {"s004": "The source"})
-        self.assertEqual(episode["scenes"][-1]["id"], "s004")
+        self.assertEqual(episode["presentation"]["scene_titles"], {"s003": "The source"})
+        self.assertEqual(episode["scenes"][-1]["id"], "s003")
         self.assertEqual({s["narration"] for s in episode["scenes"]
                           if s["type"] not in {"SECTION_TITLE", "OUTRO"}}, set(CLAIMS))
 
@@ -301,7 +302,7 @@ class RequestedStoryCoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             episode = planner._complete_episode(provider, "storyboard", self.ask,
                                                 self.allowed, 1, project_dir=Path(tmp))
-        added = episode["scenes"][3:6]
+        added = episode["scenes"][2:5]
         self.assertEqual([scene["narration"] for scene in added], CLAIMS[:3])
         self.assertEqual(len([request for request in provider.requests
                               if request.get("storyboard_mode") == "scenes"]), 6)
@@ -331,8 +332,8 @@ class RequestedStoryCoverageTests(unittest.TestCase):
                 self.bad = outline(ask, [4] * 32)
 
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(planner.StructuredOutputError,
-                                        "no room within 32 scenes"):
+            with self.assertRaisesRegex(planner._EpisodeValidationExhausted,
+                                        "content repeats"):
                 planner._complete_episode(TooMany(self.ask), "storyboard", self.ask,
                                           self.allowed, 0, project_dir=Path(tmp))
 

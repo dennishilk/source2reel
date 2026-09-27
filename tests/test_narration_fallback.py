@@ -171,7 +171,7 @@ class GroundedNarrationFallbackTests(unittest.TestCase):
                 return {"version": 1, "title": "Tool", "scenes": [
                     {"id": "s001", "type": "SUMMARY", "narration": natural,
                      "fact_ids": ["F0001"], "evidence_refs": ["E0001"]},
-                    {"id": "s002", "type": "CODE",
+                    {"id": "s002", "type": "SUMMARY",
                      "narration": "The tool guarantees every future process outcome.",
                      "fact_ids": ["F0002"], "evidence_refs": ["E0002"]},
                 ]}
@@ -217,10 +217,10 @@ class GroundedNarrationFallbackTests(unittest.TestCase):
                     return {"version": 1, "title": "Windows Telemetry Inspector",
                             "slug": "windows-telemetry", "summary": claims[0],
                             "scene_intents": [
-                                {"type": "DATA_FLOW", "purpose": claims[0],
-                                 "fact_ids": ["F0001", "F0002"],
-                                 "evidence_refs": ["E0001", "E0002"]},
-                                {"type": "CODE", "purpose": claims[2],
+                                {"type": "SUMMARY", "purpose": claims[0],
+                                 "fact_ids": ["F0001"],
+                                 "evidence_refs": ["E0001"]},
+                                {"type": "SUMMARY", "purpose": claims[2],
                                  "fact_ids": ["F0003"], "evidence_refs": ["E0003"]},
                                 {"type": "SUMMARY", "purpose": claims[1],
                                  "fact_ids": ["F0002"], "evidence_refs": ["E0002"]},
@@ -236,7 +236,7 @@ class GroundedNarrationFallbackTests(unittest.TestCase):
                         claims[0] if scene["id"] == "s001" else claims[1]
                     )
                     if scene["id"] == "s001":
-                        scene["diagram"] = {"nodes": [claims[0], claims[1]]}
+                        scene["annotations"] = [claims[0]]
                     scenes.append(scene)
                 return {"scenes": scenes}
 
@@ -259,7 +259,7 @@ class GroundedNarrationFallbackTests(unittest.TestCase):
             self.assertEqual([s["narration"] for s in scenes],
                              [claims[0], claims[2], claims[1]])
             self.assertEqual([s["fact_ids"] for s in scenes],
-                             [["F0001", "F0002"], ["F0003"], ["F0002"]])
+                             [["F0001"], ["F0003"], ["F0002"]])
             self.assertNotIn(hallucination, json.dumps(episode))
             requests = [tuple(item["id"] for item in call["scene_intents"])
                         for call in provider.calls if call.get("storyboard_mode") == "scenes"]
@@ -309,7 +309,7 @@ class GroundedNarrationFallbackTests(unittest.TestCase):
                 if mode == "outline":
                     return {"version": 1, "title": "Tool", "slug": "tool",
                             "summary": claim, "scene_intents": [
-                                {"type": "CODE", "purpose": claim, "fact_ids": ["F0001"],
+                                {"type": "SUMMARY", "purpose": claim, "fact_ids": ["F0001"],
                                  "evidence_refs": ["E0001"]},
                                 {"type": "OUTRO", "purpose": "Closing", "fact_ids": [],
                                  "evidence_refs": []},

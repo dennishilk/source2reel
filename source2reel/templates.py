@@ -96,9 +96,9 @@ def render_graph(scene,out,root,cfg,captions_enabled=False):
     im,d,t=_base(root,scene.get("title") or "GRAPH",cfg); F=t["frame"]; mf=_font(t["typography"]["mono_font"],24); data=scene.get("diagram") or {}; pts=data.get("points") or []
     xy=[]
     for i,p in enumerate(pts):
-        if isinstance(p,dict): xy.append((float(p.get("x",i)),float(p.get("y",0)),str(p.get("label",""))))
-        elif isinstance(p,(list,tuple)) and len(p)>=2: xy.append((float(p[0]),float(p[1]),""))
-    if not xy: xy=[(0,0,""),(1,1,""),(2,0.6,"")]
+        if isinstance(p,dict): xy.append((float(p["x"]),float(p["y"]),str(p.get("label",""))))
+        elif isinstance(p,(list,tuple)) and len(p)==2: xy.append((float(p[0]),float(p[1]),""))
+    if len(xy)<2: raise ValueError(f"{scene['id']}: GRAPH requires explicit points")
     left,top,right,bottom=180,180,1740,730 if captions_enabled else 870; d.line((left,bottom,right,bottom),fill=_rgb(F["line"]),width=2); d.line((left,top,left,bottom),fill=_rgb(F["line"]),width=2)
     xs=[p[0] for p in xy]; ys=[p[1] for p in xy]; xmin,xmax=min(xs),max(xs); ymin,ymax=min(ys),max(ys); xr=max(xmax-xmin,1e-9); yr=max(ymax-ymin,1e-9)
     px=[]

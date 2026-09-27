@@ -40,7 +40,7 @@ def ask(shared_ref: bool = False):
 def outline(third_id: str = "F0003") -> dict:
     return {"version": 1, "title": "Grounded technical explainer", "slug": "grounded",
             "summary": CLAIMS[0], "scene_intents": [
-                {"type": "CODE", "purpose": claim, "fact_ids": [f"F{i:04d}" if i < 3 else third_id],
+                {"type": "SUMMARY", "purpose": claim, "fact_ids": [f"F{i:04d}" if i < 3 else third_id],
                  "evidence_refs": [f"E{i:04d}"]}
                 for i, claim in enumerate(CLAIMS, 1)
             ]}
@@ -295,9 +295,11 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
     def test_sixth_intent_stray_ref_normalizes_and_checkpoint_is_reused(self):
         value = outline()
         value["scene_intents"].extend(copy.deepcopy(value["scene_intents"][:3]))
+        for row in value["scene_intents"][3:]:
+            row["type"] = "SECTION_TITLE"
         value["scene_intents"][5].update({
-            "type": "SUMMARY", "fact_ids": ["F0001"],
-            "evidence_refs": ["E0002"], "purpose": CLAIMS[0],
+            "fact_ids": ["F0001"],
+            "evidence_refs": ["E0002", "E0001"], "purpose": CLAIMS[0],
         })
         provider = OutlineProvider([value])
         with patch("source2reel.planner._canonicalize_outline_metadata",
@@ -343,7 +345,7 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
     def test_ambiguous_reference_requires_retry_and_fails_closed(self):
         scope = ask(shared_ref=True)
         value = outline()
-        value["scene_intents"] = [{"type": "CODE", "purpose": CLAIMS[0],
+        value["scene_intents"] = [{"type": "SUMMARY", "purpose": CLAIMS[0],
                                    "fact_ids": ["F9999"], "evidence_refs": ["E0001"]}]
         with self.assertRaisesRegex(StructuredOutputError, "F9999.*allowed_fact_ids"):
             planner._normalize_outline(value, {"E0001", "E0002", "E0003"}, scope)

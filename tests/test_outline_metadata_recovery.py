@@ -81,9 +81,9 @@ class MetadataCanonicalizationTests(unittest.TestCase):
         ]
         _, _, ask = ask_for(claims, visual=(90,))
         original = outline_for(ask, "The tool proves every network cause.", [
-            ("CODE", "Infer all unseen behavior.", ["F0002", "F0001"]),
+            ("SUMMARY", "Infer all unseen behavior.", ["F0002", "F0001"]),
             ("PROJECT_EVIDENCE", "Identify hidden users.", ["F0001"]),
-            ("SUMMARY", "The tool guarantees all outcomes.", ["F0002"]),
+            ("SECTION_TITLE", "The tool guarantees all outcomes.", ["F0002"]),
         ])
         snapshot = copy.deepcopy(original)
         with tempfile.TemporaryDirectory() as tmp, patch(
@@ -114,7 +114,7 @@ class MetadataCanonicalizationTests(unittest.TestCase):
         claims = ["A" * 1499 + ".", "B" * 199 + ".", "C" * 79 + "."]
         _, _, ask = ask_for(claims)
         raw = outline_for(ask, "Unsafe summary", [
-            ("CODE", "Unsupported purpose", ["F0001"]),
+            ("SUMMARY", "Unsupported purpose", ["F0001"]),
             ("SUMMARY", "Unsupported purpose", ["F0002"]),
             ("SUMMARY", "Unsupported purpose", ["F0003", "F0001"]),
         ])
@@ -124,10 +124,10 @@ class MetadataCanonicalizationTests(unittest.TestCase):
             fixed = planner._canonicalize_outline_metadata(NoVerifier(), raw, ask, Path(tmp))
         self.assertEqual(fixed["summary"], claims[0] + " " + claims[2])
         self.assertLessEqual(len(fixed["summary"]), 1600)
-        self.assertEqual(fixed["scene_intents"][0]["purpose"], "Plan a code scene")
+        self.assertEqual(fixed["scene_intents"][0]["purpose"], "Plan a summary scene")
         self.assertEqual(fixed["scene_intents"][1]["purpose"], "Plan a summary scene")
         self.assertEqual(fixed["scene_intents"][2]["purpose"], claims[2])
-        self.assertEqual(planner._outline_factual_text("Plan a code scene"), "")
+        self.assertEqual(planner._outline_factual_text("Plan a summary scene"), "")
         self.assertEqual(planner._outline_factual_text("Plan a summary scene"), "")
         verify.assert_called_once()
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,10 +220,10 @@ class PhysicalShapedRecoveryTests(unittest.TestCase):
                         "version": 1, "title": "Windows Telemetry Inspector",
                         "slug": "windows-telemetry-inspector", "summary": rejected,
                         "scene_intents": [
-                            {"type": "DATA_FLOW", "purpose": "It secretly uploads all captured data.",
+                            {"type": "SUMMARY", "purpose": "It secretly uploads all captured data.",
                              "fact_ids": ["F0001"], "evidence_refs": ["E0001"],
                              "asset_ref": {"irrelevant": "invalid"}},
-                            {"type": "CODE", "purpose": facts[1]["claim"],
+                            {"type": "SUMMARY", "purpose": facts[1]["claim"],
                              "fact_ids": ["F0002"], "evidence_refs": ["E0002"]},
                             {"type": "SUMMARY", "purpose": facts[2]["claim"],
                              "fact_ids": ["F0003"], "evidence_refs": ["E0003"]},

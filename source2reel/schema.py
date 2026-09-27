@@ -118,6 +118,16 @@ def validate_episode(
                 for n in nodes
             ):
                 raise ValueError(f"{sid}: {s['type']} requires 2–8 explicit, labeled diagram nodes")
+        if s["type"] == "GRAPH":
+            diagram=s.get("diagram")
+            if not isinstance(diagram,dict) or not isinstance(diagram.get("points"),list) or len(diagram["points"])<2:
+                raise ValueError(f"{sid}: GRAPH requires at least two explicit points")
+            for point in diagram["points"]:
+                pair=(point.get("x"),point.get("y")) if isinstance(point,dict) else point
+                if not isinstance(pair,(list,tuple)) or len(pair)!=2 or any(
+                    type(value) not in (int,float) or not math.isfinite(value) for value in pair
+                ):
+                    raise ValueError(f"{sid}: GRAPH points require finite x/y numbers")
     # Newly planned episodes must carry their own OUTRO metadata. Existing
     # frozen episodes may instead supply it through presentation.json at build
     # time; the renderer validates the merged presentation separately.

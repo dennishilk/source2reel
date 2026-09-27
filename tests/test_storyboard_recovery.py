@@ -81,10 +81,10 @@ class StoryboardProvider:
         if mode is None:
             raise self.full_error("complete output exceeds limit")
         if mode == "outline":
-            kinds = ["HERO", "CODE", "DATA_FLOW", "PROJECT_EVIDENCE", "TIMELINE",
-                     "ARCHITECTURE_DIAGRAM", "OUTRO"]
+            kinds = ["HERO", "SUMMARY", "SUMMARY", "PROJECT_EVIDENCE", "SUMMARY",
+                     "SUMMARY", "OUTRO"]
             refs = [self.first_refs or ["E0001"], ["E0003"], ["E0001", "E0003"],
-                    ["E0002"], ["E0004", "E0005"], ["E0001", "E0003"], []]
+                    ["E0002"], ["E0004", "E0005"], ["E0006"], []]
             requested_intent = payload["required_output"]["scene_intents"][0]
             evidence_types = payload.get("scene_type_requirements", {}).get(
                 "asset_ref_required_types", ())
@@ -341,8 +341,7 @@ class StoryboardRecoveryTests(unittest.TestCase):
                              [f"Point {i}" for i in range(1, 8)])
             self.assertEqual(episode["scenes"][3]["media"]["start_seconds"], 2.5)
             self.assertIs(episode["scenes"][3]["captions"]["enabled"], False)
-            self.assertEqual(episode["scenes"][2]["diagram"]["nodes"],
-                             ["Grounded fact 1", "Grounded fact 3"])
+            self.assertNotIn("diagram", episode["scenes"][2])
             self.assertEqual(episode["scenes"][0]["annotations"], [])
             self.assertEqual(episode["scenes"][0]["notes"], "")
             self.assertEqual(episode["scenes"][0]["pad_after_seconds"], 0.5)
@@ -471,29 +470,23 @@ class StoryboardRecoveryTests(unittest.TestCase):
                     self.assertFalse((project / "episode.json").exists())
 
     def test_malformed_diagram_is_rejected_before_assembly(self):
+        from test_storyboard_editorial import physical_ask, intent, outline
+        ask, allowed = physical_ask()
+        planned = outline([intent("DATA_FLOW", 2)])
+        planned.pop("presentation")
+        normalized = planner._normalize_outline(planned, allowed, ask, check_coverage=False)
         for bad in ("missing", "too_few_nodes", "unlabeled"):
-            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as tmp:
-                class BadDiagram(StoryboardProvider):
-                    def complete_json(self, system, user):
-                        request = json.loads(user)
-                        result = super().complete_json(system, user)
-                        if request.get("storyboard_mode") == "scenes" and request["part_number"] == 2:
-                            for scene in result["scenes"]:
-                                if "diagram" in scene:
-                                    if bad == "missing":
-                                        del scene["diagram"]
-                                    elif bad == "too_few_nodes":
-                                        scene["diagram"]["nodes"] = ["one label"]
-                                    else:
-                                        scene["diagram"]["nodes"] = ["", "label"]
-                        return result
-
-                project = _project(Path(tmp))
-                inventory, research = _source()
-                with self.assertRaisesRegex(RuntimeError, "diagram nodes"):
-                    plan(BadDiagram(count=5), research, inventory, project,
-                         "DemoEngine", INSTRUCTIONS, max_retries=0)
-                self.assertFalse((project / "episode.json").exists())
+            with self.subTest(bad=bad):
+                scene = {"id": "s001", "type": "DATA_FLOW", "title": "ETW flow",
+                         "narration": ask["research"]["facts"][1]["claim"],
+                         "fact_ids": ["F0002"], "evidence_refs": ["E0003"]}
+                if bad == "too_few_nodes":
+                    scene["diagram"] = {"nodes": ["one label"]}
+                elif bad == "unlabeled":
+                    scene["diagram"] = {"nodes": ["", "label"]}
+                with self.assertRaisesRegex(StructuredOutputError, "diagram nodes|labeled diagram"):
+                    planner._normalize_scene_part({"scenes": [scene]},
+                        normalized["scene_intents"], allowed, normalized, ask)
 
     def test_stale_multipart_contract_checkpoints_refresh_without_full_retry(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -196,7 +196,7 @@ class MultipartContractProvider:
                     {"type": "HERO", "purpose": facts[0]["claim"],
                      "fact_ids": [facts[0]["fact_id"]], "evidence_refs": [],
                      "asset_ref": "E0090"},
-                    {"type": "CODE", "purpose": facts[1]["claim"],
+                    {"type": "SUMMARY", "purpose": facts[1]["claim"],
                      "fact_ids": ["F9999"], "evidence_refs": ["E0002", "E0002"]},
                     {"type": "PROJECT_EVIDENCE", "purpose": facts[2]["claim"],
                      "fact_ids": [facts[2]["fact_id"]],
