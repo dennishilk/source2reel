@@ -1,4 +1,4 @@
-"""Process entities do not fulfill a requested account of how data flows."""
+"""Requested workflow recovery stays local and recognizes explicit source flow."""
 from __future__ import annotations
 
 import hashlib
@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from source2reel.chunking import checkpointed_complete_json, checkpointed_split_json
+from source2reel.flow_language import distinct_flow_actions
 from source2reel.grounding import _declarative_text
 from source2reel.planner import _make_ask
 from source2reel.research import (
@@ -34,19 +35,20 @@ OBSERVED = [
     "It does not block, intercept, or decrypt traffic, nor install drivers or "
     "disable telemetry.",
 ]
-ARCHITECTURE = (
-    "ETW callbacks normalize raw provider data into small internal events and "
-    "enqueue them. These architecture notes describe ETW network observations.\n\n"
-    "A single aggregation worker updates flow counters, resolves cached "
-    "metadata, correlates DNS/tasks, classifies the event, and writes to sinks."
-)
+CALLBACK = "ETW callbacks normalize raw provider data into small internal events and enqueue them."
+WORKER = ("A single aggregation worker updates flow counters, resolves cached metadata, "
+          "correlates DNS/tasks, classifies the event, and writes to sinks.")
+GUI_SINK = ("The GUI sink enqueues enriched events for batched dispatcher updates; "
+            "an optional recording sink appends JSONL independently of UI retention.")
+ARCHITECTURE = f"{CALLBACK} {WORKER} {GUI_SINK}"
 README = (
     "Windows Telemetry Inspector is a passive Windows 11 network diagnostics "
     "tool. It uses ETW to show process/service traffic.\n\n"
-    "Select Start Capture to start ETW collection. If Windows denies the ETW "
+    "Select Start Capture. If Windows denies the ETW "
     "provider, restart elevated.\n\n"
+    "Generate normal network traffic.\n\n"
     "Record Capture writes retained events.\n\n"
-    "The privacy workflow keeps local processing by default."
+    "The privacy workflow keeps processing local."
 )
 
 
@@ -110,7 +112,7 @@ class WorkflowSemanticsTests(unittest.TestCase):
         self.assertIn("purpose", missing)
         self.assertNotIn("overview", missing)
 
-    def test_architecture_record_becomes_scoped_coverage_candidate(self):
+    def test_exact_event_pipeline_becomes_scoped_coverage_candidate(self):
         missing = _missing_requested_concepts(
             [fact(claim) for claim in OBSERVED], INSTRUCTIONS, TITLE,
             {"E0002": "primary"},
@@ -136,8 +138,15 @@ class WorkflowSemanticsTests(unittest.TestCase):
         self.assertTrue(_workflow_signal(prose))
         self.assertFalse(_workflow_source_match(README, self.spec))
         self.assertFalse(_workflow_source_match(
+            "Select Start Capture. If Windows denies the ETW provider, restart elevated.",
+            self.spec))
+        self.assertFalse(_workflow_source_match("Record Capture writes retained events.",
+                                               self.spec))
+        self.assertFalse(_workflow_source_match(
+            "The privacy workflow uses local processing by default.", self.spec))
+        self.assertFalse(_workflow_source_match(
             "ETW network observations are local diagnostics.\n\n"
-            "A separate capture workflow writes retained records.", self.spec))
+            "A worker updates counters and resolves metadata.", self.spec))
         self.assertFalse(_workflow_source_match(
             "ETW network observations are local diagnostics. "
             "Start Capture writes retained records.", self.spec))
@@ -145,28 +154,56 @@ class WorkflowSemanticsTests(unittest.TestCase):
             "Windows Telemetry Inspector is a passive network diagnostics tool\n"
             "Select Start Capture to start ETW collection.", self.spec))
 
-    def test_architecture_flow_prose_and_bounded_adjacent_window(self):
+    def test_real_event_pipeline_matches_physical_workflow_request(self):
+        self.assertEqual(self.spec["terms"],
+                         ["architecture", "diagnostic", "etw", "network",
+                          "observation", "useful"])
         prose = _declarative_text(ARCHITECTURE)
-        self.assertIn("ETW callbacks normalize raw provider data into small "
-                      "internal events and enqueue them.", prose)
-        self.assertIn("A single aggregation worker updates flow counters, "
-                      "resolves cached metadata, correlates DNS/tasks, "
-                      "classifies the event, and writes to sinks.", prose)
+        self.assertIn(CALLBACK, prose)
+        self.assertIn(WORKER, prose)
+        self.assertIn(GUI_SINK, prose)
         self.assertTrue(_workflow_source_match(ARCHITECTURE, self.spec))
-        callback = ARCHITECTURE.split(". ", 1)[0] + "."
-        self.assertFalse(_workflow_source_match(callback, self.spec))
+        self.assertTrue(_workflow_source_match(CALLBACK, self.spec))
+        self.assertFalse(_workflow_source_match(WORKER, self.spec))
+        self.assertFalse(_covers_request(CALLBACK, self.spec))
         self.assertTrue(_workflow_source_match(
-            callback, {"kind": "workflow", "terms": ["etw", "event"]}))
+            CALLBACK, {"kind": "workflow", "terms": ["etw", "event"]}))
         self.assertTrue(_workflow_source_match(
             "ETW callbacks normalize raw provider data into\n"
             "small internal events and enqueue them.",
             {"kind": "workflow", "terms": ["etw", "event"]}))
         self.assertFalse(_workflow_source_match(
-            callback + "\n\n" + "These architecture notes describe ETW network observations.",
+            "ETW network observations are local diagnostics.\n\n" + WORKER,
             self.spec))
         self.assertFalse(_workflow_source_match(
-            callback + " Those " + "padding " * 200
-            + "network observations become useful local diagnostics.", self.spec))
+            "ETW callbacks " + "padding " * 200 +
+            "normalize raw data and enqueue events.", self.spec))
+
+    def test_strong_flow_window_requires_adjacent_bounded_continuation(self):
+        callback = "ETW callbacks normalize raw provider data."
+        continuation = "These events are enqueued for processing."
+        self.assertTrue(_workflow_source_match(callback + " " + continuation, self.spec))
+        self.assertFalse(_workflow_source_match(callback + "\n\n" + continuation,
+                                                self.spec))
+        self.assertFalse(_workflow_source_match(
+            callback + " These " + "intermediate " * 100 +
+            "events are enqueued for processing.", self.spec))
+
+    def test_distinct_actions_and_topical_overlap_are_both_required(self):
+        self.assertEqual(distinct_flow_actions(
+            "ETW callbacks normalize and normalizes data, then normalized events."),
+            {"normalize"})
+        self.assertEqual(distinct_flow_actions(CALLBACK), {"normalize", "enqueue"})
+        self.assertFalse(_workflow_source_match("ETW callbacks normalize raw events.",
+                                                self.spec))
+        self.assertFalse(_workflow_source_match(
+            "ETW callbacks normalize, then normalizes events.", self.spec))
+        self.assertTrue(_workflow_source_match(
+            "ETW callbacks normalize raw data and enqueue events.", self.spec))
+        self.assertFalse(_workflow_source_match(
+            "A worker updates counters, resolves metadata, and writes sinks.", self.spec))
+        self.assertTrue(_workflow_source_match(
+            "ETW events are read, transformed and written to sinks.", self.spec))
 
     def test_flow_verbs_are_prose_but_code_stays_code(self):
         prose_lines = [
@@ -194,30 +231,33 @@ class WorkflowSemanticsTests(unittest.TestCase):
              "evidence_role": "primary", "excerpt": ARCHITECTURE},
         ]
         research = {"facts": [fact(claim) for claim in OBSERVED] +
-                    [fact(ARCHITECTURE.split("\n\n", 1)[0], "E0003")], "assets": []}
+                    [fact(CALLBACK, "E0003"), fact(WORKER, "E0003")], "assets": []}
         ask = _make_ask(research, [], entries, TITLE, INSTRUCTIONS)
         groups = ask["requested_topic_fact_ids"]
         self.assertIn("F0001", groups["overview"])
-        self.assertNotIn("F0001", groups["workflow"])
-        self.assertIn("F0005", groups["workflow"])
+        # A selected source does not change conservative fact-level matching.
+        self.assertNotIn("workflow", groups)
         self.assertNotIn("purpose", groups)  # A requested why is not source evidence.
 
     def test_semantic_contracts_invalidate_old_checkpoint_digests(self):
         evidence = [{"ref": "E0001", "kind": "document", "relative_path": "README.md",
                      "evidence_role": "primary", "excerpt": "WidgetEngine is a tool."}]
         current = _payload(1, evidence, "WidgetEngine", "Explain what it is.")
-        previous = {**current, "research_semantics_contract": "requested-topic-semantics-v2"}
+        previous = {**current, "research_semantics_contract": "requested-topic-semantics-v3"}
         self.assertEqual(current["research_semantics_contract"],
                          RESEARCH_SEMANTICS_CONTRACT)
-        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v3")
+        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v4")
         self.assertNotEqual(digest("Research", previous), digest("Research", current))
 
         missing = {"workflow": {"kind": "workflow", "terms": ["event"]}}
         coverage = _coverage_payload(evidence, missing, "WidgetEngine", "How do events flow?")
-        old_coverage = {**coverage, "coverage_contract": "requested-primary-coverage-v2",
-                        "research_semantics_contract": "requested-topic-semantics-v2"}
+        old_coverage = {**coverage, "coverage_contract": "requested-primary-coverage-v3",
+                        "research_semantics_contract": "requested-topic-semantics-v3"}
         self.assertEqual(coverage["coverage_contract"], COVERAGE_CONTRACT)
-        self.assertEqual(COVERAGE_CONTRACT, "requested-primary-coverage-v3")
+        self.assertEqual(COVERAGE_CONTRACT, "requested-primary-coverage-v4")
+        self.assertNotEqual(digest("Research", {**coverage,
+                                                "coverage_contract": "requested-primary-coverage-v3"}),
+                            digest("Research", coverage))
         self.assertNotEqual(digest("Research", old_coverage), digest("Research", coverage))
 
         class Provider:

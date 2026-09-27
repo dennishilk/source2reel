@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
-from .flow_language import FLOW_ACTION
+from .flow_language import distinct_flow_actions
 from .grounding import GROUNDING_CONTRACT, _declarative_text, verify_claims
 from .inventory import _EMBEDDED_ROOTS
 from .progress import Progress, step
@@ -21,8 +21,8 @@ MAX_ASSETS_PER_REQUEST = 6
 MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v3"
-COVERAGE_CONTRACT = "requested-primary-coverage-v3"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v4"
+COVERAGE_CONTRACT = "requested-primary-coverage-v4"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -283,7 +283,7 @@ _FOLLOWING_FLOW_SENTENCE = re.compile(
 
 
 def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
-    """Require the signal and requested terms in one local, declarative passage."""
+    """Match a topical workflow or a strong operational flow in local prose."""
     terms = set(spec["terms"])
     needed = min(2, len(terms))
     for paragraph in re.split(r"\n[ \t]*\n+", excerpt):
@@ -297,7 +297,9 @@ def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
                 continue
             overlap = _request_words(sentence) & terms
             signal = _workflow_signal(sentence)
-            if signal and len(overlap) >= needed:
+            actions = distinct_flow_actions(sentence)
+            if ((signal and len(overlap) >= needed) or
+                    (overlap and len(actions) >= 2)):
                 return True
             if index + 1 == len(sentences):
                 continue
@@ -309,6 +311,11 @@ def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
             if (len(overlap | following_overlap) >= needed and
                     ((signal and overlap) or
                      (_workflow_signal(following) and following_overlap))):
+                return True
+            following_actions = distinct_flow_actions(following)
+            if (len(actions | following_actions) >= 2 and
+                    ((actions and overlap) or
+                     (following_actions and following_overlap))):
                 return True
     return False
 
@@ -425,8 +432,8 @@ def _workflow_signal(text: str) -> bool:
     """Recognize an operation sequence, never an unqualified process entity."""
     if _WORKFLOW.search(text) or _ORDER_SOURCE.search(text):
         return True
-    actions = {match.group().casefold() for match in FLOW_ACTION.finditer(text)}
-    return len(actions) >= 2 and bool(re.search(r"\b(?:and|then|into)\b|,", text, re.I))
+    return (len(distinct_flow_actions(text)) >= 2 and
+            bool(re.search(r"\b(?:and|then|into)\b|,", text, re.I)))
 
 
 _PREDICATE_STOPWORDS = {
