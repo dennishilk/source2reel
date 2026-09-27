@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .chunking import checkpointed_split_json
+from .flow_language import FLOW_ACTION
 from .progress import Progress
 from .providers import LLMProvider, StructuredOutputError
 
@@ -94,7 +95,8 @@ def _declarative_text(span: str) -> str:
         elif _CODE_LINE.match(stripped) or re.match(r"^(?:```|[\w.]+\s*:\s*\S)", stripped):
             continue
         if len(re.findall(r"[A-Za-z]+", stripped)) >= 3 and (
-            _VERB.search(stripped) or re.match(r"^[A-Z][^\n]{2,80}:\s*\S", stripped)
+            _VERB.search(stripped) or FLOW_ACTION.search(stripped) or
+            re.match(r"^[A-Z][^\n]{2,80}:\s*\S", stripped)
         ):
             lines.append(stripped)
     return "\n".join(lines)

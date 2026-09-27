@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
+from .flow_language import FLOW_ACTION
 from .grounding import GROUNDING_CONTRACT, _declarative_text, verify_claims
 from .inventory import _EMBEDDED_ROOTS
 from .progress import Progress, step
@@ -20,8 +21,8 @@ MAX_ASSETS_PER_REQUEST = 6
 MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v2"
-COVERAGE_CONTRACT = "requested-primary-coverage-v2"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v3"
+COVERAGE_CONTRACT = "requested-primary-coverage-v3"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -271,6 +272,47 @@ def _requested_fact_groups(
     return groups
 
 
+_MAX_WORKFLOW_SOURCE_SENTENCE = 480
+_MAX_WORKFLOW_SOURCE_WINDOW = 720
+_SOURCE_SENTENCE_BREAK = re.compile(
+    r"(?<=[.!?])\s+(?=\S)|\n(?=[A-Z]|[-*+] )",
+)
+_FOLLOWING_FLOW_SENTENCE = re.compile(
+    r"^(?:these|those|this|they|it|their|then|next|the resulting)\b", re.I,
+)
+
+
+def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
+    """Require the signal and requested terms in one local, declarative passage."""
+    terms = set(spec["terms"])
+    needed = min(2, len(terms))
+    for paragraph in re.split(r"\n[ \t]*\n+", excerpt):
+        prose = _declarative_text(paragraph)
+        if not prose:
+            continue
+        sentences = [part.strip() for part in _SOURCE_SENTENCE_BREAK.split(prose)
+                     if part.strip()]
+        for index, sentence in enumerate(sentences):
+            if len(sentence) > _MAX_WORKFLOW_SOURCE_SENTENCE:
+                continue
+            overlap = _request_words(sentence) & terms
+            signal = _workflow_signal(sentence)
+            if signal and len(overlap) >= needed:
+                return True
+            if index + 1 == len(sentences):
+                continue
+            following = sentences[index + 1]
+            if (len(sentence) + len(following) > _MAX_WORKFLOW_SOURCE_WINDOW or
+                    not _FOLLOWING_FLOW_SENTENCE.match(following)):
+                continue
+            following_overlap = _request_words(following) & terms
+            if (len(overlap | following_overlap) >= needed and
+                    ((signal and overlap) or
+                     (_workflow_signal(following) and following_overlap))):
+                return True
+    return False
+
+
 def _coverage_candidates(
     inventory: dict[str, Any], missing: dict[str, dict[str, Any]],
     title_hint: str, system: str, context_size: int,
@@ -291,16 +333,13 @@ def _coverage_candidates(
         prose = _declarative_text(excerpt)
         if not prose:
             continue
-        words = _request_words(prose)
         named = bool(title_key and title_key in re.sub(r"[^a-z0-9]", "", prose.casefold()))
         matched = set()
         for key, spec in missing.items():
             if spec["kind"] in {"purpose", "overview"} and not named:
                 continue
             if spec["kind"] == "workflow":
-                terms = set(spec["terms"])
-                if (_workflow_signal(prose) and
-                        (not terms or words & terms)):
+                if _workflow_source_match(excerpt, spec):
                     matched.add(key)
             elif _covers_request(prose, spec):
                 matched.add(key)
@@ -382,22 +421,11 @@ _ORDER_SOURCE = re.compile(
     r"ordered\s+steps|workflow\s+(?:runs|follows|begins|starts))\b|->|→",
     re.I,
 )
-_FLOW_ACTION = re.compile(
-    r"\b(?:normaliz(?:e|es|ed|ing)|enqueu(?:e|es|ed|ing)|"
-    r"updat(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|"
-    r"correlat(?:e|es|ed|ing)|classif(?:y|ies|ied|ying)|"
-    r"writ(?:e|es|ten|ing)|stor(?:e|es|ed|ing)|"
-    r"captur(?:e|es|ed|ing)|aggregat(?:e|es|ed|ing)|"
-    r"convert(?:s|ed|ing)?|produc(?:e|es|ed|ing)|"
-    r"emit(?:s|ted|ting)?|read(?:s|ing)?)\b", re.I,
-)
-
-
 def _workflow_signal(text: str) -> bool:
     """Recognize an operation sequence, never an unqualified process entity."""
     if _WORKFLOW.search(text) or _ORDER_SOURCE.search(text):
         return True
-    actions = {match.group().casefold() for match in _FLOW_ACTION.finditer(text)}
+    actions = {match.group().casefold() for match in FLOW_ACTION.finditer(text)}
     return len(actions) >= 2 and bool(re.search(r"\b(?:and|then|into)\b|,", text, re.I))
 
 
