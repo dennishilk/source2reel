@@ -4,11 +4,15 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from source2reel import planner
+from source2reel.editorial import SceneTypeUnsuitable
 from source2reel.providers import StructuredOutputError
 from source2reel.schema import validate_episode
+from source2reel.util import json_load
 
 
 CLAIMS = [
@@ -63,6 +67,42 @@ class ApprovingVerifier:
         raise AssertionError("Deterministic rejection must precede the verifier")
 
 
+class PhysicalOutlineProvider:
+    """Always propose the same unsupported architecture type when asked for an outline."""
+
+    def __init__(self, raw):
+        self.raw = raw
+        self.calls = []
+
+    def complete_json(self, _system, user):
+        request = json.loads(user)
+        self.calls.append(request)
+        if request.get("storyboard_mode") == "outline":
+            return copy.deepcopy(self.raw)
+        if request.get("storyboard_mode") == "scenes":
+            facts = {fact["fact_id"]: fact["claim"] for fact in request["research"]["facts"]}
+            scenes = []
+            for template in request["required_output"]["scenes"]:
+                scene = copy.deepcopy(template)
+                scene["narration"] = " ".join(facts[fact_id] for fact_id in scene["fact_ids"])
+                scene["title"] = "Documented observation"
+                if scene["type"] == "DATA_FLOW":
+                    scene["diagram"] = {"nodes": [
+                        "ETW callbacks normalize raw provider data into small internal events",
+                        "small internal events",
+                    ]}
+                scenes.append(scene)
+            return {"scenes": scenes}
+        if "checks" in request:
+            return {"decisions": [
+                {"id": check["id"], "supported": True,
+                 "propositions": [{"text": text, "support_indices": [0]}
+                                  for text in check["required_propositions"]]}
+                for check in request["checks"]
+            ]}
+        raise AssertionError("Multipart fixture must not request full output")
+
+
 class EditorialTests(unittest.TestCase):
     def setUp(self):
         self.ask, self.allowed = physical_ask()
@@ -90,6 +130,7 @@ class EditorialTests(unittest.TestCase):
 
     def test_editorial_contract_is_in_both_checkpoint_inputs(self):
         contract = self.ask["editorial_contract"]
+        self.assertEqual(contract, "storyboard-editorial-grounding-v2")
         self.assertEqual(planner._outline_payload(self.ask)["editorial_contract"], contract)
         selected = planner._normalize_outline({"version": 1, "title": "ETW", "slug": "etw",
             "summary": CLAIMS[1], "scene_intents": [intent("DATA_FLOW", 2)]},
@@ -97,9 +138,105 @@ class EditorialTests(unittest.TestCase):
         part = planner._scene_part_payload(self.ask, selected, selected["scene_intents"],
                                            1, 1, "scope")
         self.assertEqual(part["editorial_contract"], contract)
-        old = {key: value for key, value in self.ask.items() if key != "editorial_contract"}
+        old = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v1"}
         digest = lambda value: hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
         self.assertNotEqual(digest(old), digest(self.ask))
+
+    def test_physical_bad_architecture_recovers_through_multipart_and_checkpoint(self):
+        raw = outline([intent("SECTION_TITLE", 1), intent("ARCHITECTURE_DIAGRAM", 3),
+                       intent("DATA_FLOW", 2), intent("SUMMARY", 4, 5),
+                       intent("OUTRO", 3, 4, 5)])
+        provider = PhysicalOutlineProvider(raw)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            def run(ask):
+                return planner._multipart_episode(provider, "storyboard", ask, path,
+                    32768, 4096, 1024, 0, None, "physical-scope")
+
+            # Even zero permitted retries work: only the presentation is unsuitable.
+            episode = run(self.ask)
+            checkpoint = path / "manifests/storyboard-parts/outline.json"
+            canonical = json_load(checkpoint)["result"]
+            self.assertEqual([item["type"] for item in canonical["scene_intents"]],
+                             ["SECTION_TITLE", "SUMMARY", "DATA_FLOW", "SUMMARY", "OUTRO"])
+            self.assertEqual(canonical["scene_intents"][1]["fact_ids"], ["F0003"])
+            self.assertEqual(canonical["scene_intents"][1]["evidence_refs"], ["E0002"])
+            self.assertEqual([scene["type"] for scene in episode["scenes"]],
+                             [item["type"] for item in canonical["scene_intents"]])
+            self.assertEqual(episode["scenes"][2]["fact_ids"], ["F0002"])
+            self.assertNotIn("diagram", episode["scenes"][1])
+            self.assertIn("diagram", episode["scenes"][2])
+            self.assertEqual(episode["scenes"][-1]["type"], "OUTRO")
+            self.assertEqual(episode["presentation"]["outro"], raw["presentation"]["outro"])
+            self.assertEqual(planner._missing_story_topics(canonical["scene_intents"], self.ask), {})
+            self.assertNotIn("purpose", self.ask["requested_topic_fact_ids"])
+            self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 1)
+            scene_requests = [call for call in provider.calls if call.get("storyboard_mode") == "scenes"]
+            self.assertTrue(any(item["type"] == "SUMMARY" and item["id"] == "s002"
+                                and "diagram" not in item
+                                for call in scene_requests for item in call["required_output"]["scenes"]))
+            calls = len(provider.calls)
+            self.assertEqual(run(self.ask), episode)
+            self.assertEqual(len(provider.calls), calls)
+
+            # A v1 input hash cannot authorize the v2 canonical checkpoint.
+            older = {**self.ask, "editorial_contract": "storyboard-editorial-grounding-v1"}
+            self.assertEqual(run(older), episode)
+            self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 2)
+            self.assertEqual(run(self.ask), episode)
+            self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 3)
+            calls = len(provider.calls)
+            self.assertEqual(run(self.ask), episode)
+            self.assertEqual(len(provider.calls), calls)
+
+    def test_downgraded_duplicate_still_requires_outline_retry(self):
+        bad = outline([intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),
+                       intent("CODE", 2), intent("SUMMARY", 3), intent("OUTRO", 3)])
+        with self.assertRaisesRegex(StructuredOutputError, "s003: content repeats"):
+            planner._normalize_outline(bad, self.allowed, self.ask, check_coverage=False)
+        good = outline([intent("SECTION_TITLE", 1), intent("DATA_FLOW", 2),
+                        intent("SUMMARY", 3), intent("OUTRO", 3)])
+
+        class ImprovingProvider(PhysicalOutlineProvider):
+            def complete_json(self, system, user):
+                request = json.loads(user)
+                if request.get("storyboard_mode") == "outline" and "validation_feedback" in request:
+                    self.calls.append(request)
+                    return copy.deepcopy(good)
+                return super().complete_json(system, user)
+
+        provider = ImprovingProvider(bad)
+        with tempfile.TemporaryDirectory() as tmp:
+            episode = planner._multipart_episode(provider, "storyboard", self.ask,
+                Path(tmp), 32768, 4096, 1024, 1, None, "novelty-scope")
+        self.assertEqual([scene["type"] for scene in episode["scenes"]],
+                         ["SECTION_TITLE", "DATA_FLOW", "SUMMARY", "OUTRO"])
+        self.assertIn("content repeats", next(call["validation_feedback"] for call in provider.calls
+                                               if "validation_feedback" in call))
+        self.assertEqual(sum(call.get("storyboard_mode") == "outline" for call in provider.calls), 2)
+
+    def test_full_response_downgrade_discards_stale_diagram_but_keeps_facts(self):
+        raw = {"version": 1, "title": "Passive observation", "scenes": [{
+            "id": "s001", "type": "ARCHITECTURE_DIAGRAM", "title": "Observation",
+            "narration": CLAIMS[2], "fact_ids": ["F0003"], "evidence_refs": ["E0002"],
+            "diagram": {"nodes": ["Unsupported step A", "Unsupported step B"]},
+        }]}
+        fixed = planner._canonical_full_episode(raw, self.ask, self.allowed)
+        self.assertEqual(fixed["scenes"][0]["type"], "SUMMARY")
+        self.assertEqual(fixed["scenes"][0]["fact_ids"], ["F0003"])
+        self.assertNotIn("diagram", fixed["scenes"][0])
+
+    def test_type_fallback_does_not_repair_bad_authority(self):
+        raw = outline([intent("ARCHITECTURE_DIAGRAM", 3)])
+        raw.pop("presentation")
+        for mutation, message in (({"fact_ids": ["F9999"]}, "allowed_fact_ids"),
+                                  ({"fact_ids": [], "evidence_refs": []}, "fact_ids")):
+            with self.subTest(mutation=mutation):
+                candidate = copy.deepcopy(raw)
+                candidate["scene_intents"][0].update(mutation)
+                with self.assertRaisesRegex(StructuredOutputError, message):
+                    planner._normalize_outline(candidate, self.allowed, self.ask,
+                                               check_coverage=False)
 
     def test_selected_fact_isolation_purpose_and_temporal_invention(self):
         scenes = [
@@ -145,11 +282,16 @@ class EditorialTests(unittest.TestCase):
                                        ("CODE", (2,), "code"),
                                        ("TIMELINE", (4, 5), "temporal"),
                                        ("ARCHITECTURE_DIAGRAM", (3,), "structural")):
-            with self.subTest(kind=kind), self.assertRaisesRegex(StructuredOutputError, message):
+            with self.subTest(kind=kind):
                 raw = outline([intent(kind, *numbers)])
                 raw.pop("presentation")
-                planner._normalize_outline(raw, self.allowed,
-                                           self.ask, check_coverage=False)
+                selected = {fact["fact_id"]: fact for fact in self.ask["research"]["facts"]}
+                with self.assertRaisesRegex(SceneTypeUnsuitable, message):
+                    planner.validate_scene_type({"id": "s001", **raw["scene_intents"][0]},
+                                                selected, self.ask["evidence_index"])
+                canonical = planner._normalize_outline(raw, self.allowed, self.ask,
+                                                       check_coverage=False)
+                self.assertEqual(canonical["scene_intents"][0]["type"], "SUMMARY")
         scene = {"id": "s001", "type": "GRAPH", "narration": CLAIMS[3],
                  "fact_ids": ["F0004"], "evidence_refs": ["E0002"]}
         with self.assertRaisesRegex(ValueError, "GRAPH requires at least two"):

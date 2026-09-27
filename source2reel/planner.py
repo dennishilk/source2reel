@@ -10,8 +10,9 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
-from .editorial import (EDITORIAL_CONTRACT, deterministic_field_guard, selected_claims,
-                        structured_fields, validate_novelty, validate_scene_type)
+from .editorial import (EDITORIAL_CONTRACT, SPECIALIZED_TYPES, SceneTypeUnsuitable,
+                        deterministic_field_guard, selected_claims, structured_fields,
+                        validate_novelty, validate_scene_type)
 from .grounding import GROUNDING_CONTRACT, GroundingError, verify_claims
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
@@ -1002,8 +1003,13 @@ def _canonical_full_episode(episode: dict[str, Any], ask: dict[str, Any],
         if len(scene["evidence_refs"]) > 6:
             raise ValueError(f"{scene['id']}: evidence_refs exceeds six selected refs")
         _validate_scene_facts(scene, ask)
-        validate_scene_type(scene, {fact["fact_id"]: fact for fact in ask["research"]["facts"]},
-                            ask["evidence_index"])
+        try:
+            validate_scene_type(scene, {fact["fact_id"]: fact for fact in ask["research"]["facts"]},
+                                ask["evidence_index"])
+        except SceneTypeUnsuitable:
+            # The selected facts and refs have already passed provenance checks.
+            # Retain them and discard structured fields tied to the unsuitable type.
+            scene = _canonical_scene_fields({**scene, "type": "SUMMARY"})
         canonical.append(scene)
     validate_novelty(canonical)
     return {**episode, "scenes": canonical}
@@ -1424,12 +1430,29 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
             raise ValueError("presentation.scene_titles references an unplanned scene")
     except (ValueError, TypeError) as exc:
         raise StructuredOutputError(f"Storyboard outline presentation invalid: {exc}") from exc
+    try:
+        facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+        canonical = []
+        for intent in intents:
+            try:
+                validate_scene_type(intent, facts, ask["evidence_index"])
+            except SceneTypeUnsuitable:
+                # No facts or refs change. Only a specialized presentation that
+                # those facts cannot express is reduced to a factual summary.
+                if intent["type"] not in SPECIALIZED_TYPES:
+                    raise
+                purpose = intent["purpose"]
+                if purpose == _EDITORIAL_SCENE_PURPOSES[intent["type"]]:
+                    purpose = _EDITORIAL_SCENE_PURPOSES["SUMMARY"]
+                intent = {**intent, "type": "SUMMARY", "purpose": purpose}
+            canonical.append(intent)
+        intents = canonical
+    except ValueError as exc:
+        raise StructuredOutputError(f"Storyboard outline invalid: {exc}") from exc
+    outline["scene_intents"] = intents
     if check_coverage:
         _validate_focus_coverage(intents, ask)
     try:
-        facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
-        for intent in intents:
-            validate_scene_type(intent, facts, ask["evidence_index"])
         validate_novelty(intents)
     except ValueError as exc:
         raise StructuredOutputError(f"Storyboard outline invalid: {exc}") from exc

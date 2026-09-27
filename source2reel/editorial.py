@@ -10,9 +10,14 @@ from .flow_language import distinct_flow_actions
 from .grounding import deterministic_decision
 
 
-EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v1"
+EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v2"
 FRAMING_TYPES = {"SECTION_TITLE", "HERO", "OUTRO"}
 EVIDENCE_TYPES = {"PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"}
+SPECIALIZED_TYPES = {"ARCHITECTURE_DIAGRAM", "DATA_FLOW", "TIMELINE", "GRAPH", "CODE"}
+
+
+class SceneTypeUnsuitable(ValueError):
+    """The selected facts are valid, but cannot carry this presentation type."""
 _CODE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".rs", ".go", ".c", ".h", ".cpp",
     ".cs", ".java", ".kt", ".swift", ".rb", ".sh", ".bash", ".ps1", ".sql",
@@ -89,17 +94,17 @@ def validate_scene_type(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
         distinct_flow_actions(text) and _FLOW_RELATION.search(text) or
         re.search(r"\bworkflow\b.+\bthen\b", text, re.I)
     ):
-        raise ValueError(f"{scene['id']}: DATA_FLOW requires selected facts describing an actual flow")
+        raise SceneTypeUnsuitable(f"{scene['id']}: DATA_FLOW requires selected facts describing an actual flow")
     if kind == "TIMELINE" and not _TEMPORAL.search(text):
-        raise ValueError(f"{scene['id']}: TIMELINE requires explicit temporal or order evidence")
+        raise SceneTypeUnsuitable(f"{scene['id']}: TIMELINE requires explicit temporal or order evidence")
     if kind == "ARCHITECTURE_DIAGRAM" and not _ARCHITECTURE.search(text):
-        raise ValueError(f"{scene['id']}: ARCHITECTURE_DIAGRAM requires a selected structural relationship")
+        raise SceneTypeUnsuitable(f"{scene['id']}: ARCHITECTURE_DIAGRAM requires a selected structural relationship")
     if kind == "CODE" and not _code_evidence(scene, facts, evidence_index):
-        raise ValueError(f"{scene['id']}: CODE requires selected code or literal source evidence")
+        raise SceneTypeUnsuitable(f"{scene['id']}: CODE requires selected code or literal source evidence")
     if kind == "GRAPH" and not (
         _GRAPHABLE.search(text) and len(re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?!\w)", text)) >= 2
     ):
-        raise ValueError(f"{scene['id']}: GRAPH requires selected graphable numerical data")
+        raise SceneTypeUnsuitable(f"{scene['id']}: GRAPH requires selected graphable numerical data")
 
 
 def validate_novelty(scenes: list[dict[str, Any]]) -> None:
