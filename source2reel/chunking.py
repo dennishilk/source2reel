@@ -118,22 +118,11 @@ def checkpointed_complete_json(
         try:
             cached = json_load(checkpoint)
             if cached.get("input_sha256") == digest and isinstance(cached.get("result"), dict):
-                try:
-                    return normalize(cached["result"])
-                except Exception as exc:
-                    if recover_exhausted is not None:
-                        recovered = recover_exhausted(exc)
-                        if recovered is not None:
-                            json_dump(checkpoint, {
-                                "version": 1,
-                                "input_sha256": digest,
-                                "result": recovered,
-                            })
-                            return recovered
-                    # A matching digest does not make stale structured output valid
-                    # forever. Fall through to a fresh bounded request when the
-                    # current normalizer rejects an older checkpoint.
-        except (OSError, ValueError, TypeError):
+                return normalize(cached["result"])
+        except Exception:
+            # A matching digest does not make stale structured output valid
+            # forever. Treat any checkpoint rejected by the current normalizer
+            # as a cache miss, then use the ordinary bounded retry/recovery path.
             pass
 
     last_error: Exception | None = None
