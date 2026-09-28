@@ -316,10 +316,10 @@ class VisualCheckpointTests(unittest.TestCase):
             self.assertIn("ai_media", third["evidence"][0])
             self.assertEqual(len(checkpoints(project)), 2)
 
-    def test_contracts_and_asset_authority_are_unchanged(self):
+    def test_contracts_remain_scoped_and_asset_authority_is_preserved(self):
         self.assertEqual(MEDIA_INSPECTION_CONTRACT, "media-inspection-v1")
         self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v5")
-        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v4")
+        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v5")
         self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v2")
         self.assertNotIn("media_inspection_contract",
                          research._payload(1, [], "BoringOS", "Explain the project"))

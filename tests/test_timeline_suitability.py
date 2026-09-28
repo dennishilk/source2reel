@@ -174,9 +174,9 @@ class TimelineSuitabilityTests(unittest.TestCase):
             planner._normalize_scene_part({"scenes": [returned]}, outline["scene_intents"],
                                           {"E0001"}, outline, ask)
 
-    def test_v4_checkpoint_is_recanonicalized_without_an_outline_model_call(self):
+    def test_current_checkpoint_is_recanonicalized_without_an_outline_model_call(self):
         ask, _ = physical_ask()
-        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v4")
+        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v5")
         self.assertEqual(ask["editorial_contract"], EDITORIAL_CONTRACT)
         self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v5")
         self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v2")

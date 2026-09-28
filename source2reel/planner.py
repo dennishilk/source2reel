@@ -115,6 +115,20 @@ def _supported_research(research: dict[str, Any], inventory: dict[str, Any]) -> 
     return {**research, "facts": kept}
 
 
+_GERMAN_FUNCTION_WORDS = {
+    "dass", "dafür", "dieses", "einem", "einen", "einer", "erwarteten",
+    "nicht", "schaltet", "statt", "unterstützt", "wird", "werden",
+}
+
+
+def _obviously_german_claim(claim: str) -> bool:
+    """Avoid verbatim German narration when English research is available."""
+    if not re.search(r"[äöüßÄÖÜ]", claim):
+        return False
+    words = set(re.findall(r"[a-zäöüß]+", claim.casefold()))
+    return len(words & _GERMAN_FUNCTION_WORDS) >= 3
+
+
 def _authoritative_resource_urls(project_dir: Path) -> list[str]:
     """Use only HTTP(S) URLs recorded by ingestion, never model prose."""
     sources_dir = project_dir / "sources"
@@ -646,14 +660,28 @@ def _canonical_story_composition(
             if full:
                 scene = _canonical_scene_fields(scene)
         if scene["type"] == "SECTION_TITLE":
+            if scene.get("purpose") == _EDITORIAL_SCENE_PURPOSES["SECTION_TITLE"]:
+                continue
             if not retained or retained[-1]["type"] != "SECTION_TITLE":
                 retained.append(scene)
             continue
         if scene["type"] in {"HERO", "OUTRO"}:
             retained.append(scene)
+            if scene["type"] == "HERO" and isinstance(scene.get("asset_ref"), str):
+                used_assets.add(scene["asset_ref"])
             continue
 
         asset = scene.get("asset_ref") if scene["type"] in EVIDENCE_TYPES else None
+        if asset in used_assets:
+            # A second use of the same image is no longer distinct evidence.
+            # Keep the new facts as a summary without implying another visual.
+            scene = {**scene, "type": "SUMMARY"}
+            scene.pop("asset_ref", None)
+            if full:
+                scene = _canonical_scene_fields(scene)
+            scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
+            _validate_scene_facts(scene, ask)
+            asset = None
         distinct_asset = isinstance(asset, str) and asset not in used_assets
         selected = list(scene["fact_ids"])
         if not distinct_asset:
@@ -1139,6 +1167,7 @@ def _validate_narration_grounding(
 ) -> None:
     """Check actual narration against just the scene's selected source facts."""
     known = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    future_ids = set(ask.get("requested_topic_fact_ids", {}).get("future-work", []))
     final_scene_id = final_scene_id or scenes[-1]["id"]
     checks = []
     for scene in scenes:
@@ -1162,6 +1191,14 @@ def _validate_narration_grounding(
             narration = narration[:-len(ask["required_narration_suffix"])].strip()
         if not narration:
             continue
+        if future_ids & set(scene.get("fact_ids", [])) and not (
+            re.search(r"\b(?:planned|future|later|yet|next|roadmap)\b", narration, re.I) and
+            any(len(_topic_words(narration) & _topic_words(known[fact_id]["claim"])) >= 2
+                for fact_id in future_ids & set(scene["fact_ids"]))
+        ):
+            raise _NarrationGroundingRejected(
+                scene["id"], "narration omits the selected future-work boundary",
+            )
         if not selected and re.fullmatch(
             r"(?:closing|thank you(?: for watching)?|thanks(?: for watching)?|the end)\W*",
             narration, re.I,
@@ -1341,6 +1378,9 @@ def _canonical_full_episode(
             raise ValueError(f"{scene['id']}: evidence outside planner scope with invalid fact_ids")
         scene["fact_ids"] = _outline_fact_ids(scene.get("fact_ids"), scene, ask)
         scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
+        if _placeholder_scene_title(scene.get("title")):
+            facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+            scene["title"] = _suggested_scene_title(scene, facts, episode.get("title", ""))
         if len(scene["evidence_refs"]) > 6:
             raise ValueError(f"{scene['id']}: evidence_refs exceeds six selected refs")
         _validate_scene_facts(scene, ask)
@@ -1985,6 +2025,28 @@ def _safe_intent_purpose(intent: dict[str, Any], facts: dict[str, dict[str, Any]
     return _EDITORIAL_SCENE_PURPOSES[intent["type"]]
 
 
+def _placeholder_scene_title(value: Any) -> bool:
+    return not isinstance(value, str) or not value.strip() or bool(re.fullmatch(
+        r"(?:english\s+)?(?:on-screen\s+)?title", value.strip(), re.I,
+    ))
+
+
+def _suggested_scene_title(
+    intent: dict[str, Any], facts: dict[str, dict[str, Any]], episode_title: str,
+) -> str:
+    """Ground a short template title in the selected intent or its first fact."""
+    purpose = str(intent.get("purpose") or "").strip()
+    if not purpose or purpose in _EDITORIAL_SCENE_PURPOSES.values():
+        purpose = next((facts[fact_id]["claim"] for fact_id in intent.get("fact_ids", [])
+                        if fact_id in facts), episode_title)
+    else:
+        purpose = _EDITORIAL_PREFIX.sub("", purpose)
+    first = re.split(r"(?<=[.!?])\s+", purpose.strip(), maxsplit=1)[0].rstrip(". ")
+    if len(first) > 96:
+        first = first[:93].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
+    return first or episode_title or "Documented observation"
+
+
 def _coverage_additions(
     scenes: list[dict[str, Any]], ask: dict[str, Any], allowed: set[str],
 ) -> list[dict[str, Any]]:
@@ -2171,7 +2233,9 @@ def _scene_part_payload(
                 if key in outline}
 
     def required_scene(intent: dict[str, Any]) -> dict[str, Any]:
-        scene = {"id": intent["id"], "type": intent["type"], "title": "on-screen title",
+        selected_facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+        scene = {"id": intent["id"], "type": intent["type"],
+                 "title": _suggested_scene_title(intent, selected_facts, outline["title"]),
                  "narration": "concise evidence-grounded narration",
                  "fact_ids": intent["fact_ids"],
                  "evidence_refs": intent["evidence_refs"]}
@@ -2234,6 +2298,9 @@ def _normalize_scene_part(
         if not isinstance(raw, dict) or raw.get("id") != intent["id"] or raw.get("type") != intent["type"]:
             raise StructuredOutputError(f"Storyboard part scene order/id/type differs from {intent['id']}")
         scene = _canonical_scene_fields(raw)
+        if _placeholder_scene_title(scene.get("title")):
+            selected_facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+            scene["title"] = _suggested_scene_title(intent, selected_facts, outline["title"])
         if (intent["type"] == "SECTION_TITLE" and not intent["fact_ids"] and
                 isinstance(scene.get("narration"), str) and
                 re.fullmatch(r"closing\W*", scene["narration"].strip(), re.I)):
@@ -2623,6 +2690,10 @@ def plan(
     progress: Progress | None = None,
 ) -> dict[str, Any]:
     research = _supported_research(research, inventory)
+    english_facts = [fact for fact in research["facts"]
+                     if not _obviously_german_claim(fact["claim"])]
+    if english_facts:
+        research = {**research, "facts": english_facts}
     valid = {e["ref"] for e in inventory["evidence"]}
     media = _media_inventory(inventory)
 
@@ -2657,9 +2728,10 @@ def plan(
         [] if _reference_focus(title_hint, instructions, inventory)
         else _primary_anchors(research, inventory, media_ref_set, title_hint, instructions)
     )
-    # Small local contexts cannot carry the same number of media descriptions
-    # as full-size models; keep at least one direct project visual when usable.
-    media_limit = min(_PLANNER_MEDIA_LIMIT, max(1, context_size // 8192))
+    # Keep two distinct project visuals in small local contexts when available.
+    # They are compact; final request fitting still governs the reduce levels.
+    media_limit = min(_PLANNER_MEDIA_LIMIT, max(2, context_size // 8192)) \
+        if context_size >= 8192 else 1
     selected_visuals: list[dict[str, Any]] = []
     make_compact_payload = lambda level, part, batch: _compact_payload(level, part, batch, title_hint, instructions)
 

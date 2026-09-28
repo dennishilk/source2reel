@@ -271,6 +271,16 @@ def _requested_fact_groups(
                _covers_request(fact["claim"], spec)]
         if ids:
             groups[key] = list(dict.fromkeys(ids))
+    if re.search(r"\b(?:planned|future|later|roadmap)\b", instructions, re.I):
+        future = [fact["fact_id"] for fact in facts
+                  if isinstance(fact.get("fact_id"), str) and fact.get("support") and
+                  fact.get("phase") == "development" and
+                  fact.get("evidence_refs") and
+                  all(roles.get(ref) == "primary" for ref in fact["evidence_refs"]) and
+                  re.search(r"\b(?:planned|future|later|yet|next|roadmap)\b",
+                            str(fact.get("claim", "")), re.I)]
+        if future:
+            groups["future-work"] = list(dict.fromkeys(future))
     return groups
 
 

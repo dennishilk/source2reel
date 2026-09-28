@@ -200,10 +200,10 @@ class MultipartContractProvider:
                      "fact_ids": ["F9999"], "evidence_refs": ["E0002", "E0002"]},
                     {"type": "PROJECT_EVIDENCE", "purpose": facts[2]["claim"],
                      "fact_ids": [facts[2]["fact_id"]],
-                     "evidence_refs": ["E0001", "E0003"], "asset_ref": "E0090"},
+                     "evidence_refs": ["E0001", "E0003"], "asset_ref": "E0091"},
                     {"type": "HARDWARE_EVIDENCE", "purpose": facts[0]["claim"],
                      "fact_ids": [facts[0]["fact_id"]],
-                     "evidence_refs": ["E0001"], "asset_ref": "E0090"},
+                     "evidence_refs": ["E0001"], "asset_ref": "E0092"},
                 ],
             }
         if mode == "scenes":
@@ -241,14 +241,15 @@ class MultipartContractIntegrationTests(unittest.TestCase):
             {"ref": f"E{i:04d}", "kind": "document", "evidence_role": "primary",
              "relative_path": f"docs/{i}.md", "excerpt": claim}
             for i, claim in enumerate(CLAIMS, 1)
-        ] + [{"ref": "E0090", "kind": "media", "evidence_role": "primary",
-              "relative_path": "media/visual.png"}]}
+        ] + [{"ref": f"E{i:04d}", "kind": "media", "evidence_role": "primary",
+              "relative_path": f"media/visual-{i}.png"} for i in (90, 91, 92)]}
         self.research = {"version": 1, "facts": [
             {"claim": claim, "evidence_refs": [f"E{i:04d}"],
              "support": [{"evidence_ref": f"E{i:04d}", "text": claim}],
              "phase": "final", "confidence": "high"}
             for i, claim in enumerate(CLAIMS, 1)
-        ], "assets": [{"evidence_ref": "E0090", "purpose": "Visual only"}]}
+        ], "assets": [{"evidence_ref": f"E{i:04d}", "purpose": "Visual only"}
+                      for i in (90, 91, 92)]}
 
     def run_plan(self, provider):
         return planner.plan(provider, self.research, self.inventory, self.project,
@@ -267,18 +268,18 @@ class MultipartContractIntegrationTests(unittest.TestCase):
         self.assertEqual([scene["fact_ids"] for scene in episode["scenes"]],
                          [["F0001"], ["F0002"], ["F0003"], ["F0001"]])
         self.assertEqual([scene["evidence_refs"] for scene in episode["scenes"]],
-                         [["E0090", "E0001"], ["E0002"], ["E0003", "E0090"],
-                          ["E0001", "E0090"]])
-        self.assertEqual(episode["scenes"][2]["asset_ref"], "E0090")
-        validate_episode(episode, {"E0001", "E0002", "E0003", "E0090"},
+                         [["E0090", "E0001"], ["E0002"], ["E0003", "E0091"],
+                          ["E0001", "E0092"]])
+        self.assertEqual(episode["scenes"][2]["asset_ref"], "E0091")
+        validate_episode(episode, {"E0001", "E0002", "E0003", "E0090", "E0091", "E0092"},
                          require_integrated_presentation=True)
 
         parts = self.project / "manifests" / "storyboard-parts"
         self.assertTrue((parts / "recovery.json").exists())
         saved = json_load(parts / "outline.json")["result"]["scene_intents"]
         self.assertEqual([intent["evidence_refs"] for intent in saved],
-                         [["E0090", "E0001"], ["E0002"], ["E0003", "E0090"],
-                          ["E0001", "E0090"]])
+                         [["E0090", "E0001"], ["E0002"], ["E0003", "E0091"],
+                          ["E0001", "E0092"]])
         part_scenes = [scene for path in sorted(parts.glob("part-[0-9][0-9][0-9].json"))
                        for scene in json_load(path)["result"]["scenes"]]
         self.assertEqual(part_scenes, episode["scenes"])

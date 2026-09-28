@@ -10,7 +10,7 @@ from .flow_language import distinct_flow_actions
 from .grounding import deterministic_decision
 
 
-EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v4"
+EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v5"
 FRAMING_TYPES = {"SECTION_TITLE", "HERO", "OUTRO"}
 EVIDENCE_TYPES = {"PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"}
 SPECIALIZED_TYPES = {"ARCHITECTURE_DIAGRAM", "DATA_FLOW", "TIMELINE", "GRAPH", "CODE"}

@@ -86,6 +86,28 @@ class DroppingMediaProvider:
 
 
 class PlannerMediaCarryTests(unittest.TestCase):
+    def test_small_context_carries_two_distinct_project_visuals(self):
+        research, inventory = _fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "projects" / "boringos"
+            (root / "prompts").mkdir()
+            (root / "prompts" / "storyboard.txt").write_text("storyboard")
+            (root / "prompts" / "planner_compact.txt").write_text("compact")
+            with patch("source2reel.planner._final_requests_fit",
+                       side_effect=[False, True]), \
+                 patch("source2reel.planner.split_for_context",
+                       side_effect=lambda records, *args, **kwargs: [records]):
+                plan(DroppingMediaProvider(), research, inventory, project,
+                     "BoringOS", "Explain the actual OS.",
+                     context_size=8192, max_retries=0)
+            refs = {item["ref"] for item in json_load(
+                project / "manifests" / "planner-evidence.json",
+            )["media_inventory"]}
+            self.assertEqual(len(refs), 2)
+            self.assertIn("E0982", refs)
+            self.assertFalse(refs & {f"E{ref}" for ref in range(970, 976)})
+
     def test_boringos_visuals_outlive_two_reduce_levels_and_reach_storyboard(self):
         research, inventory = _fixture()
         with tempfile.TemporaryDirectory() as tmp:

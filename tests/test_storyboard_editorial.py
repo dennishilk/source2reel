@@ -186,7 +186,7 @@ class EditorialTests(unittest.TestCase):
 
     def test_editorial_contract_is_in_both_checkpoint_inputs(self):
         contract = self.ask["editorial_contract"]
-        self.assertEqual(contract, "storyboard-editorial-grounding-v4")
+        self.assertEqual(contract, "storyboard-editorial-grounding-v5")
         self.assertEqual(planner._outline_payload(self.ask)["editorial_contract"], contract)
         selected = planner._normalize_outline({"version": 1, "title": "ETW", "slug": "etw",
             "summary": CLAIMS[1], "scene_intents": [intent("DATA_FLOW", 2)]},
