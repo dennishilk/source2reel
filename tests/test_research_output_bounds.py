@@ -256,6 +256,7 @@ class ResearchOutputBoundsTests(unittest.TestCase):
         self.assertEqual(provider.request["research_limits"], {
             "facts_per_ref": 6, "facts_per_request": 12,
             "assets_per_ref": 2, "assets_per_request": 6,
+            "support_chars_per_entry": 1024,
         })
         self.assertIn("6 facts per evidence ref", provider.system)
         self.assertIn("12 facts per request", provider.system)
