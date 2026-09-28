@@ -15,7 +15,7 @@ from .providers import LLMProvider, StructuredOutputError
 
 # Included in research and storyboard request hashes: old normalized checkpoints
 # must not bypass a newly strengthened provenance contract.
-GROUNDING_CONTRACT = "mapped-support-kind-v3"
+GROUNDING_CONTRACT = "mapped-support-kind-v4"
 VERIFIER_BATCH_SIZE = 12
 VERIFIER_REQUEST_MAX_CHARS = 12000
 MAX_PROPOSITIONS = 16
@@ -63,9 +63,18 @@ _SYNTAX_CLAIM = re.compile(
     r"class\s+[\w.]+|command|config(?:uration)?)\s+"
     r"(imports?|calls?|invokes?|passes?|assigns?|sets?|returns?)\s+(.+)$", re.I,
 )
+_DIRECT_OPERATION = re.compile(
+    r"\b(?:runs?|executes?|starts?|restarts?|stops?|kills?|creates?|writes?|copies?|"
+    r"moves?|removes?|deletes?|edits?|comments?|uncomments?|disables?|loads?|unloads?|"
+    r"installs?|updates?)\b", re.I,
+)
+_NON_EXECUTING_CODE = re.compile(
+    r"^(?:from\s+\S+\s+import\s+|import\s+|(?:async\s+)?def\s+|class\s+|@\w)", re.I,
+)
+
 _VERB = re.compile(
     r"\b(?:is|are|was|were|has|have|does|do|uses?|creates?|produces?|"
-    r"calls?|imports?|runs?|installs?|supports?|includes?|maps?|defines?|"
+    r"calls?|imports?|runs?|installs?|fix(?:es|ed|ing)?|supports?|includes?|maps?|defines?|"
     r"provides?|allows?|enables?|turns?|transforms?|builds?|generates?|"
     r"describes?|records?|documents?|applies?|produces?|remains?|exists?|depends?|validates?)\b", re.I,
 )
@@ -132,6 +141,33 @@ def _syntactic_claim(claim: str, spans: list[str]) -> bool:
     if operation.lower().startswith('pass'):
         return bool(re.search(r"--[\w-]+", object_text) and
                     any(flag in code for flag in re.findall(r"--[\w-]+", object_text)))
+    return False
+
+
+def _direct_executable_operation(claim: str, spans: list[str]) -> bool:
+    """Permit verification only for a concrete operation encoded by executable syntax."""
+    if (not _DIRECT_OPERATION.search(claim) or _CAUSE.search(claim) or
+            _EXCLUSIVE.search(claim) or _NEGATIVE.search(claim)):
+        return False
+    for span in spans:
+        for line in span.splitlines():
+            stripped = line.strip().strip("`")
+            if (not stripped or stripped.startswith(("# ", "// ")) or
+                    _NON_EXECUTING_CODE.match(stripped)):
+                continue
+            # An assignment can expose syntax, but not by itself establish the
+            # higher-level operation described by a generated behavioral claim.
+            if re.match(r"^[A-Za-z_][\w.]*\s*=", stripped):
+                continue
+            # A direct call expression is executable syntax; the semantic verifier
+            # still decides whether the generated operation is exactly what it shows.
+            if re.search(r"\b[A-Za-z_][\w.]*\s*\([^)]*\)", stripped):
+                return True
+            # Shell/config mutations need unmistakable command syntax rather than
+            # ordinary prose: options, variables, pipes, separators or redirection.
+            if re.search(r"(?:^|\s)(?:--?[\w-]+|\$[A-Za-z_][\w]*|[|&;<>]{1,2})",
+                         stripped):
+                return True
     return False
 
 
@@ -219,11 +255,13 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
     if any(claim.strip() == span.strip() for span in support):
         return "accept"  # Verbatim source syntax or prose, with no inferred meaning.
     prose = [_declarative_text(span) for span in support]
-    if not any(prose) and not _syntactic_claim(claim, support) and not any(
+    syntactic = _syntactic_claim(claim, support)
+    direct_operation = _direct_executable_operation(claim, support)
+    if not any(prose) and not syntactic and not direct_operation and not any(
         claim.strip().rstrip(" .;:!?") == span.strip().rstrip(" .;:!?") for span in support
     ):
         return "reject"
-    if any(prose) and not _syntactic_claim(claim, support):
+    if any(prose) and not syntactic and not direct_operation:
         # A code fragment in a mixed quotation cannot silently provide the
         # meaning missing from the explicit prose in that quotation.
         support = [span for span in prose if span]
@@ -242,7 +280,7 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
     if _NEGATIVE.search(claim) and not _NEGATIVE.search(quoted):
         return "reject"
     claim_words, support_words = _words(claim), _words(quoted)
-    if not members and not _syntactic_claim(claim, support) and len(claim_words) >= 4 and len(
+    if not members and not syntactic and not direct_operation and len(claim_words) >= 4 and len(
         claim_words & support_words
     ) < max(
         2, (2 * len(claim_words) + 2) // 3

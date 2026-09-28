@@ -320,7 +320,7 @@ class VisualCheckpointTests(unittest.TestCase):
         self.assertEqual(MEDIA_INSPECTION_CONTRACT, "media-inspection-v1")
         self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v5")
         self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v5")
-        self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v3")
+        self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v4")
         self.assertNotIn("media_inspection_contract",
                          research._payload(1, [], "BoringOS", "Explain the project"))
         self.assertNotIn("media_inspection_contract",

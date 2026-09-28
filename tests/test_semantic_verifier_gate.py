@@ -116,6 +116,44 @@ class SupportKindRegressions(unittest.TestCase):
         self.assertEqual(accepted, {'C0001'})
         self.assertEqual(provider.calls, 1)
 
+    def test_spdif_readme_paraphrase_reaches_semantic_verifier(self):
+        claim = ('The SPDIF Fix Tool is an interactive Bash script designed to fix SPDIF '
+                 'audio delay and standby issues on Linux systems.')
+        support = ['A simple interactive Bash tool to **fix SPDIF sound delay & standby issues on Linux**.']
+        self.assertEqual(deterministic_decision(claim, support), 'verify')
+        accepted, provider = self.verify(claim, support)
+        self.assertEqual(accepted, {'C0001'})
+        self.assertEqual(provider.calls, 1)
+
+    def test_direct_shell_operations_are_verifiable_but_purpose_is_not(self):
+        pipewire = (
+            'if pgrep -x "pipewire" > /dev/null; then\n'
+            'CONFIG_FILE="$CONFIG_DIR/pipewire.conf"\n'
+            'sed -i \'/suspend-on-idle/s/^/#/\' "$CONFIG_FILE"'
+        )
+        restart = (
+            'pulseaudio -k\n'
+            'pulseaudio --start\n'
+            'systemctl --user restart pipewire pipewire-pulse || true'
+        )
+        cases = [
+            ('The tool disables PipeWire suspend-on-idle by commenting the matching '
+             'line in pipewire.conf.', [pipewire]),
+            ('The tool restarts PulseAudio and PipeWire.', [restart]),
+        ]
+        for claim, support in cases:
+            with self.subTest(claim=claim):
+                self.assertEqual(deterministic_decision(claim, support), 'verify')
+                accepted, provider = self.verify(claim, support)
+                self.assertEqual(accepted, {'C0001'})
+                self.assertEqual(provider.calls, 1)
+
+        unsupported = 'The tool restarts PulseAudio and PipeWire to prevent audio dropouts.'
+        self.assertEqual(deterministic_decision(unsupported, [restart]), 'reject')
+        accepted, provider = self.verify(unsupported, [restart])
+        self.assertEqual(accepted, set())
+        self.assertEqual(provider.calls, 0)
+
     def test_mapping_must_cover_each_proposition_and_use_real_local_index(self):
         claim = ('The baseline does not automatically install CUDA. '
                  'The separate voice environment installs Torch.')
