@@ -21,7 +21,8 @@ MAX_ASSETS_PER_REQUEST = 6
 MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v5"
+MAX_SUPPORT_CHARS = 1024
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v6"
 COVERAGE_CONTRACT = "requested-primary-coverage-v5"
 
 
@@ -36,6 +37,7 @@ def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str,
             "facts_per_request": MAX_FACTS_PER_REQUEST,
             "assets_per_ref": MAX_ASSETS_PER_REF,
             "assets_per_request": MAX_ASSETS_PER_REQUEST,
+            "support_chars_per_entry": MAX_SUPPORT_CHARS,
         },
         "grounding_contract": GROUNDING_CONTRACT,
         "research_semantics_contract": RESEARCH_SEMANTICS_CONTRACT,
@@ -896,7 +898,7 @@ def research(
                     break
                 ref, span = item.get("evidence_ref"), item.get("text")
                 if (ref not in refs or not isinstance(span, str) or
-                        not 12 <= len(span) <= 320 or
+                        not 12 <= len(span) <= MAX_SUPPORT_CHARS or
                         span not in (by_ref[ref].get("excerpt") or "")):
                     invalid_support = True
                     break

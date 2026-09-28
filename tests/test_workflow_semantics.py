@@ -327,10 +327,10 @@ class WorkflowSemanticsTests(unittest.TestCase):
         evidence = [{"ref": "E0001", "kind": "document", "relative_path": "README.md",
                      "evidence_role": "primary", "excerpt": "WidgetEngine is a tool."}]
         current = _payload(1, evidence, "WidgetEngine", "Explain what it is.")
-        previous = {**current, "research_semantics_contract": "requested-topic-semantics-v4"}
+        previous = {**current, "research_semantics_contract": "requested-topic-semantics-v5"}
         self.assertEqual(current["research_semantics_contract"],
                          RESEARCH_SEMANTICS_CONTRACT)
-        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v5")
+        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v6")
         self.assertNotEqual(digest("Research", previous), digest("Research", current))
 
         missing = {"workflow": {"kind": "workflow", "terms": ["event"]}}

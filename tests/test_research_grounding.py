@@ -143,6 +143,35 @@ class ResearchGroundingTests(unittest.TestCase):
         self.assertEqual([f["claim"] for f in result["facts"]], [facts[1]["claim"]])
         self.assertEqual(result["facts"][0]["subject_scope"], "mixed")
 
+    def test_long_exact_shell_support_survives_bounded_normalization(self):
+        support = "\n".join(
+            [f'echo prep-{i} >/dev/null' for i in range(18)] +
+            ['systemctl --user restart pipewire pipewire-pulse || true']
+        )
+        self.assertGreater(len(support), 320)
+        self.assertLessEqual(len(support), 1024)
+        evidence = [{"ref": "E0004", "kind": "document", "relative_path": "spdif-fix.sh",
+                     "evidence_role": "primary", "excerpt": support}]
+        facts = [{"claim": "The script restarts PipeWire.",
+                  "evidence_refs": ["E0004"],
+                  "support": [{"evidence_ref": "E0004", "text": support}],
+                  "phase": "final", "confidence": "high"}]
+        result, provider = self.run_research(evidence, facts)
+        self.assertEqual([fact["claim"] for fact in result["facts"]],
+                         ["The script restarts PipeWire."])
+        self.assertTrue(any("checks" in request for _system, request in provider.requests))
+
+    def test_support_above_bound_is_rejected(self):
+        support = "x" * 1025
+        evidence = [{"ref": "E0004", "kind": "document", "relative_path": "spdif-fix.sh",
+                     "evidence_role": "primary", "excerpt": support}]
+        facts = [{"claim": "The script restarts PipeWire.",
+                  "evidence_refs": ["E0004"],
+                  "support": [{"evidence_ref": "E0004", "text": support}],
+                  "phase": "final", "confidence": "high"}]
+        result, _ = self.run_research(evidence, facts)
+        self.assertEqual(result["facts"], [])
+
     def test_invented_support_text_is_rejected(self):
         evidence = [{"ref": "E0001", "kind": "document", "relative_path": "README.md",
                      "evidence_role": "primary", "excerpt": "WidgetEngine builds diagrams."}]
