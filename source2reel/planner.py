@@ -1354,6 +1354,10 @@ def _retry_feedback(error: Exception) -> str:
                 "visual asset for that scene. Keep its selected facts and choose a "
                 "compatible non-evidence scene type.")
     if "asset_ref" in message or "visual asset" in message:
+        if "allowed asset_ref: " in message:
+            options = message.split("allowed asset_ref: ", 1)[1]
+            return (f"Allowed asset_ref: {options}. Copy one exactly for this evidence "
+                    "scene, or choose a compatible non-evidence type.")
         return (f"Previous storyboard rejected: {message}. For evidence scenes, choose a "
                 "renderable visual in visual_asset_refs selected by a fact or research.assets; "
                 "otherwise choose a compatible non-evidence type. Preserve fixed outline assets.")
@@ -1588,6 +1592,24 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_OUTLINE_RETRY_FEEDBACK_RESERVE = 48
+
+
+def _brief_outline_feedback(error: Exception) -> str:
+    """A bounded corrective hint when the full validation message will not fit."""
+    message = str(error)
+    match = re.search(r"allowed asset_ref:\s*(E\d+)", message)
+    if match:
+        return f"Use asset_ref {match.group(1)} or non-evidence type."
+    if "allowed asset_ref: none" in message or "no planner-scoped visual" in message:
+        return "Use a compatible non-evidence scene type."
+    if "fact_ids" in message:
+        return "Copy only supplied fact_ids for each intent."
+    if isinstance(error, _RequestedCoverageError):
+        return "Cover the required topic facts in the outline."
+    return "Repair the rejected outline field."
+
+
 def _final_requests_fit(
     system: str, ask: dict[str, Any], context_size: int,
     output_reserve_tokens: int, safety_tokens: int,
@@ -1596,8 +1618,12 @@ def _final_requests_fit(
     if not fits_context(system, json.dumps(ask, ensure_ascii=False),
                         context_size, output_reserve_tokens, safety_tokens):
         return False
+    # A retry must fit at least a short, concrete validation hint. Large
+    # feedback uses the normal path only when the context has spare room.
+    outline = {**_outline_payload(ask),
+               "validation_feedback": "x" * _OUTLINE_RETRY_FEEDBACK_RESERVE}
     return fits_context(system + _OUTLINE_SYSTEM,
-                        json.dumps(_outline_payload(ask), ensure_ascii=False),
+                        json.dumps(outline, ensure_ascii=False),
                         context_size, output_reserve_tokens, safety_tokens)
 
 
@@ -1669,7 +1695,14 @@ def _canonical_evidence_refs(
         selected_asset not in allowed or selected_asset not in visual_refs or
         (selected_asset not in fact_refs and selected_asset not in asset_refs)
     ):
-        raise ValueError(f"{intent['id']}: asset_ref must be a renderable, scoped selected fact or research asset")
+        eligible = [ref for ref in ask.get("visual_asset_refs", _visual_asset_refs(ask["evidence_index"]))
+                    if ref in allowed and ref in visual_refs and
+                    (ref in fact_refs or ref in asset_refs)]
+        options = ", ".join(eligible[:8]) or "none (choose a non-evidence scene type)"
+        raise ValueError(
+            f"{intent['id']}: asset_ref must be a renderable, scoped selected fact or "
+            f"research asset; allowed asset_ref: {options}"
+        )
     authorized = set(fact_refs)
     if contract.requires_asset_ref and selected_asset in asset_refs:
         authorized.add(selected_asset)
@@ -2203,20 +2236,27 @@ def _multipart_episode(
         raise ValueError("Storyboard outline input exceeds the configured context budget")
     with step(progress, "Planning storyboard parts"):
         feedback: str | None = None
+        brief_feedback = ""
         coverage_candidate: dict[str, Any] | None = None
 
         class OutlineRetryProvider:
             def complete_json(self, request_system: str, user: str) -> dict[str, Any]:
                 if feedback:
-                    revised = {**json.loads(user), "validation_feedback": feedback}
-                    revised_user = json.dumps(revised, ensure_ascii=False)
-                    if fits_context(request_system, revised_user, context_size,
-                                    output_reserve_tokens, safety_tokens):
-                        user = revised_user
+                    for hint in (feedback, brief_feedback):
+                        revised_user = json.dumps({**json.loads(user),
+                                                   "validation_feedback": hint}, ensure_ascii=False)
+                        if fits_context(request_system, revised_user, context_size,
+                                        output_reserve_tokens, safety_tokens):
+                            user = revised_user
+                            break
+                    else:
+                        raise StructuredOutputError(
+                            "Storyboard outline retry feedback exceeds the configured context budget"
+                        )
                 return provider.complete_json(request_system, user)
 
         def normalize_outline(value: dict[str, Any]) -> dict[str, Any]:
-            nonlocal feedback, coverage_candidate
+            nonlocal feedback, brief_feedback, coverage_candidate
             coverage_candidate = None
             try:
                 normalized = _normalize_outline(
@@ -2230,6 +2270,7 @@ def _multipart_episode(
                 return canonical
             except (StructuredOutputError, _RequestedCoverageError) as exc:
                 feedback = _retry_feedback(exc)
+                brief_feedback = _brief_outline_feedback(exc)[:_OUTLINE_RETRY_FEEDBACK_RESERVE]
                 raise
 
         def recover_outline(error: Exception) -> dict[str, Any] | None:
