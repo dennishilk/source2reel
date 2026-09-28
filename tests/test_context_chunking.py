@@ -10,6 +10,7 @@ from unittest.mock import patch
 from source2reel.chunking import checkpointed_complete_json, fits_context, split_for_context
 from source2reel.planner import _repair_episode_shape, plan
 from source2reel.progress import Progress
+from source2reel.providers import StructuredOutputError
 from source2reel.research import research
 from source2reel.schema import validate_episode
 from source2reel.util import json_load
@@ -166,6 +167,32 @@ class ContextChunkingTests(unittest.TestCase):
             self.assertEqual(provider.calls, 1)
             checkpointed_complete_json(provider, "other", {"n": 2}, path, normalize)
             self.assertEqual(provider.calls, 2)
+
+    def test_matching_stale_checkpoint_is_revalidated_and_recovered(self):
+        provider = FakeProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "part.json"
+            payload = {"n": 1}
+            first = checkpointed_complete_json(
+                provider, "other", payload, path, lambda value: value, max_retries=0,
+            )
+            self.assertEqual(first, {"ok": True})
+            self.assertEqual(provider.calls, 1)
+
+            def current_normalizer(value):
+                if value == {"ok": True}:
+                    raise StructuredOutputError("cached result no longer satisfies current contract")
+                return value
+
+            recovered = checkpointed_complete_json(
+                provider, "other", payload, path, current_normalizer, max_retries=0,
+                recover_exhausted=lambda error: (
+                    {"ok": "recovered"} if isinstance(error, StructuredOutputError) else None
+                ),
+            )
+            self.assertEqual(recovered, {"ok": "recovered"})
+            self.assertEqual(provider.calls, 2)
+            self.assertEqual(json_load(path)["result"], {"ok": "recovered"})
 
     def test_research_auto_splits_and_resumes_saved_parts(self):
         provider = FakeProvider()

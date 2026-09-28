@@ -119,7 +119,10 @@ def checkpointed_complete_json(
             cached = json_load(checkpoint)
             if cached.get("input_sha256") == digest and isinstance(cached.get("result"), dict):
                 return normalize(cached["result"])
-        except (OSError, ValueError, TypeError):
+        except Exception:
+            # A matching digest does not make stale structured output valid
+            # forever. Treat any checkpoint rejected by the current normalizer
+            # as a cache miss, then use the ordinary bounded retry/recovery path.
             pass
 
     last_error: Exception | None = None
