@@ -15,7 +15,7 @@ from .providers import LLMProvider, StructuredOutputError
 
 # Included in research and storyboard request hashes: old normalized checkpoints
 # must not bypass a newly strengthened provenance contract.
-GROUNDING_CONTRACT = "mapped-support-kind-v2"
+GROUNDING_CONTRACT = "mapped-support-kind-v3"
 VERIFIER_BATCH_SIZE = 12
 VERIFIER_REQUEST_MAX_CHARS = 12000
 MAX_PROPOSITIONS = 16
@@ -143,12 +143,29 @@ def _enumeration_members(claim: str) -> list[str]:
         if not match or ',' not in match.group(1):
             continue
         listed = re.split(r",\s*|\s+\b(?:and|or)\b\s+", match.group(1))
+        listed = [re.sub(r"^(?:and|or)\s+", "", fragment.strip(), flags=re.I) for fragment in listed]
+        if len(listed) >= 3:
+            previous = [fragment.strip() for fragment in listed[:-1]]
+            tail = listed[-1].strip().split()
+
+            def technical(value: str) -> bool:
+                return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", value)) and any(
+                    char.isupper() or char.isdigit() for char in value
+                )
+
+            if (
+                len(tail) > 1
+                and all(len(fragment.split()) == 1 and technical(fragment)
+                        for fragment in previous)
+                and technical(tail[0])
+                and all(re.fullmatch(r"[a-z][a-z-]*", word) for word in tail[1:])
+            ):
+                listed[-1] = tail[0]
         for fragment in listed:
             item = re.sub(r"^(?:and|or|the|a|an)\s+", "", fragment.strip(), flags=re.I)
             if item and len(item.split()) <= 5 and not _VERB.search(item):
                 members.append(item)
     return list(dict.fromkeys(members))
-
 
 def _member_present(member: str, spans: list[str]) -> bool:
     normalized = re.sub(r"[_-]+", " ", " ".join(spans)).casefold()
@@ -196,7 +213,8 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
         not isinstance(span, str) or not span.strip() for span in support
     ):
         return "reject"
-    if any(not _member_present(member, support) for member in _enumeration_members(claim)):
+    members = _enumeration_members(claim)
+    if any(not _member_present(member, support) for member in members):
         return "reject"
     if any(claim.strip() == span.strip() for span in support):
         return "accept"  # Verbatim source syntax or prose, with no inferred meaning.
@@ -224,7 +242,7 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
     if _NEGATIVE.search(claim) and not _NEGATIVE.search(quoted):
         return "reject"
     claim_words, support_words = _words(claim), _words(quoted)
-    if not _syntactic_claim(claim, support) and len(claim_words) >= 4 and len(
+    if not members and not _syntactic_claim(claim, support) and len(claim_words) >= 4 and len(
         claim_words & support_words
     ) < max(
         2, (2 * len(claim_words) + 2) // 3

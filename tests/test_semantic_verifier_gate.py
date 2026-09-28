@@ -108,6 +108,14 @@ class SupportKindRegressions(unittest.TestCase):
         code = 'KPipeline(lang_code=args.language_code)\npipeline(text, voice=args.voice, speed=args.speed)'
         self.assertEqual(deterministic_decision(bad, [code]), 'reject')
 
+    def test_short_declarative_support_reaches_semantic_verifier(self):
+        claim = 'The tool supports PulseAudio, PipeWire, and ALSA audio systems.'
+        support = ['Supports **PulseAudio**, **PipeWire**, and **ALSA**.']
+        self.assertEqual(deterministic_decision(claim, support), 'verify')
+        accepted, provider = self.verify(claim, support)
+        self.assertEqual(accepted, {'C0001'})
+        self.assertEqual(provider.calls, 1)
+
     def test_mapping_must_cover_each_proposition_and_use_real_local_index(self):
         claim = ('The baseline does not automatically install CUDA. '
                  'The separate voice environment installs Torch.')

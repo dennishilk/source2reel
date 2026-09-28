@@ -179,7 +179,7 @@ class TimelineSuitabilityTests(unittest.TestCase):
         self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v5")
         self.assertEqual(ask["editorial_contract"], EDITORIAL_CONTRACT)
         self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v5")
-        self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v2")
+        self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v3")
         self.assertEqual(MEDIA_INSPECTION_CONTRACT, "media-inspection-v1")
         provider = NoOutlineProvider()
         with tempfile.TemporaryDirectory() as tmp:
