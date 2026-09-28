@@ -1688,6 +1688,22 @@ def _canonical_evidence_refs(
     asset_refs = {asset.get("evidence_ref") for asset in ask["research"].get("assets", [])}
     contract = SCENE_CONTRACTS[intent["type"]]
     visual_refs = set(_visual_asset_refs(ask["evidence_index"])) & _research_refs(ask["research"])
+    # An opening hero can use the sole authentic project visual when the model
+    # leaves asset_ref null. Do not replace an explicit choice or guess among
+    # multiple images; the ordinary authorization below still applies.
+    if contract.requires_asset_ref and intent["type"] == "HERO" and selected_asset is None:
+        scoped_visuals = visual_refs & allowed
+        if len(scoped_visuals) == 1:
+            only = next(iter(scoped_visuals))
+            primary = any(entry["ref"] == only and
+                          (entry.get("evidence_role") or "primary") == "primary"
+                          for entry in ask["evidence_index"])
+            authentic = any(asset.get("evidence_ref") == only and
+                            asset.get("authentic_project_media") is True
+                            for asset in ask["research"].get("assets", []))
+            if primary and authentic:
+                selected_asset = only
+                intent["asset_ref"] = only
     if contract.requires_asset_ref and not visual_refs:
         raise ValueError(f"{intent['id']}: no planner-scoped visual asset_ref supports this evidence scene; choose a compatible non-evidence scene type")
     if contract.requires_asset_ref and (

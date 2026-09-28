@@ -1,6 +1,7 @@
 """Outline retries must name the actual scoped visual choice."""
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -30,6 +31,35 @@ def _ask():
 
 
 class OutlineAssetRetryTests(unittest.TestCase):
+    def test_null_hero_asset_selects_only_unique_authentic_primary_visual(self):
+        ask = _ask()
+        raw = {"type": "HERO", "purpose": "Introduce BoringOS",
+               "fact_ids": ["F0001"], "evidence_refs": ["E0001"], "asset_ref": None}
+        intent = planner._canonical_outline_intent(raw, 1, {"E0001", "E0982"}, ask)
+        self.assertEqual(intent["asset_ref"], "E0982")
+        self.assertEqual(intent["evidence_refs"], ["E0001", "E0982"])
+
+        for name, change in (
+            ("not-authentic", lambda value: value["research"]["assets"][0].pop("authentic_project_media")),
+            ("non-primary", lambda value: value["evidence_index"][1].update(evidence_role="supporting")),
+            ("ambiguous", lambda value: value["research"]["assets"].append({
+                "evidence_ref": "E0984", "authentic_project_media": True})),
+        ):
+            with self.subTest(case=name):
+                other = copy.deepcopy(ask)
+                change(other)
+                if name == "ambiguous":
+                    other["evidence_index"].append({"ref": "E0984", "kind": "media",
+                                                    "relative_path": "files.webp", "evidence_role": "primary"})
+                    other["visual_asset_refs"].append("E0984")
+                with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+                    planner._canonical_outline_intent(raw, 1,
+                        {item["ref"] for item in other["evidence_index"]}, other)
+
+        with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+            planner._canonical_outline_intent({**raw, "asset_ref": "E0983"}, 1,
+                                              {"E0001", "E0982"}, ask)
+
     def test_invalid_asset_feedback_names_only_the_eligible_visual(self):
         ask = _ask()
         raw = {"type": "HERO", "purpose": "Introduce BoringOS with its preview",
@@ -62,20 +92,22 @@ class OutlineAssetRetryTests(unittest.TestCase):
         ask = _ask()
 
         class Provider:
-            def __init__(self):
+            def __init__(self, always_null=False):
                 self.outline_requests = []
+                self.always_null = always_null
 
             def complete_json(self, _system, user):
                 payload = json.loads(user)
                 if payload.get("storyboard_mode") == "outline":
                     self.outline_requests.append(payload)
-                    selected = ("E0982" if "E0982" in payload.get("validation_feedback", "")
+                    selected = (None if self.always_null else
+                                "E0982" if "E0982" in payload.get("validation_feedback", "")
                                 else "E0983")
                     return {"version": 1, "title": "BoringOS", "slug": "boringos",
                             "summary": "BoringOS has a kernel.", "scene_intents": [{
                                 "type": "HERO", "purpose": "BoringOS has a kernel.",
                                 "fact_ids": ["F0001"],
-                                "evidence_refs": ["E0001", selected],
+                                "evidence_refs": ["E0001"] + ([selected] if selected else []),
                                 "asset_ref": selected,
                             }]}
                 if payload.get("storyboard_mode") == "scenes":
@@ -106,6 +138,22 @@ class OutlineAssetRetryTests(unittest.TestCase):
         self.assertNotIn("validation_feedback", provider.outline_requests[0])
         self.assertIn("E0982", provider.outline_requests[1]["validation_feedback"])
         self.assertLessEqual(len(provider.outline_requests[1]["validation_feedback"]), 48)
+
+        stubborn = Provider(always_null=True)
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(planner, "fits_context", return_value=True), \
+             patch.object(planner, "_canonicalize_outline_metadata", side_effect=lambda _p, value, *_args: value), \
+             patch.object(planner, "_validate_narration_grounding"), \
+             patch.object(planner, "_validate_structured_grounding"):
+            project = Path(tmp) / "projects" / "boringos"
+            project.mkdir(parents=True)
+            episode = planner._multipart_episode(
+                stubborn, "storyboard", ask, project, 8192, 4096, 1024, 2, None,
+                "scope",
+            )
+        self.assertEqual(episode["scenes"][0]["asset_ref"], "E0982")
+        self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0001", "E0982"])
+        self.assertEqual(len(stubborn.outline_requests), 1)
 
 
 if __name__ == "__main__":
