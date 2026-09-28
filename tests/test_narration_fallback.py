@@ -114,6 +114,23 @@ class GroundedNarrationFallbackTests(unittest.TestCase):
         with self.assertRaisesRegex(GroundingError, "no complete selected grounded fact claim fits"):
             planner._grounded_narration_fallback(scene, large, is_final=True)
 
+    def test_factless_section_title_never_uses_closing_narration(self):
+        _, _, ask = ask_for(["The project records local observations."])
+        intent = {"id": "s001", "type": "SECTION_TITLE", "purpose": "Chapter break",
+                  "fact_ids": [], "evidence_refs": []}
+        self.assertEqual(planner._grounded_narration_fallback(
+            intent, ask, is_final=False,
+        ), "Next, a closer look.")
+        outline = {"version": 1, "title": "Project", "scene_intents": [intent]}
+        raw = {"id": "s001", "type": "SECTION_TITLE", "title": "The next chapter",
+               "narration": "Closing.", "fact_ids": [], "evidence_refs": []}
+        result = planner._normalize_scene_part(
+            {"scenes": [raw]}, [intent], set(), outline, ask,
+        )
+        self.assertEqual(result["scenes"][0]["narration"], "Next, a closer look.")
+        self.assertEqual(planner._canonical_scene_fields(raw)["narration"],
+                         "Next, a closer look.")
+
     def test_required_suffix_is_exempt_only_for_actual_final_scene(self):
         _, _, ask = ask_for(["The tool records local observations."])
         ask["required_narration_suffix"] = "The tool guarantees future outcomes."

@@ -571,6 +571,179 @@ def _reference_focus(title_hint: str, instructions: str, inventory: dict[str, An
     return False
 
 
+def _current_overview_facts(
+    facts: list[dict[str, Any]], inventory: dict[str, Any],
+    title_hint: str, instructions: str, provider: LLMProvider,
+    project_dir: Path, progress: Progress | None,
+) -> list[dict[str, Any]]:
+    """Recover current, verbatim primary claims missed by broad local research.
+
+    A completed milestone is not necessarily the current state. For requests
+    that explicitly ask for the present implementation, use only prose in the
+    main project's top-level overview and keep exact source quotations.
+    """
+    if not re.search(r"\b(?:current|today|present|physically proven)\b", instructions, re.I):
+        return facts
+    overviews = []
+    for entry in inventory["evidence"]:
+        parts = Path(entry.get("relative_path") or "").parts
+        if parts and re.fullmatch(r"source-\d+", parts[0]):
+            parts = parts[1:]
+        if (entry.get("evidence_role", "primary") == "primary" and
+                entry.get("kind") == "document" and len(parts) == 1 and
+                re.fullmatch(r"README(?:\.[a-z]{2})?\.(?:md|rst|txt|adoc)",
+                             parts[0], re.I) and
+                isinstance(entry.get("excerpt"), str) and
+                title_hint.casefold().split()[0] in entry["excerpt"].casefold()):
+            overviews.append(entry)
+    if not overviews:
+        return facts
+
+    focus = re.split(r"\b(?:use only|clearly distinguish|use authentic)\b",
+                     instructions, maxsplit=1, flags=re.I)[0]
+    requested = _request_words(focus) - _request_words(title_hint)
+    subject = _request_words(title_hint)
+    name_key = re.sub(r"[^a-z0-9]", "", title_hint.casefold())
+    name_stem = name_key[:-2] if name_key.endswith("os") and len(name_key) >= 8 else name_key
+    existing = [_request_words(fact["claim"]) for fact in facts]
+    candidates = []
+    for entry in overviews[:4]:
+        section = "overview"
+        in_code = False
+        paragraph: list[str] = []
+
+        def finish() -> None:
+            if not paragraph:
+                return
+            prose = "\n".join(paragraph).strip()
+            paragraph.clear()
+            sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z`])", prose)
+            # Short adjacent sentences often form one self-contained source
+            # statement (for example three native applications and their
+            # separate roles). Keep that exact passage as another candidate.
+            passages = ([prose] if 2 <= len(sentences) <= 3 else []) + sentences
+            for sentence in passages:
+                sentence = sentence.strip()
+                if (not 35 <= len(sentence) <= 360 or
+                        sentence[-1] not in ".!?" or
+                        re.match(r"^(?:These|Those|This|It|They)\b", sentence) or
+                        any(marker in sentence for marker in ("↓", "✅", "┌", "│")) or
+                        not _declarative_text(sentence) or
+                        sentence not in entry["excerpt"]):
+                    continue
+                # Keep the source and the proposed claim identical. This also
+                # avoids converting a Markdown heading or code fragment into
+                # an ungrounded statement.
+                if any(marker in sentence for marker in ("**", "[", "](")):
+                    continue
+                words = _request_words(sentence) - subject
+                if (not words or any(sentence == fact["claim"] or
+                                     sentence.startswith(fact["claim"] + " ")
+                                     for fact in facts) or
+                        any(len(words & prior) / max(1, len(words | prior)) >= 0.8
+                            for prior in existing)):
+                    continue
+                planned = bool(re.search(r"\b(?:later|future|planned|next|yet)\b", sentence, re.I))
+                candidates.append((section, entry["ref"], sentence, words, planned))
+
+        for line in entry["excerpt"].splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                finish()
+                in_code = not in_code
+            elif in_code:
+                continue
+            elif stripped.startswith("## "):
+                finish()
+                section = stripped[3:].strip().casefold()
+            elif not stripped:
+                finish()
+            elif stripped.startswith(("#", "- ", "* ", ">", "|")):
+                finish()
+            else:
+                paragraph.append(line)
+        finish()
+
+    selected = []
+    covered: set[str] = set()
+    sections: set[str] = set()
+    seen = {fact["claim"].casefold() for fact in facts}
+    while candidates and len(selected) < 8:
+        ranked = []
+        for index, (section, ref, claim, words, planned) in enumerate(candidates):
+            overlap = requested & words
+            identity = bool(name_stem and name_stem in re.sub(r"[^a-z0-9]", "", claim.casefold()))
+            section_relevance = len(requested & _request_words(section))
+            if not overlap and not identity and not planned and not section_relevance:
+                continue
+            similarity = max((len(words & prior) / max(1, len(words | prior))
+                              for prior in (*existing, *(item[3] for item in selected))), default=0)
+            score = (6 * len(overlap - covered) + 2 * len(overlap) +
+                     4 * section_relevance + 5 * identity +
+                     5 * int(section not in sections) +
+                     2 * bool(re.search(r"\b(?:current|today|now|physical|proven)\b", claim, re.I)) +
+                     6 * planned + 3 * int(claim.count(". ") >= 1) -
+                     5 * int(len(claim) < 70 and not identity) - 12 * similarity)
+            ranked.append((score, -index, index))
+        if not ranked:
+            break
+        _score, _order, index = max(ranked)
+        candidate = candidates.pop(index)
+        section, ref, claim, words, planned = candidate
+        if claim.casefold() in seen or any(
+            claim in prior[2] or prior[2] in claim for prior in selected
+        ):
+            continue
+        selected.append(candidate)
+        seen.add(claim.casefold())
+        covered.update(requested & words)
+        sections.add(section)
+
+    if not selected:
+        return facts
+    checks = [{"id": f"O{index:04d}", "claim": claim, "support": [claim]}
+              for index, (_section, _ref, claim, _words, _planned) in enumerate(selected, 1)]
+    verified = verify_claims(provider, checks, project_dir, "current-overview", progress)
+    additions = [{"claim": claim, "evidence_refs": [ref],
+                  "support": [{"evidence_ref": ref, "text": claim}],
+                  "subject_scope": "main_subject", "phase": "development" if planned else "unknown",
+                  "current_overview": True,
+                  "confidence": "high"}
+                 for index, (_section, ref, claim, _words, planned) in enumerate(selected, 1)
+                 if f"O{index:04d}" in verified]
+    if not additions:
+        return facts
+
+    current_milestone = max((int(value) for entry in overviews[:4]
+                             for value in re.findall(r"\bM(\d+)\b", entry["excerpt"])),
+                            default=0)
+    affirmative = [_request_words(sentence) for entry in overviews[:4]
+                   for sentence in re.split(r"(?<=[.!?])\s+", entry["excerpt"])
+                   if re.search(r"\b(?:implemented|implements|supports|includes|runs)\b", sentence, re.I)
+                   and not re.search(r"\b(?:does not|not yet)\b", sentence, re.I)]
+    overview_text = "\n".join(entry["excerpt"] for entry in overviews[:4])
+    overview_hashes = set(re.findall(r"\b[0-9a-f]{40}\b", overview_text, re.I))
+    kept = []
+    for fact in facts:
+        claim = fact["claim"]
+        stage = re.search(r"\b(?:M|Milestone\s+)(\d+)\b", claim, re.I)
+        historical = (stage and int(stage.group(1)) < current_milestone and
+                      not re.search(r"\b(?:physical|physically|proven|acceptance)\b", claim, re.I) and
+                      not re.search(rf"\b(?:M|Milestone\s+){stage.group(1)}\b", instructions, re.I))
+        negative = re.search(r"\bdoes not support\b", claim, re.I)
+        contradicted = negative and any(
+            len((_request_words(claim[negative.end():]) - subject) & words) >= 2
+            for words in affirmative
+        )
+        claimed_hashes = set(re.findall(r"\b[0-9a-f]{40}\b", claim, re.I))
+        superseded_freeze = (claimed_hashes and not claimed_hashes & overview_hashes and
+                             overview_hashes and re.search(r"\b(?:frozen|freeze)\b", claim, re.I) and
+                             re.search(r"\b(?:frozen|freeze)\b", overview_text, re.I))
+        if not historical and not contradicted and not superseded_freeze:
+            kept.append(fact)
+    return additions + kept
+
+
 def _consolidate(
     facts: list[dict[str, Any]],
     assets: list[dict[str, Any]],
@@ -893,6 +1066,9 @@ def research(
                 allfacts, assets = _consolidate(allfacts, assets, inventory,
                                                 title_hint, instructions)
 
+    allfacts = _current_overview_facts(allfacts, inventory, title_hint, instructions,
+                                       provider, project_dir, progress)
+    allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)
     out = {"version": 1, "facts": allfacts, "assets": assets}
     json_dump(project_dir / "manifests" / "research.json", out)
     return out

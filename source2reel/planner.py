@@ -782,6 +782,7 @@ def _primary_anchors(
             "media_refs": [r for r in refs if r in media_refs],
             "phase": fact.get("phase", "unknown"),
             "confidence": fact.get("confidence", "low"), "visual_purpose": "",
+            "current_overview": fact.get("current_overview") is True,
         })
 
     if not candidates:
@@ -801,6 +802,9 @@ def _primary_anchors(
         title_score = 5 if len(subject_key) >= 4 and subject_key in claim_key else 1.5 * len(subject & words)
         confidence_score = {"high": 2, "medium": 1}.get(candidate["confidence"], 0)
         phase_score = 2 if candidate["phase"] == "final" else 0
+        if (candidate["current_overview"] and candidate["phase"] == "development" and
+                re.search(r"\b(?:planned|future|later)\b", instructions, re.I)):
+            phase_score += 12
         # Shallow original documents often state what the project does before
         # implementation files name it repeatedly. This is a modest source
         # signal, never a fixed filename or a replacement for claim relevance.
@@ -810,13 +814,15 @@ def _primary_anchors(
         # Explicitly requested concepts outweigh filesystem depth and the
         # number of interesting but tangential implementation facts.
         base = (title_score + 7 * min(5, len(requested & words)) +
-                confidence_score + phase_score + overview_score)
+                confidence_score + phase_score + overview_score +
+                12 * candidate["current_overview"])
         profiles.append((index, candidate, path, path_parts[0] if path_parts else "", words - subject, base))
 
     selected: list[tuple[int, dict[str, Any], str, str, set[str], float]] = []
     remaining = profiles[:]
     used_bytes = 0
     used_refs: set[str] = set()
+    named = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b")
     while remaining and len(selected) < _PRIMARY_ANCHOR_LIMIT:
         ranked = []
         for profile in remaining:
@@ -839,7 +845,12 @@ def _primary_anchors(
                 continue
             root_bonus = 2 if root and all(root != prior[3] for prior in selected) else 0
             path_bonus = 0.5 if path and all(path != prior[2] for prior in selected) else 0
-            ranked.append((base + root_bonus + path_bonus - 7 * similarity, -index, profile))
+            current_names = {name.casefold() for prior in selected if prior[1]["current_overview"]
+                             for name in named.findall(prior[1]["claim"])}
+            linked_names = {name.casefold() for name in named.findall(candidate["claim"])}
+            link_bonus = 6 * min(3, len(linked_names & current_names))
+            ranked.append((base + root_bonus + path_bonus + link_bonus - 7 * similarity,
+                           -index, profile))
         if not ranked:
             break
         best = max(ranked)
@@ -974,6 +985,10 @@ def _canonical_scene_fields(raw: dict[str, Any]) -> dict[str, Any]:
     if contract.allows_asset_ref:
         fields.add("asset_ref")
     scene = {key: value for key, value in raw.items() if key in fields}
+    if (kind == "SECTION_TITLE" and scene.get("fact_ids") == [] and
+            isinstance(scene.get("narration"), str) and
+            re.fullmatch(r"closing\W*", scene["narration"].strip(), re.I)):
+        scene["narration"] = "Next, a closer look."
     for optional in contract.canonical_optional_fields:
         if scene.get(optional) is None:
             scene.pop(optional, None)
@@ -1065,7 +1080,9 @@ def _grounded_narration_fallback(
         )
     if claims:
         body = " ".join(claims)
-    elif scene["type"] in {"OUTRO", "SECTION_TITLE"} and not scene["evidence_refs"]:
+    elif scene["type"] == "SECTION_TITLE" and not scene["evidence_refs"]:
+        body = "Next, a closer look."
+    elif scene["type"] == "OUTRO" and not scene["evidence_refs"]:
         body = "Closing."
     else:
         raise _NarrationFallbackUnavailable(f"{scene['id']}: no selected facts for factual narration")
@@ -1097,6 +1114,9 @@ def _recognized_grounded_narrations(
                 scene["narration"].startswith(facts[fact_id]["claim"])
                 for fact_id in scene["fact_ids"]
             ):
+                continue
+        elif scene["type"] == "SECTION_TITLE":
+            if not scene["narration"].startswith("Next, a closer look."):
                 continue
         elif not scene["narration"].startswith("Closing."):
             continue
@@ -1146,6 +1166,8 @@ def _validate_narration_grounding(
             r"(?:closing|thank you(?: for watching)?|thanks(?: for watching)?|the end)\W*",
             narration, re.I,
         ):
+            continue
+        if not selected and scene["type"] == "SECTION_TITLE" and narration == "Next, a closer look.":
             continue
         claims = [fact["claim"] for fact in selected]
         if narration != " ".join(claims) and not deterministic_field_guard(narration, claims):
@@ -2212,6 +2234,10 @@ def _normalize_scene_part(
         if not isinstance(raw, dict) or raw.get("id") != intent["id"] or raw.get("type") != intent["type"]:
             raise StructuredOutputError(f"Storyboard part scene order/id/type differs from {intent['id']}")
         scene = _canonical_scene_fields(raw)
+        if (intent["type"] == "SECTION_TITLE" and not intent["fact_ids"] and
+                isinstance(scene.get("narration"), str) and
+                re.fullmatch(r"closing\W*", scene["narration"].strip(), re.I)):
+            scene["narration"] = "Next, a closer look."
         try:
             refs = _draft_evidence_refs(scene)
         except ValueError as exc:
