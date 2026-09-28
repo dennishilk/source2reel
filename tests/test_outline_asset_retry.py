@@ -220,11 +220,20 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertEqual(cached, episode)
             self.assertEqual(provider.outline_calls, 2)
 
-            other = project.parent / "recover-out-of-scope"
-            other.mkdir()
+            class NonVisualAsset(Provider):
+                def complete_json(self, system, user):
+                    request = json.loads(user)
+                    result = super().complete_json(system, user)
+                    if request.get("storyboard_mode") == "outline":
+                        for intent in result["scene_intents"]:
+                            intent["asset_ref"] = intent["evidence_refs"][0]
+                    return result
+
+            zero_retry = project.parent / "recover-zero-retry"
+            zero_retry.mkdir()
             recovered = planner._multipart_episode(
-                Provider(out_of_scope=True), "storyboard", ask,
-                other, 8192, 4096, 1024, 0, None, "scope",
+                NonVisualAsset(), "storyboard", ask,
+                zero_retry, 8192, 4096, 1024, 0, None, "scope",
             )
             self.assertEqual([s["type"] for s in recovered["scenes"]],
                              ["SUMMARY", "SUMMARY", "SUMMARY"])
@@ -233,7 +242,13 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertEqual([s["evidence_refs"] for s in recovered["scenes"]],
                              [["E0001"], ["E0002"], ["E0003"]])
             self.assertFalse(any("asset_ref" in s for s in recovered["scenes"]))
-            self.assertNotIn("E0999", json.dumps(recovered))
+            self.assertEqual(NonVisualAsset().outline_calls, 0)
+
+            other = project.parent / "reject"
+            other.mkdir()
+            with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+                planner._multipart_episode(Provider(out_of_scope=True), "storyboard", ask,
+                                           other, 8192, 4096, 1024, 1, None, "scope")
 
 
 if __name__ == "__main__":
