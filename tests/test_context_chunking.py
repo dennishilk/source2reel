@@ -191,7 +191,7 @@ class ContextChunkingTests(unittest.TestCase):
                 ),
             )
             self.assertEqual(recovered, {"ok": "recovered"})
-            self.assertEqual(provider.calls, 1)
+            self.assertEqual(provider.calls, 2)
             self.assertEqual(json_load(path)["result"], {"ok": "recovered"})
 
     def test_research_auto_splits_and_resumes_saved_parts(self):
