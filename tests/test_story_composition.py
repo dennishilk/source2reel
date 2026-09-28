@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from source2reel import planner
 from source2reel.schema import validate_episode
@@ -275,6 +276,48 @@ class CompositionTests(unittest.TestCase):
                          ["HERO", "SUMMARY", "PROJECT_EVIDENCE"])
         self.assertEqual(result["scene_intents"][-1]["fact_ids"], ["F0001"])
         planner.validate_novelty(result["scene_intents"])
+
+    def test_metadata_fallback_removes_empty_chapter_and_repeated_intro(self):
+        visual = copy.deepcopy(self.ask)
+        visual["evidence_index"].append({"ref": "E0091", "kind": "media",
+                                         "relative_path": "opening.png"})
+        visual["research"]["assets"] = [{"evidence_ref": "E0091", "purpose": "Opening"}]
+        raw = outline([
+            {**intent("HERO", 1), "asset_ref": "E0091",
+             "evidence_refs": ["E0002", "E0091"]},
+            {"type": "SECTION_TITLE", "purpose": "An unsupported invented chapter",
+             "fact_ids": [], "evidence_refs": []},
+            intent("SUMMARY", 1), intent("SUMMARY", 2),
+        ])
+        raw.pop("presentation")
+        allowed = self.allowed | {"E0091"}
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch("source2reel.planner.verify_claims", return_value=set()):
+            initial = planner._normalize_outline(raw, allowed, visual,
+                                                 check_coverage=False)
+            self.assertEqual([scene["id"] for scene in initial["scene_intents"]],
+                             ["s001", "s002", "s003", "s004"])
+            metadata = planner._canonicalize_outline_metadata(
+                PhysicalOutlineProvider(raw), initial, visual, Path(tmp))
+            result = planner._normalize_outline(metadata, allowed, visual,
+                                                check_coverage=False)
+        self.assertEqual([scene["id"] for scene in result["scene_intents"]],
+                         ["s001", "s004"])
+        self.assertEqual(result["scene_intents"][-1]["fact_ids"], ["F0002"])
+
+    def test_mixed_summary_title_follows_its_first_spoken_claim(self):
+        raw = outline([intent("SUMMARY", 1, 2)])
+        raw.pop("presentation")
+        canonical = planner._normalize_outline(raw, self.allowed, self.ask,
+                                               check_coverage=False)
+        draft = {"id": "s001", "type": "SUMMARY", "title": "ETW callbacks normalize events",
+                 "narration": CLAIMS[0] + " " + CLAIMS[1],
+                 "fact_ids": ["F0001", "F0002"],
+                 "evidence_refs": ["E0002", "E0003"]}
+        part = planner._normalize_scene_part({"scenes": [draft]},
+                                             canonical["scene_intents"], self.allowed,
+                                             canonical, self.ask)
+        self.assertTrue(part["scenes"][0]["title"].startswith("Windows Telemetry Inspector"))
 
     def test_empty_outro_recovers_exact_final_suffix_with_zero_retries(self):
         ask = copy.deepcopy(self.ask)

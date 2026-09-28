@@ -649,6 +649,7 @@ def _canonical_story_composition(
     exhausted: set[str] = set()
     prior_ids: list[str] = []
     used_assets: set[str] = set()
+    pruned_intro_section = False
     for original in scenes:
         scene = original
         if scene["type"] == "SECTION_TITLE" and scene.get("fact_ids"):
@@ -661,10 +662,19 @@ def _canonical_story_composition(
                 scene = _canonical_scene_fields(scene)
         if scene["type"] == "SECTION_TITLE":
             if scene.get("purpose") == _EDITORIAL_SCENE_PURPOSES["SECTION_TITLE"]:
+                pruned_intro_section = bool(retained and retained[-1]["type"] == "HERO")
                 continue
             if not retained or retained[-1]["type"] != "SECTION_TITLE":
                 retained.append(scene)
+            pruned_intro_section = False
             continue
+        if (pruned_intro_section and scene["type"] == "SUMMARY" and retained and
+                retained[-1]["type"] == "HERO" and scene["fact_ids"] and
+                set(scene["fact_ids"]) == set(retained[-1]["fact_ids"])):
+            # A removed, empty chapter must not turn an exact hero reprise
+            # into a second content scene.
+            continue
+        pruned_intro_section = False
         if scene["type"] in {"HERO", "OUTRO"}:
             retained.append(scene)
             if scene["type"] == "HERO" and isinstance(scene.get("asset_ref"), str):
@@ -2294,6 +2304,7 @@ def _normalize_scene_part(
     if not isinstance(scenes, list) or len(scenes) != len(intents):
         raise StructuredOutputError(f"Storyboard part requires exactly {len(intents)} scenes")
     normalized_scenes = []
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
     for raw, intent in zip(scenes, intents):
         if not isinstance(raw, dict) or raw.get("id") != intent["id"] or raw.get("type") != intent["type"]:
             raise StructuredOutputError(f"Storyboard part scene order/id/type differs from {intent['id']}")
@@ -2344,6 +2355,18 @@ def _normalize_scene_part(
             scene["evidence_refs"] = _canonical_evidence_refs(
                 {**intent, "evidence_refs": refs}, ask, allowed,
             )
+            if (scene["type"] == "SUMMARY" and len(scene["fact_ids"]) > 1 and
+                    isinstance(scene.get("narration"), str)):
+                claims = [facts[fact_id]["claim"] for fact_id in scene["fact_ids"]]
+                title_words = _topic_words(str(scene.get("title", "")))
+                if (scene["narration"].startswith(claims[0]) and
+                        len(title_words & _topic_words(claims[0])) < 2 and
+                        any(len(title_words & _topic_words(claim)) >= 2
+                            for claim in claims[1:])):
+                    scene["title"] = _suggested_scene_title(
+                        {"fact_ids": scene["fact_ids"][:1], "purpose": ""},
+                        facts, outline["title"],
+                    )
             _validate_scene_facts(scene, ask, intent["fact_ids"])
             validate_scene_type(scene, {fact["fact_id"]: fact for fact in ask["research"]["facts"]},
                                 ask["evidence_index"])
@@ -2431,6 +2454,11 @@ def _multipart_episode(
                 )
                 canonical = _canonicalize_outline_metadata(provider, normalized, ask,
                                                            project_dir, progress)
+                # Metadata grounding can replace an unsupported section purpose
+                # with a generic label. Apply composition once more so the
+                # recovered label cannot leave an empty chapter in the outline.
+                canonical = _normalize_outline(canonical, allowed, ask,
+                                               check_coverage=False)
                 coverage_candidate = canonical
                 _validate_focus_coverage(canonical["scene_intents"], ask)
                 return canonical
@@ -2459,6 +2487,8 @@ def _multipart_episode(
                 recovered = _canonicalize_outline_metadata(
                     provider, normalized, ask, project_dir, progress,
                 )
+                recovered = _normalize_outline(recovered, allowed, ask,
+                                               check_coverage=False)
                 try:
                     _validate_focus_coverage(recovered["scene_intents"], ask)
                 except _RequestedCoverageError:
