@@ -220,11 +220,20 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertEqual(cached, episode)
             self.assertEqual(provider.outline_calls, 2)
 
-            other = project.parent / "reject"
+            other = project.parent / "recover-out-of-scope"
             other.mkdir()
-            with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
-                planner._multipart_episode(Provider(out_of_scope=True), "storyboard", ask,
-                                           other, 8192, 4096, 1024, 1, None, "scope")
+            recovered = planner._multipart_episode(
+                Provider(out_of_scope=True), "storyboard", ask,
+                other, 8192, 4096, 1024, 0, None, "scope",
+            )
+            self.assertEqual([s["type"] for s in recovered["scenes"]],
+                             ["SUMMARY", "SUMMARY", "SUMMARY"])
+            self.assertEqual([s["fact_ids"] for s in recovered["scenes"]],
+                             [["F0001"], ["F0002"], ["F0003"]])
+            self.assertEqual([s["evidence_refs"] for s in recovered["scenes"]],
+                             [["E0001"], ["E0002"], ["E0003"]])
+            self.assertFalse(any("asset_ref" in s for s in recovered["scenes"]))
+            self.assertNotIn("E0999", json.dumps(recovered))
 
 
 if __name__ == "__main__":
