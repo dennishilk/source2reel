@@ -1936,6 +1936,7 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
 
 def _recover_outline_assets(
     value: Any, allowed: set[str], ask: dict[str, Any],
+    *, require_explicit_cited_asset: bool = False,
 ) -> dict[str, Any] | None:
     """Retain selected facts when an exhausted outline cannot supply a visual.
 
@@ -1959,9 +1960,13 @@ def _recover_outline_assets(
             except ValueError:
                 return None
             selected_asset = raw.get("asset_ref")
-            if (not isinstance(selected_asset, str) or not selected_asset.strip() or
-                    selected_asset not in refs or selected_asset not in allowed or
+            if ((require_explicit_cited_asset and (
+                    not isinstance(selected_asset, str) or not selected_asset.strip() or
+                    selected_asset not in refs)) or
                     any(ref not in allowed for ref in refs) or
+                    selected_asset is not None and
+                    (not isinstance(selected_asset, str) or
+                     selected_asset and selected_asset not in allowed) or
                     not _valid_outline_fact_ids(
                         raw.get("fact_ids"),
                         {"type": raw["type"], "evidence_refs": refs}, ask,
@@ -2475,7 +2480,10 @@ def _multipart_episode(
             if (not isinstance(error, StructuredOutputError) or
                     "asset_ref" not in str(error)):
                 return None
-            draft = _recover_outline_assets(last_outline_candidate, allowed, ask)
+            draft = _recover_outline_assets(
+                last_outline_candidate, allowed, ask,
+                require_explicit_cited_asset=max_retries < 1,
+            )
             if draft is None:
                 return None
             try:
