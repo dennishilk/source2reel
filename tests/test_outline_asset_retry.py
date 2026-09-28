@@ -220,6 +220,31 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertEqual(cached, episode)
             self.assertEqual(provider.outline_calls, 2)
 
+            class NonVisualAsset(Provider):
+                def complete_json(self, system, user):
+                    request = json.loads(user)
+                    result = super().complete_json(system, user)
+                    if request.get("storyboard_mode") == "outline":
+                        for intent in result["scene_intents"]:
+                            intent["asset_ref"] = intent["evidence_refs"][0]
+                    return result
+
+            zero_retry = project.parent / "recover-zero-retry"
+            zero_retry.mkdir()
+            non_visual = NonVisualAsset()
+            recovered = planner._multipart_episode(
+                non_visual, "storyboard", ask,
+                zero_retry, 8192, 4096, 1024, 0, None, "scope",
+            )
+            self.assertEqual([s["type"] for s in recovered["scenes"]],
+                             ["SUMMARY", "SUMMARY", "SUMMARY"])
+            self.assertEqual([s["fact_ids"] for s in recovered["scenes"]],
+                             [["F0001"], ["F0002"], ["F0003"]])
+            self.assertEqual([s["evidence_refs"] for s in recovered["scenes"]],
+                             [["E0001"], ["E0002"], ["E0003"]])
+            self.assertFalse(any("asset_ref" in s for s in recovered["scenes"]))
+            self.assertEqual(non_visual.outline_calls, 1)
+
             other = project.parent / "reject"
             other.mkdir()
             with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
