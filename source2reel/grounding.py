@@ -64,12 +64,12 @@ _SYNTAX_CLAIM = re.compile(
     r"(imports?|calls?|invokes?|passes?|assigns?|sets?|returns?)\s+(.+)$", re.I,
 )
 _DIRECT_OPERATION = re.compile(
-    r"\\b(?:runs?|executes?|starts?|restarts?|stops?|kills?|creates?|writes?|copies?|"
+    r"\b(?:runs?|executes?|starts?|restarts?|stops?|kills?|creates?|writes?|copies?|"
     r"moves?|removes?|deletes?|edits?|comments?|uncomments?|disables?|loads?|unloads?|"
-    r"installs?|updates?)\\b", re.I,
+    r"installs?|updates?)\b", re.I,
 )
 _NON_EXECUTING_CODE = re.compile(
-    r"^(?:from\\s+\\S+\\s+import\\s+|import\\s+|(?:async\\s+)?def\\s+|class\\s+|@\\w)", re.I,
+    r"^(?:from\s+\S+\s+import\s+|import\s+|(?:async\s+)?def\s+|class\s+|@\w)", re.I,
 )
 
 _VERB = re.compile(
@@ -157,15 +157,15 @@ def _direct_executable_operation(claim: str, spans: list[str]) -> bool:
                 continue
             # An assignment can expose syntax, but not by itself establish the
             # higher-level operation described by a generated behavioral claim.
-            if re.match(r"^[A-Za-z_][\\w.]*\\s*=", stripped):
+            if re.match(r"^[A-Za-z_][\w.]*\s*=", stripped):
                 continue
             # A direct call expression is executable syntax; the semantic verifier
             # still decides whether the generated operation is exactly what it shows.
-            if re.search(r"\\b[A-Za-z_][\\w.]*\\s*\\([^)]*\\)", stripped):
+            if re.search(r"\b[A-Za-z_][\w.]*\s*\([^)]*\)", stripped):
                 return True
             # Shell/config mutations need unmistakable command syntax rather than
             # ordinary prose: options, variables, pipes, separators or redirection.
-            if re.search(r"(?:^|\\s)(?:--?[\\w-]+|\\$[A-Za-z_][\\w]*|[|&;<>]{1,2})",
+            if re.search(r"(?:^|\s)(?:--?[\w-]+|\$[A-Za-z_][\w]*|[|&;<>]{1,2})",
                          stripped):
                 return True
     return False
