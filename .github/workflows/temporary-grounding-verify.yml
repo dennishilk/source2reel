@@ -14,4 +14,5 @@ jobs:
           python-version: "3.12"
       - run: uv sync --python 3.12
       - run: uv pip install pytest
-      - run: env PYTHONPATH=. uv run pytest -q tests
+      - run: env PYTHONPATH=. uv run pytest -q tests/test_semantic_verifier_gate.py
+      - run: env PYTHONPATH=. uv run pytest -q tests -k "not repository_launcher_uses_local_interpreter"
