@@ -231,8 +231,9 @@ class OutlineAssetRetryTests(unittest.TestCase):
 
             zero_retry = project.parent / "recover-zero-retry"
             zero_retry.mkdir()
+            non_visual = NonVisualAsset()
             recovered = planner._multipart_episode(
-                NonVisualAsset(), "storyboard", ask,
+                non_visual, "storyboard", ask,
                 zero_retry, 8192, 4096, 1024, 0, None, "scope",
             )
             self.assertEqual([s["type"] for s in recovered["scenes"]],
@@ -242,7 +243,7 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertEqual([s["evidence_refs"] for s in recovered["scenes"]],
                              [["E0001"], ["E0002"], ["E0003"]])
             self.assertFalse(any("asset_ref" in s for s in recovered["scenes"]))
-            self.assertEqual(NonVisualAsset().outline_calls, 0)
+            self.assertEqual(non_visual.outline_calls, 1)
 
             other = project.parent / "reject"
             other.mkdir()
