@@ -2236,6 +2236,18 @@ def _normalize_scene_part(
         try:
             if "fact_ids" not in scene:
                 scene["fact_ids"] = intent["fact_ids"]
+            elif scene["fact_ids"] != intent["fact_ids"]:
+                # Fix a stale echo of the IDs only when the returned refs
+                # already belong to the outline's selected facts and asset.
+                # A response citing a different fact still fails validation.
+                facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+                selected_refs = {ref for fact_id in intent["fact_ids"]
+                                 for ref in facts[fact_id]["evidence_refs"]}
+                if contract.requires_asset_ref:
+                    selected_refs.add(intent["asset_ref"])
+                if any(ref not in selected_refs for ref in refs):
+                    raise ValueError(f"{intent['id']}: scene fact_ids differ from fixed outline selection")
+                scene["fact_ids"] = intent["fact_ids"]
             scene["evidence_refs"] = _canonical_evidence_refs(
                 {**intent, "evidence_refs": refs}, ask, allowed,
             )
@@ -2431,6 +2443,41 @@ def _multipart_episode(
                 raise
 
         def recover_single(items: list[dict[str, Any]], error: Exception) -> dict[str, Any] | None:
+            if (max_retries > 0 and isinstance(error, StructuredOutputError) and
+                    "scene fact_ids differ from fixed outline selection" in str(error)):
+                # The final scene response still cites a different fact. Do
+                # not keep any of its prose, refs, or structured labels.
+                # Rebuild from the already validated outline and exact claims.
+                intent = items[0]
+                facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+                scene = {
+                    "id": intent["id"], "type": intent["type"],
+                    "title": _safe_intent_purpose(intent, facts),
+                    "fact_ids": intent["fact_ids"],
+                    "evidence_refs": intent["evidence_refs"],
+                }
+                if SCENE_CONTRACTS[intent["type"]].requires_asset_ref:
+                    scene["asset_ref"] = intent["asset_ref"]
+                if SCENE_CONTRACTS[intent["type"]].requires_diagram:
+                    labels = [facts[fact_id]["claim"] for fact_id in intent["fact_ids"]]
+                    if len(labels) < 2:
+                        return None
+                    scene["diagram"] = {"nodes": labels[:8]}
+                if intent["type"] == "GRAPH":
+                    return None  # Numerical points cannot be inferred from fact IDs.
+                fallback = _grounded_narration_fallback(
+                    intent, ask, is_final=intent["id"] == outline["scene_intents"][-1]["id"],
+                )
+                scene["narration"] = fallback
+                part_allowed = {entry["ref"] for entry in payload_for(items)["evidence_index"]}
+                canonical = _normalize_scene_part(
+                    {"scenes": [scene]}, items, part_allowed, outline, ask,
+                )
+                if canonical["scenes"][0]["narration"] != fallback:
+                    raise StructuredOutputError(f"{intent['id']}: grounded fallback narration was modified")
+                if progress is not None:
+                    progress.note(f"{intent['id']}: fact selection retries exhausted; using exact outline claims")
+                return canonical
             if not isinstance(error, _NarrationGroundingRejected):
                 return None
             intent = items[0]

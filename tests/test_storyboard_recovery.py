@@ -151,6 +151,59 @@ class StoryboardProvider:
 
 
 class StoryboardRecoveryTests(unittest.TestCase):
+    def test_scene_part_uses_fixed_outline_facts_when_model_changes_fact_ids(self):
+        inventory, research = _source()
+        ask = planner._make_ask(research, planner._media_inventory(inventory),
+                                inventory["evidence"], "DemoEngine", "")
+
+        class WrongSceneFacts:
+            def __init__(self, leak_refs):
+                self.scene_calls = 0
+                self.leak_refs = leak_refs
+
+            def complete_json(self, _system, user):
+                request = json.loads(user)
+                if request.get("storyboard_mode") == "outline":
+                    return {"version": 1, "title": "Grounded", "slug": "grounded",
+                            "summary": "Grounded fact 3 Grounded fact 4",
+                            "scene_intents": [
+                                {"type": "SUMMARY", "purpose": f"Grounded fact {number}",
+                                 "fact_ids": [f"F{number:04d}"],
+                                 "evidence_refs": [f"E{number:04d}"]}
+                                for number in (3, 4)]}
+                if request.get("storyboard_mode") == "scenes":
+                    self.scene_calls += 1
+                    scenes = []
+                    for template in request["required_output"]["scenes"]:
+                        scene = dict(template)
+                        scene.update(title="Grounded", narration="Grounded fact 3")
+                        if scene["id"] == "s002":
+                            scene["fact_ids"] = ["F0003"]
+                            if self.leak_refs:
+                                scene["evidence_refs"] = ["E0003"]
+                        scenes.append(scene)
+                    return {"scenes": scenes}
+                raise AssertionError("Unexpected request")
+
+        for leak_refs in (False, True):
+            with self.subTest(leak_refs=leak_refs), tempfile.TemporaryDirectory() as tmp, \
+                 patch.object(planner, "fits_context", return_value=True):
+                project = Path(tmp) / "projects" / "demo"
+                project.mkdir(parents=True)
+                provider = WrongSceneFacts(leak_refs)
+                episode = planner._multipart_episode(
+                    provider, "storyboard", ask, project, 8192, 4096, 1024, 1, None, "scope")
+                self.assertEqual(episode["scenes"][1]["fact_ids"], ["F0004"])
+                self.assertEqual(episode["scenes"][1]["evidence_refs"], ["E0004"])
+                self.assertEqual(episode["scenes"][1]["narration"], "Grounded fact 4")
+                self.assertEqual(episode["scenes"][1]["title"],
+                                 "Grounded fact 4" if leak_refs else "Grounded")
+                first_calls = provider.scene_calls
+                self.assertEqual(planner._multipart_episode(
+                    provider, "storyboard", ask, project, 8192, 4096, 1024, 1, None, "scope"),
+                    episode)
+                self.assertEqual(provider.scene_calls, first_calls)
+
     def test_full_episode_repairs_only_selected_asset_ref_relationship(self):
         inventory, research = _source()
         ask = planner._make_ask(research, [], inventory["evidence"], "DemoEngine", "")
