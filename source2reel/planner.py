@@ -1940,11 +1940,12 @@ def _recover_outline_assets(
     """Retain selected facts when an exhausted outline cannot supply a visual.
 
     Only an asset validation failure on an evidence intent may change its
-    presentation type. Out-of-scope refs and malformed fact selections still
-    require a new, valid outline instead of being silently discarded.
+    presentation type. The rejected visual choice is discarded completely;
+    recovery rebuilds evidence_refs only from explicitly selected valid facts.
     """
     if not isinstance(value, dict) or not isinstance(value.get("scene_intents"), list):
         return None
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
     repaired = []
     changed = False
     for index, raw in enumerate(value["scene_intents"], 1):
@@ -1954,21 +1955,21 @@ def _recover_outline_assets(
             if ("asset_ref" not in str(exc) or not isinstance(raw, dict) or
                     raw.get("type") not in EVIDENCE_TYPES):
                 return None
-            try:
-                refs = _draft_evidence_refs(raw)
-            except ValueError:
+            fact_ids = raw.get("fact_ids")
+            if not _valid_outline_fact_ids(
+                fact_ids, {"type": "SUMMARY", "evidence_refs": []}, ask,
+            ):
                 return None
-            selected_asset = raw.get("asset_ref")
-            if (any(ref not in allowed for ref in refs) or
-                    selected_asset is not None and
-                    (not isinstance(selected_asset, str) or
-                     selected_asset and selected_asset not in allowed) or
-                    not _valid_outline_fact_ids(
-                        raw.get("fact_ids"),
-                        {"type": raw["type"], "evidence_refs": refs}, ask,
-                    )):
+            refs = []
+            for fact_id in fact_ids:
+                candidates = [ref for ref in facts[fact_id]["evidence_refs"] if ref in allowed]
+                if not candidates:
+                    return None
+                if candidates[0] not in refs:
+                    refs.append(candidates[0])
+            if len(refs) > 6:
                 return None
-            downgraded = {**raw, "type": "SUMMARY"}
+            downgraded = {**raw, "type": "SUMMARY", "evidence_refs": refs}
             downgraded.pop("asset_ref", None)
             repaired.append(downgraded)
             changed = True
@@ -2473,7 +2474,7 @@ def _multipart_episode(
                 if progress is not None:
                     progress.note("Outline coverage retries exhausted; adding grounded summary scenes")
                 return recovered
-            if (max_retries < 1 or not isinstance(error, StructuredOutputError) or
+            if (not isinstance(error, StructuredOutputError) or
                     "asset_ref" not in str(error)):
                 return None
             draft = _recover_outline_assets(last_outline_candidate, allowed, ask)
