@@ -12,4 +12,6 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - run: env PYTHONPATH=. uv run --with pytest pytest -q tests
+      - run: uv sync --python 3.12
+      - run: uv pip install pytest
+      - run: env PYTHONPATH=. uv run pytest -q tests
