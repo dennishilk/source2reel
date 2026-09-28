@@ -1959,10 +1959,9 @@ def _recover_outline_assets(
             except ValueError:
                 return None
             selected_asset = raw.get("asset_ref")
-            if (any(ref not in allowed for ref in refs) or
-                    selected_asset is not None and
-                    (not isinstance(selected_asset, str) or
-                     selected_asset and selected_asset not in allowed) or
+            if (not isinstance(selected_asset, str) or not selected_asset.strip() or
+                    selected_asset not in refs or selected_asset not in allowed or
+                    any(ref not in allowed for ref in refs) or
                     not _valid_outline_fact_ids(
                         raw.get("fact_ids"),
                         {"type": raw["type"], "evidence_refs": refs}, ask,
