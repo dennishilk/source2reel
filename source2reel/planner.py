@@ -1862,6 +1862,49 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
     return outline
 
 
+def _recover_outline_assets(
+    value: Any, allowed: set[str], ask: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Retain selected facts when an exhausted outline cannot supply a visual.
+
+    Only an asset validation failure on an evidence intent may change its
+    presentation type. Out-of-scope refs and malformed fact selections still
+    require a new, valid outline instead of being silently discarded.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("scene_intents"), list):
+        return None
+    repaired = []
+    changed = False
+    for index, raw in enumerate(value["scene_intents"], 1):
+        try:
+            _canonical_outline_intent(raw, index, allowed, ask)
+        except StructuredOutputError as exc:
+            if ("asset_ref" not in str(exc) or not isinstance(raw, dict) or
+                    raw.get("type") not in EVIDENCE_TYPES):
+                return None
+            try:
+                refs = _draft_evidence_refs(raw)
+            except ValueError:
+                return None
+            selected_asset = raw.get("asset_ref")
+            if (any(ref not in allowed for ref in refs) or
+                    selected_asset is not None and
+                    (not isinstance(selected_asset, str) or
+                     selected_asset and selected_asset not in allowed) or
+                    not _valid_outline_fact_ids(
+                        raw.get("fact_ids"),
+                        {"type": raw["type"], "evidence_refs": refs}, ask,
+                    )):
+                return None
+            downgraded = {**raw, "type": "SUMMARY"}
+            downgraded.pop("asset_ref", None)
+            repaired.append(downgraded)
+            changed = True
+        else:
+            repaired.append(raw)
+    return {**value, "scene_intents": repaired} if changed else None
+
+
 _EDITORIAL_PREFIX = re.compile(
     r"^(?:introduce|show|explain|compare|conclude with|summarize|present|describe)\s+", re.I
 )
@@ -2254,6 +2297,7 @@ def _multipart_episode(
         feedback: str | None = None
         brief_feedback = ""
         coverage_candidate: dict[str, Any] | None = None
+        last_outline_candidate: dict[str, Any] | None = None
 
         class OutlineRetryProvider:
             def complete_json(self, request_system: str, user: str) -> dict[str, Any]:
@@ -2272,7 +2316,8 @@ def _multipart_episode(
                 return provider.complete_json(request_system, user)
 
         def normalize_outline(value: dict[str, Any]) -> dict[str, Any]:
-            nonlocal feedback, brief_feedback, coverage_candidate
+            nonlocal feedback, brief_feedback, coverage_candidate, last_outline_candidate
+            last_outline_candidate = value
             coverage_candidate = None
             try:
                 normalized = _normalize_outline(
@@ -2290,11 +2335,33 @@ def _multipart_episode(
                 raise
 
         def recover_outline(error: Exception) -> dict[str, Any] | None:
-            if not isinstance(error, _RequestedCoverageError) or coverage_candidate is None:
+            if isinstance(error, _RequestedCoverageError) and coverage_candidate is not None:
+                recovered = _recover_outline_coverage(coverage_candidate, ask, allowed)
+                if progress is not None:
+                    progress.note("Outline coverage retries exhausted; adding grounded summary scenes")
+                return recovered
+            if (max_retries < 1 or not isinstance(error, StructuredOutputError) or
+                    "asset_ref" not in str(error)):
                 return None
-            recovered = _recover_outline_coverage(coverage_candidate, ask, allowed)
+            draft = _recover_outline_assets(last_outline_candidate, allowed, ask)
+            if draft is None:
+                return None
+            try:
+                normalized = _normalize_outline(
+                    draft, allowed, ask, check_coverage=False,
+                    provider=provider, project_dir=project_dir, progress=progress,
+                )
+                recovered = _canonicalize_outline_metadata(
+                    provider, normalized, ask, project_dir, progress,
+                )
+                try:
+                    _validate_focus_coverage(recovered["scene_intents"], ask)
+                except _RequestedCoverageError:
+                    recovered = _recover_outline_coverage(recovered, ask, allowed)
+            except (StructuredOutputError, _RequestedCoverageError, ValueError):
+                return None
             if progress is not None:
-                progress.note("Outline coverage retries exhausted; adding grounded summary scenes")
+                progress.note("Outline asset retries exhausted; preserving facts in summary scenes")
             return recovered
 
         outline_checkpoint = part_dir / "outline.json"

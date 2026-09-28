@@ -155,6 +155,77 @@ class OutlineAssetRetryTests(unittest.TestCase):
         self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0001", "E0982"])
         self.assertEqual(len(stubborn.outline_requests), 1)
 
+    def test_exhausted_outline_downgrades_unusable_evidence_scenes_without_losing_facts(self):
+        index = [{"ref": f"E{i:04d}", "kind": "document",
+                  "relative_path": f"source-{i}.md", "evidence_role": "primary"}
+                 for i in range(1, 4)]
+        index.append({"ref": "E0982", "kind": "media", "relative_path": "boringfetch.webp",
+                      "evidence_role": "primary"})
+        research = {"version": 1, "facts": [{
+            "claim": f"BoringOS fact {i}.", "evidence_refs": [f"E{i:04d}"],
+            "support": [{"evidence_ref": f"E{i:04d}", "text": f"BoringOS fact {i}."}],
+            "phase": "final", "confidence": "high",
+        } for i in range(1, 4)], "assets": [{"evidence_ref": "E0982",
+                    "purpose": "BoringOS terminal preview", "authentic_project_media": True}]}
+        ask = planner._make_ask(research, [index[-1]], index, "BoringOS", "")
+
+        class Provider:
+            def __init__(self, out_of_scope=False):
+                self.outline_calls = 0
+                self.out_of_scope = out_of_scope
+
+            def complete_json(self, _system, user):
+                request = json.loads(user)
+                if request.get("storyboard_mode") == "outline":
+                    self.outline_calls += 1
+                    bad_ref = "E0999" if self.out_of_scope else None
+                    return {"version": 1, "title": "BoringOS", "slug": "boringos",
+                            "summary": "BoringOS fact 1.", "scene_intents": [
+                                {"type": kind, "purpose": f"BoringOS fact {i}.",
+                                 "fact_ids": [f"F{i:04d}"],
+                                 "evidence_refs": [f"E{i:04d}"] + ([bad_ref] if bad_ref else []),
+                                 "asset_ref": bad_ref}
+                                for i, kind in enumerate(("HERO", "HARDWARE_EVIDENCE",
+                                                          "TERMINAL_EVIDENCE"), 1)
+                            ]}
+                if request.get("storyboard_mode") == "scenes":
+                    scenes = []
+                    for template in request["required_output"]["scenes"]:
+                        scene = dict(template)
+                        fact = next(f for f in request["research"]["facts"]
+                                    if f["fact_id"] == scene["fact_ids"][0])
+                        scene.update(title="BoringOS", narration=fact["claim"])
+                        scenes.append(scene)
+                    return {"scenes": scenes}
+                raise AssertionError("Unexpected request")
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(planner, "fits_context", return_value=True), \
+             patch.object(planner, "_canonicalize_outline_metadata", side_effect=lambda _p, value, *_args: value), \
+             patch.object(planner, "_validate_narration_grounding"), \
+             patch.object(planner, "_validate_structured_grounding"):
+            project = Path(tmp) / "projects" / "boringos"
+            project.mkdir(parents=True)
+            provider = Provider()
+            episode = planner._multipart_episode(
+                provider, "storyboard", ask, project, 8192, 4096, 1024, 1, None, "scope")
+            self.assertEqual([s["type"] for s in episode["scenes"]],
+                             ["HERO", "SUMMARY", "SUMMARY"])
+            self.assertEqual(episode["scenes"][0]["asset_ref"], "E0982")
+            self.assertEqual([s["fact_ids"] for s in episode["scenes"]],
+                             [["F0001"], ["F0002"], ["F0003"]])
+            self.assertEqual(provider.outline_calls, 2)
+            cached = planner._multipart_episode(
+                provider, "storyboard", ask, project, 8192, 4096, 1024, 1, None, "scope")
+            self.assertEqual(cached, episode)
+            self.assertEqual(provider.outline_calls, 2)
+
+            other = project.parent / "reject"
+            other.mkdir()
+            with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
+                planner._multipart_episode(Provider(out_of_scope=True), "storyboard", ask,
+                                           other, 8192, 4096, 1024, 1, None, "scope")
+
 
 if __name__ == "__main__":
     unittest.main()
