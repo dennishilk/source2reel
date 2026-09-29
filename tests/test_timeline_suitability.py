@@ -178,7 +178,7 @@ class TimelineSuitabilityTests(unittest.TestCase):
         ask, _ = physical_ask()
         self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v6")
         self.assertEqual(ask["editorial_contract"], EDITORIAL_CONTRACT)
-        self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v17")
+        self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v18")
         self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v5")
         self.assertEqual(MEDIA_INSPECTION_CONTRACT, "media-inspection-v1")
         provider = NoOutlineProvider()
