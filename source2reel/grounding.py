@@ -15,7 +15,7 @@ from .providers import LLMProvider, StructuredOutputError
 
 # Included in research and storyboard request hashes: old normalized checkpoints
 # must not bypass a newly strengthened provenance contract.
-GROUNDING_CONTRACT = "mapped-support-kind-v5"
+GROUNDING_CONTRACT = "mapped-support-kind-v6"
 VERIFIER_BATCH_SIZE = 12
 VERIFIER_REQUEST_MAX_CHARS = 12000
 MAX_PROPOSITIONS = 16
