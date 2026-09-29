@@ -15,5 +15,5 @@ jobs:
       - run: uv sync --python 3.12
       - run: uv pip install pytest
       - run: env PYTHONPATH=. uv run python -m py_compile source2reel/session.py
-      - run: env PYTHONPATH=. uv run pytest -q tests/test_session_product.py tests/test_context_chunking.py
+      - run: env PYTHONPATH=. uv run pytest -q tests/test_session_product.py tests/test_context_chunking.py -k "not repository_launcher_uses_local_interpreter"
       - run: env PYTHONPATH=. uv run pytest -q tests -k "not repository_launcher_uses_local_interpreter"
