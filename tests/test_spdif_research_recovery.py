@@ -198,8 +198,8 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         result = self.run_research(provider)
         claims = [item["claim"] for item in result["facts"]]
         self.assertIn(
-            "The PipeWire branch comments matching `suspend-on-idle` lines in "
-            "`$CONFIG_FILE`.",
+            "When `$CHOICE` is `1`, the PipeWire branch comments matching "
+            "`suspend-on-idle` lines in `$CONFIG_FILE`.",
             claims,
         )
         self.assertIn(
@@ -207,23 +207,24 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             claims,
         )
         self.assertIn(
-            "The script copies `/etc/pulse/default.pa` to backup file "
-            "`/etc/pulse/default.pa.bak`.",
+            "When `$CHOICE` is `1`, the script copies `/etc/pulse/default.pa` "
+            "to backup file `/etc/pulse/default.pa.bak`.",
             claims,
         )
         self.assertIn(
-            "The script moves `/etc/pulse/default.pa.bak` back to "
-            "`/etc/pulse/default.pa`, restoring the saved file.",
+            "When `$CHOICE` is `2`, the script moves "
+            "`/etc/pulse/default.pa.bak` back to `/etc/pulse/default.pa`, "
+            "restoring the saved file.",
             claims,
         )
         self.assertIn(
-            "The script writes the `pcm.spdif_keepalive` ALSA configuration block "
-            "to `$HOME/.asoundrc`.",
+            "When `$CHOICE` is `1`, the script writes the "
+            "`pcm.spdif_keepalive` ALSA configuration block to `$HOME/.asoundrc`.",
             claims,
         )
         self.assertIn(
-            "The script comments matching `module-suspend-on-idle` lines in "
-            "`/etc/pulse/default.pa`.",
+            "When `$CHOICE` is `1`, the script comments matching "
+            "`module-suspend-on-idle` lines in `/etc/pulse/default.pa`.",
             claims,
         )
         exact = [item for item in result["facts"] if item.get("direct_code_evidence")]
@@ -262,6 +263,10 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         ask = _make_ask(result, [], self.inventory["evidence"],
                         "spdif-fix", INSTRUCTIONS)
         groups = ask["requested_topic_fact_ids"]
+        self.assertEqual(ask["requested_topic_specs"]["detail-4"],
+                         {"kind": "detail", "terms": ["backup"]})
+        self.assertEqual(ask["requested_topic_specs"]["detail-5"],
+                         {"kind": "detail", "terms": ["reset"]})
         for key in details:
             self.assertIn(key, groups)
             self.assertTrue(groups[key])
@@ -270,15 +275,14 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         reset_claims = {by_id[fact_id] for fact_id in groups["detail-5"]}
         helper_claims = {by_id[fact_id] for fact_id in groups["detail-6"]}
         self.assertIn(
-            "The script moves `/etc/pulse/default.pa.bak` back to "
-            "`/etc/pulse/default.pa`, restoring the saved file.",
+            "When `$CHOICE` is `2`, the script moves "
+            "`/etc/pulse/default.pa.bak` back to `/etc/pulse/default.pa`, "
+            "restoring the saved file.",
             reset_claims,
         )
-        self.assertNotIn(
-            "The script writes the `pcm.spdif_keepalive` configuration block "
-            "to `$HOME/.asoundrc`.",
-            reset_claims,
-        )
+        self.assertFalse(any(
+            "pcm.spdif_keepalive" in claim for claim in reset_claims
+        ))
         self.assertIn(
             "The script runs `sleep 3` followed by "
             "`play -n -c2 synth sin gain -100`.",
@@ -296,18 +300,18 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         result = self.run_research(provider)
         claims = {item["claim"] for item in result["facts"]}
         self.assertIn(
-            "The script comments matching `module-suspend-on-idle` lines in "
-            "`/etc/pulse/default.pa`.",
+            "When `$CHOICE` is `1`, the script comments matching "
+            "`module-suspend-on-idle` lines in `/etc/pulse/default.pa`.",
             claims,
         )
         self.assertIn(
-            "The PipeWire branch comments matching `suspend-on-idle` lines in "
-            "`$CONFIG_FILE`.",
+            "When `$CHOICE` is `1`, the PipeWire branch comments matching "
+            "`suspend-on-idle` lines in `$CONFIG_FILE`.",
             claims,
         )
         self.assertIn(
-            "The script writes the `pcm.spdif_keepalive` ALSA configuration block "
-            "to `$HOME/.asoundrc`.",
+            "When `$CHOICE` is `1`, the script writes the "
+            "`pcm.spdif_keepalive` ALSA configuration block to `$HOME/.asoundrc`.",
             claims,
         )
         self.assertIn(
