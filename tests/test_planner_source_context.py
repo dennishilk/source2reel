@@ -100,6 +100,7 @@ class PlannerSourceContextTests(unittest.TestCase):
         joined = "\n".join(item["text"] for item in readme)
         self.assertIn("Keeps SPDIF output active", joined)
         self.assertIn("Prevents SPDIF from going into standby", joined)
+        self.assertIn("2 - undo", joined)
         for item in passages:
             source = next(entry["excerpt"] for entry in self.inventory["evidence"]
                           if entry["ref"] == item["evidence_ref"])
