@@ -688,8 +688,9 @@ def _natural_code_operation(
                 backend = "PulseAudio " if "pulseaudio" in context_folded else ""
             elif "pipewire" in context_folded:
                 backend = "PipeWire "
+            subject = f"The {backend}branch" if backend else "The script"
             return (
-                f"The {backend}branch comments matching `{needle.group(1)}` lines in "
+                f"{subject} comments matching `{needle.group(1)}` lines in "
                 f"`{destination}`.",
                 context,
             )
