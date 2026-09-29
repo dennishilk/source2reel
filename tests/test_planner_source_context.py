@@ -13,8 +13,10 @@ from source2reel.planner import (
     _normalize_capsules,
     _outline_payload,
     _planner_records,
+    _recover_outline_guard_conflict,
     _scene_part_payload,
     _source_context_passages,
+    _normalize_outline,
     _validate_scene_facts,
 )
 
@@ -205,6 +207,71 @@ class PlannerSourceContextTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "incompatible operation guards"):
             _validate_scene_facts(scene, ask)
+
+    def test_exhausted_guard_conflict_recovery_keeps_one_branch(self):
+        guarded = {
+            "version": 1,
+            "facts": [
+                {
+                    "claim": "The script comments the suspend line.",
+                    "evidence_refs": ["E0002"],
+                    "support": [{"evidence_ref": "E0002",
+                                 "text": "sudo sed -i '/module-suspend-on-idle/s/^/#/' /etc/pulse/default.pa"}],
+                    "phase": "unknown",
+                    "confidence": "high",
+                    "operation_guard": {
+                        "kind": "shell_equals", "variable": "CHOICE", "equals": "1",
+                        "source": 'if [ "$CHOICE" = "1" ]; then',
+                    },
+                },
+                {
+                    "claim": "The script removes the leading comment marker.",
+                    "evidence_refs": ["E0002"],
+                    "support": [{"evidence_ref": "E0002",
+                                 "text": "sudo sed -i 's/^#\\(.*module-suspend-on-idle.*\\)/\\1/' /etc/pulse/default.pa"}],
+                    "phase": "unknown",
+                    "confidence": "high",
+                    "operation_guard": {
+                        "kind": "shell_equals", "variable": "CHOICE", "equals": "2",
+                        "source": 'elif [ "$CHOICE" = "2" ]; then',
+                    },
+                },
+            ],
+            "assets": [],
+        }
+        index = [{key: entry.get(key) for key in
+                  ("ref", "relative_path", "kind", "evidence_role")}
+                 for entry in self.inventory["evidence"]]
+        ask = _make_ask(guarded, [], index, "spdif-fix", "")
+        first, second = ask["research"]["facts"]
+        raw = {
+            "version": 1,
+            "title": "SPDIF Fix",
+            "slug": "spdif-fix",
+            "summary": first["claim"],
+            "scene_intents": [{
+                "id": "s001",
+                "type": "CODE",
+                "purpose": first["claim"],
+                "fact_ids": [first["fact_id"], second["fact_id"]],
+                "evidence_refs": ["E0002"],
+            }],
+        }
+        with self.assertRaisesRegex(Exception, "incompatible operation guards") as caught:
+            _normalize_outline(raw, {"E0002"}, ask, check_coverage=False)
+        repaired = _recover_outline_guard_conflict(raw, caught.exception, ask)
+        self.assertIsNotNone(repaired)
+        self.assertEqual(
+            repaired["scene_intents"][0]["fact_ids"],
+            [first["fact_id"]],
+        )
+        normalized = _normalize_outline(
+            repaired, {"E0002"}, ask, check_coverage=False,
+        )
+        self.assertEqual(
+            normalized["scene_intents"][0]["fact_ids"],
+            [first["fact_id"]],
+        )
 
     def test_operation_guard_survives_planner_compaction(self):
         guarded = {
