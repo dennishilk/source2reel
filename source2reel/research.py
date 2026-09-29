@@ -1260,7 +1260,7 @@ def _exact_relationship_fact(
 ) -> dict[str, Any] | None:
     """Keep one explicit primary-source relationship as a bounded quoted fact."""
     terms = _relationship_words(" ".join(spec.get("terms", [])))
-    candidates: list[tuple[int, int, int, dict[str, Any]]] = []
+    candidates: list[tuple[int, int, int, int, dict[str, Any]]] = []
     for entry_index, entry in enumerate(batch):
         ref, excerpt = entry.get("ref"), entry.get("excerpt")
         if (entry.get("kind") != "document" or not isinstance(ref, str) or
@@ -1268,29 +1268,60 @@ def _exact_relationship_fact(
                 entry.get("evidence_role", "primary") != "primary" or
                 not isinstance(excerpt, str)):
             continue
-        for line_index, raw in enumerate(excerpt.splitlines()):
+        lines = excerpt.splitlines()
+        for line_index, raw in enumerate(lines):
             support = raw.strip()
             if not 12 <= len(support) <= 360 or not _RELATION.search(support):
                 continue
             claim = re.sub(r"^(?:[-*+]\s+|>\s*)", "", support).strip()
             if not claim or not _RELATION.search(claim):
                 continue
-            overlap = _relationship_words(claim) & terms
-            if len(overlap) < min(2, len(terms)):
-                continue
-            if (len(re.findall(r"[A-Za-z]+", claim)) < 3 or
-                    _code_line(support)):
-                continue
-            score = 5 * len(overlap) + 3 * int(bool(re.search(r"->|→", claim)))
-            candidates.append((score, -entry_index, -line_index, {
-                "claim": claim,
-                "evidence_refs": [ref],
-                "subject_scope": "main_subject",
-                "support": [{"evidence_ref": ref, "text": support}],
-                "phase": "unknown",
-                "confidence": "high",
-            }))
-    return max(candidates, key=lambda item: (item[0], item[1], item[2]))[3] if candidates else None
+
+            windows: list[tuple[str, str, int]] = [(claim, support, 1)]
+            for neighbor_index in (line_index - 1, line_index + 1):
+                if not 0 <= neighbor_index < len(lines):
+                    continue
+                neighbor_support = lines[neighbor_index].strip()
+                if not neighbor_support or len(neighbor_support) > 360:
+                    continue
+                neighbor_claim = re.sub(
+                    r"^(?:[-*+]\s+|>\s*)", "", neighbor_support
+                ).strip()
+                if not neighbor_claim or _code_line(neighbor_support):
+                    continue
+                first = min(line_index, neighbor_index)
+                second = max(line_index, neighbor_index)
+                between = "\n".join(lines[first:second + 1]).strip()
+                if not between or len(between) > 720:
+                    continue
+                combined_claim = " ".join(
+                    re.sub(r"^(?:[-*+]\s+|>\s*)", "", lines[pos].strip()).strip()
+                    for pos in range(first, second + 1)
+                    if lines[pos].strip()
+                )
+                windows.append((combined_claim, between, 2))
+
+            for candidate_claim, candidate_support, span_lines in windows:
+                overlap = _relationship_words(candidate_claim) & terms
+                if len(overlap) < min(2, len(terms)):
+                    continue
+                if (len(re.findall(r"[A-Za-z]+", candidate_claim)) < 3 or
+                        _code_line(candidate_support)):
+                    continue
+                score = (
+                    5 * len(overlap) +
+                    3 * int(bool(re.search(r"->|→", candidate_claim))) +
+                    int(span_lines == 1)
+                )
+                candidates.append((score, -span_lines, -entry_index, -line_index, {
+                    "claim": candidate_claim,
+                    "evidence_refs": [ref],
+                    "subject_scope": "main_subject",
+                    "support": [{"evidence_ref": ref, "text": candidate_support}],
+                    "phase": "unknown",
+                    "confidence": "high",
+                }))
+    return max(candidates, key=lambda item: item[:4])[4] if candidates else None
 
 
 def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
