@@ -257,9 +257,9 @@ def _make_ask(
             "source_context contains bounded verbatim passages from original scoped sources. "
             "Use it only to understand documented framing, terminology, grouping and explicitly "
             "stated relationships. It is not factual authority: every factual proposition in "
-            "titles, summary, scenes, narration, diagrams and annotations must still be supported "
-            "by selected research fact_ids. If context contains a detail absent from research "
-            "facts, do not state that detail."
+            "titles and summary must still be supported by supplied research facts, and every "
+            "scene proposition must be supported by that scene's selected fact_ids. If context "
+            "contains a detail absent from research facts, do not state that detail."
         ),
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
