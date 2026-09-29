@@ -248,6 +248,35 @@ class RequestedStoryCoverageTests(unittest.TestCase):
                                  ["result"], self.allowed, self.ask,
                              )["scene_intents"])
 
+    def test_missing_fact_selection_recovery_restores_requested_topic(self):
+        provider = RepeatingProvider(self.ask)
+        provider.bad = outline(self.ask, [1, 2, 3, 4])
+        provider.bad["scene_intents"][1].pop("fact_ids")
+        provider.bad["scene_intents"][1]["evidence_refs"] = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            episode = planner._multipart_episode(
+                provider, "storyboard", self.ask, path,
+                32768, 4096, 1024, 0, None, "scope",
+            )
+            checkpoint = json_load(path / "manifests/storyboard-parts/outline.json")
+
+        selected = {
+            fact_id for scene in episode["scenes"] for fact_id in scene["fact_ids"]
+        }
+        self.assertEqual(selected, {"F0001", "F0002", "F0003", "F0004"})
+        self.assertEqual(planner._missing_story_topics(episode["scenes"], self.ask), {})
+        self.assertIn(
+            ["F0002"],
+            [scene["fact_ids"] for scene in checkpoint["result"]["scene_intents"]],
+        )
+        outline_calls = [
+            request for request in provider.requests
+            if request.get("storyboard_mode") == "outline"
+        ]
+        self.assertEqual(len(outline_calls), 1)
+
     def test_full_path_retries_then_generates_missing_summary_scenes(self):
         provider = RepeatingProvider(self.ask, full=True)
         with tempfile.TemporaryDirectory() as tmp:
