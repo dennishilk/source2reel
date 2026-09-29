@@ -361,6 +361,25 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
         with self.assertRaisesRegex(StructuredOutputError, "F9999.*allowed_fact_ids"):
             planner._normalize_outline(value, self.allowed, self.ask)
 
+    def test_exhausted_missing_fact_ids_drop_only_unselected_intent(self):
+        value = outline()
+        value["scene_intents"][2].pop("fact_ids")
+        value["scene_intents"][2]["evidence_refs"] = []
+        provider = OutlineProvider([value])
+
+        episode = self.run_parts(provider, retries=0)
+
+        self.assertEqual([scene["fact_ids"] for scene in episode["scenes"]],
+                         [["F0001"], ["F0002"]])
+        checkpoint = json_load(
+            self.project / "manifests" / "storyboard-parts" / "outline.json"
+        )
+        self.assertEqual(
+            [scene["fact_ids"] for scene in checkpoint["result"]["scene_intents"]],
+            [["F0001"], ["F0002"]],
+        )
+        self.assertEqual(len(provider.outline_calls), 1)
+
     def test_unique_ref_repairs_only_id_then_normal_grounding_runs(self):
         provider = OutlineProvider([outline("F0004")])
         with patch("source2reel.planner._canonicalize_outline_metadata",
