@@ -2697,6 +2697,7 @@ def _multipart_episode(
                     return None
                 draft = repaired
 
+                normalized = None
                 try:
                     normalized = _normalize_outline(
                         draft, allowed, ask, check_coverage=False,
@@ -2718,12 +2719,11 @@ def _multipart_episode(
                             "repairs and restored grounded requested coverage"
                         )
                     return recovered
-                except _RequestedCoverageError as exc:
+                except _RequestedCoverageError:
                     try:
-                        candidate = normalized if "normalized" in locals() else None
-                        if candidate is None:
+                        if normalized is None:
                             return None
-                        return _recover_outline_coverage(candidate, ask, allowed)
+                        return _recover_outline_coverage(normalized, ask, allowed)
                     except (StructuredOutputError, ValueError):
                         return None
                 except StructuredOutputError as exc:
