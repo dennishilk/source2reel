@@ -22,7 +22,7 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v14"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v15"
 COVERAGE_CONTRACT = "requested-primary-coverage-v11"
 
 
@@ -671,8 +671,8 @@ def _code_context_window(excerpt: str, line: str, before: int = 4, after: int = 
     return "\n".join(lines[start:end]).strip()
 
 
-def _shell_choice_guard(excerpt: str, line: str) -> tuple[str, str] | None:
-    """Preserve one simple shell equality branch around an executable operation."""
+def _shell_choice_guard(excerpt: str, line: str) -> dict[str, str] | None:
+    """Extract one simple shell equality branch around an executable operation."""
     lines = excerpt.splitlines()
     try:
         target = next(i for i, value in enumerate(lines) if value.strip() == line.strip())
@@ -692,13 +692,12 @@ def _shell_choice_guard(excerpt: str, line: str) -> tuple[str, str] | None:
             for pos in range(index + 1, target)
         ):
             continue
-        support = "\n".join(lines[index:target + 1]).strip()
-        if len(support) > MAX_SUPPORT_CHARS:
-            return None
-        return (
-            f"When `${match.group('var')}` is `{match.group('value')}`",
-            support,
-        )
+        return {
+            "kind": "shell_equals",
+            "variable": match.group("var"),
+            "equals": match.group("value"),
+            "source": lines[index].strip(),
+        }
     return None
 
 
@@ -709,19 +708,6 @@ def _natural_code_operation(
     excerpt = str(entry.get("excerpt") or "")
     stripped = line.strip()
     support = stripped
-    branch = _shell_choice_guard(excerpt, stripped)
-
-    def contextual(claim: str, exact_support: str) -> tuple[str, str]:
-        if branch is None:
-            return claim, exact_support
-        prefix, guarded_support = branch
-        if claim.startswith("The script "):
-            claim = "the script " + claim[len("The script "):]
-        elif claim.startswith("The "):
-            claim = "the " + claim[len("The "):]
-        else:
-            claim = claim[:1].lower() + claim[1:]
-        return f"{prefix}, {claim}", guarded_support
 
     # cp/mv/rm directly encode the filesystem operation.
     simple = re.fullmatch(
@@ -734,20 +720,20 @@ def _natural_code_operation(
         context = _code_context_window(excerpt, stripped, before=1, after=2)
         if cmd == "cp" and second:
             if second == first + ".bak":
-                return contextual(
+                return (
                     f"The script copies `{first}` to backup file `{second}`.",
                     context,
                 )
-            return contextual(f"The script copies `{first}` to `{second}`.", context)
+            return f"The script copies `{first}` to `{second}`.", context
         if cmd == "mv" and second:
             if first == second + ".bak":
-                return contextual(
+                return (
                     f"The script moves `{first}` back to `{second}`, restoring the saved file.",
                     context,
                 )
-            return contextual(f"The script moves `{first}` to `{second}`.", context)
+            return f"The script moves `{first}` to `{second}`.", context
         if cmd == "rm":
-            return contextual(f"The script removes `{first}`.", context)
+            return f"The script removes `{first}`.", context
 
     # A literal comment substitution is precise enough to narrate directly.
     if re.search(r"\bsed\b", stripped) and re.search(r"s/\^/#/", stripped):
@@ -771,7 +757,7 @@ def _natural_code_operation(
             elif "pipewire" in context_folded:
                 backend = "PipeWire "
             subject = f"The {backend}branch" if backend else "The script"
-            return contextual(
+            return (
                 f"{subject} comments matching `{needle.group(1)}` lines in "
                 f"`{destination}`.",
                 context,
@@ -786,7 +772,7 @@ def _natural_code_operation(
     if pactl:
         verb = "unloads" if pactl.group("action") == "unload-module" else "loads"
         context = _code_context_window(excerpt, stripped, before=4, after=0)
-        return contextual(
+        return (
             f"The script {verb} `{pactl.group('module')}` with `pactl`.",
             context,
         )
@@ -796,7 +782,7 @@ def _natural_code_operation(
         path = re.search(r"\s(/[^\s]+)(?:\s+2>/dev/null|\s+\|\||$)", stripped)
         needle = re.search(r"\.\*([A-Za-z0-9_-]{4,})\.\*", stripped)
         if path and needle:
-            return contextual(
+            return (
                 f"The script removes the leading comment marker from matching "
                 f"`{needle.group(1)}` lines in `{path.group(1)}`.",
                 support,
@@ -839,14 +825,12 @@ def _natural_code_operation(
             family = "ALSA " if (
                 "alsa" in variable.casefold() or ".asoundrc" in destination.casefold()
             ) else ""
-            return contextual(
+            return (
                 f"The script writes the `{block.group(1)}` {family}configuration block "
                 f"to `{destination}`.",
                 window,
             )
-        return contextual(
-            f"The script writes a configuration block to `{destination}`.", window,
-        )
+        return f"The script writes a configuration block to `{destination}`.", window
 
     # systemctl exposes the requested action and unit names literally.
     systemctl = re.search(
@@ -942,6 +926,9 @@ def _naturalize_code_facts(
             "support": [{"evidence_ref": ref, "text": support}],
             "naturalized_code_evidence": True,
         }
+        operation_guard = _shell_choice_guard(str(entry.get("excerpt") or ""), exact)
+        if operation_guard is not None:
+            candidate["operation_guard"] = operation_guard
         check_id = f"N{index:04d}"
         candidates.append((index, candidate, check_id))
         checks.append({"id": check_id, "claim": claim, "support": [support]})
