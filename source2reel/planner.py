@@ -3147,18 +3147,23 @@ def plan(
     valid = {e["ref"] for e in inventory["evidence"]}
     media = _media_inventory(inventory)
 
-    candidate_refs = _research_refs(research) | {m["ref"] for m in media}
+    source_context = _source_context_passages(research, inventory, title_hint, instructions)
+    source_context_refs = {item["evidence_ref"] for item in source_context}
+    candidate_refs = _research_refs(research) | {m["ref"] for m in media} | source_context_refs
     evidence_index = _evidence_index(inventory, candidate_refs)
     system = (project_dir.parents[1] / "prompts" / "storyboard.txt").read_text()
     resource_urls = _authoritative_resource_urls(project_dir)
 
-    direct_ask = _make_ask(research, media, evidence_index, title_hint, instructions, resource_urls)
+    direct_ask = _make_ask(
+        research, media, evidence_index, title_hint, instructions, resource_urls, source_context,
+    )
     if _final_requests_fit(system, direct_ask, context_size,
                            output_reserve_tokens, safety_tokens):
         json_dump(project_dir / "manifests" / "planner-evidence.json", {
             "version": 1,
             "strategy": "direct",
             "research": direct_ask["research"],
+            "source_context": source_context,
             "media_inventory": media,
             "evidence_index": evidence_index,
             "evidence_scope": _evidence_scope(evidence_index),
@@ -3183,7 +3188,9 @@ def plan(
     media_limit = min(_PLANNER_MEDIA_LIMIT, max(2, context_size // 8192)) \
         if context_size >= 8192 else 1
     selected_visuals: list[dict[str, Any]] = []
-    make_compact_payload = lambda level, part, batch: _compact_payload(level, part, batch, title_hint, instructions)
+    make_compact_payload = lambda level, part, batch: _compact_payload(
+        level, part, batch, title_hint, instructions, source_context,
+    )
 
     for level in range(1, max(1, max_reduce_levels) + 1):
         chunks = split_for_context(
@@ -3241,9 +3248,13 @@ def plan(
         }
         compact_media = [_compact_media_item(m) for m in media
                          if m["ref"] in selected_media_refs]
-        compact_index = _evidence_index(inventory, selected_refs | selected_media_refs)
-        ask = _make_ask(compact_research, compact_media, compact_index,
-                        title_hint, instructions, resource_urls)
+        compact_index = _evidence_index(
+            inventory, selected_refs | selected_media_refs | source_context_refs,
+        )
+        ask = _make_ask(
+            compact_research, compact_media, compact_index,
+            title_hint, instructions, resource_urls, source_context,
+        )
         if _final_requests_fit(system, ask, context_size,
                                output_reserve_tokens, safety_tokens):
             json_dump(project_dir / "manifests" / "planner-evidence.json", {
@@ -3251,6 +3262,7 @@ def plan(
                 "strategy": "map-reduce",
                 "levels": level,
                 "research": ask["research"],
+                "source_context": source_context,
                 "media_inventory": compact_media,
                 "evidence_index": compact_index,
                 "evidence_scope": _evidence_scope(compact_index),
