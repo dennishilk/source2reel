@@ -267,8 +267,8 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         reset_claims = {by_id[fact_id] for fact_id in groups["detail-5"]}
         helper_claims = {by_id[fact_id] for fact_id in groups["detail-6"]}
         self.assertIn(
-            "The script moves `/etc/pulse/default.pa.bak` to "
-            "`/etc/pulse/default.pa`.",
+            "The script moves `/etc/pulse/default.pa.bak` back to "
+            "`/etc/pulse/default.pa`, restoring the saved file.",
             reset_claims,
         )
         self.assertNotIn(
