@@ -53,6 +53,10 @@ _RENDERABLE_VISUAL_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif",
                            ".mp4", ".mov", ".mkv", ".webm"}
 _PLANNER_MEDIA_CONTRACT = "planner-authentic-media-v1"
 _PLANNER_MEDIA_LIMIT = 5
+_PLANNER_SOURCE_CONTEXT_CONTRACT = "planner-source-context-v1"
+_PLANNER_SOURCE_CONTEXT_LIMIT = 4
+_PLANNER_SOURCE_CONTEXT_TOTAL_CHARS = 4200
+_PLANNER_SOURCE_CONTEXT_PASSAGE_CHARS = 1400
 
 
 def _visual_asset_refs(evidence_index: list[dict[str, Any]]) -> list[str]:
