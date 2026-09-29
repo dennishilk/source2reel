@@ -107,6 +107,12 @@ class PlannerSourceContextTests(unittest.TestCase):
             self.assertIn(item["text"], source)
             self.assertEqual(item["context_role"], "narrative_only")
 
+        small = _source_context_passages(
+            self.research, self.inventory, "spdif-fix", INSTRUCTIONS, max_chars=500,
+        )
+        self.assertTrue(small)
+        self.assertLessEqual(sum(len(item["text"]) for item in small), 500)
+
     def test_context_reaches_direct_compact_outline_and_scene_payloads(self):
         context = _source_context_passages(
             self.research, self.inventory, "spdif-fix", INSTRUCTIONS,
