@@ -290,6 +290,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         concepts = _requested_concepts(INSTRUCTIONS, "spdif-fix")
         self.assertIn("relationship", concepts)
         self.assertEqual(concepts["relationship"]["kind"], "relationship")
+        self.assertIn("spdif", concepts["relationship"]["terms"])
         details = {key: set(spec["terms"]) for key, spec in concepts.items()
                    if spec["kind"] == "detail"}
         self.assertEqual(list(details.values()), [
@@ -303,6 +304,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             result["facts"], INSTRUCTIONS, "spdif-fix", roles, paths,
         )
         self.assertFalse(any(key in missing for key in details))
+        self.assertNotIn("relationship", missing)
 
         ask = _make_ask(result, [], self.inventory["evidence"],
                         "spdif-fix", INSTRUCTIONS)
@@ -314,6 +316,8 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         for key in details:
             self.assertIn(key, groups)
             self.assertTrue(groups[key])
+        self.assertIn("relationship", groups)
+        self.assertTrue(groups["relationship"])
 
         by_id = {fact["fact_id"]: fact["claim"] for fact in ask["research"]["facts"]}
         reset_claims = {by_id[fact_id] for fact_id in groups["detail-5"]}
