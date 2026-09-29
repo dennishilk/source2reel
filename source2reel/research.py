@@ -687,6 +687,25 @@ def _natural_code_operation(
             verb = {"restart": "restarts", "start": "starts", "stop": "stops"}[action]
             return f"The script {verb} {joined} with `systemctl`.", support
 
+    # A literal sleep immediately before a command establishes a bounded sequence.
+    lines = excerpt.splitlines()
+    try:
+        line_index = next(i for i, value in enumerate(lines) if value.strip() == stripped)
+    except StopIteration:
+        line_index = -1
+    if line_index > 0:
+        previous = next(
+            (lines[i].strip() for i in range(line_index - 1, max(-1, line_index - 4), -1)
+             if lines[i].strip() and not lines[i].strip().startswith("#")),
+            "",
+        )
+        delay = re.fullmatch(r"sleep\s+(\d+(?:\.\d+)?)", previous)
+        if delay:
+            return (
+                f"The script waits {delay.group(1)} seconds and then runs `{stripped}`.",
+                previous + "\n" + stripped,
+            )
+
     # When the same executable is visibly invoked with two adjacent variants,
     # describe the sequence rather than reading one raw command as narration.
     command = re.match(r"^(?P<exe>[A-Za-z0-9_.+-]+)\s+", stripped)
