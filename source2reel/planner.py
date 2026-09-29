@@ -619,6 +619,7 @@ def _validate_focus_coverage(scenes: list[dict[str, Any]], ask: dict[str, Any]) 
 
 def _prune_editorial_repetition(
     scenes: list[dict[str, Any]], presentation: Any, ask: dict[str, Any],
+    *, enforce_coverage: bool = True,
 ) -> tuple[list[dict[str, Any]], Any]:
     """Drop exhausted content while preserving coverage and presentation references."""
     kept = prune_redundant_content_scenes(scenes)
@@ -629,7 +630,7 @@ def _prune_editorial_repetition(
     missing_after = _missing_story_topics(kept, ask)
     newly_missing = {topic: ids for topic, ids in missing_after.items()
                      if topic not in missing_before}
-    if newly_missing:
+    if newly_missing and enforce_coverage:
         raise _RequestedCoverageError(newly_missing)
     if isinstance(presentation, dict) and isinstance(presentation.get("scene_titles"), dict):
         presentation = {**presentation, "scene_titles": {
@@ -641,7 +642,8 @@ def _prune_editorial_repetition(
 
 def _canonical_story_composition(
     scenes: list[dict[str, Any]], presentation: Any, ask: dict[str, Any],
-    allowed: set[str], *, full: bool = False, provider: LLMProvider | None = None,
+    allowed: set[str], *, full: bool = False, enforce_coverage: bool = True,
+    provider: LLMProvider | None = None,
     project_dir: Path | None = None, progress: Progress | None = None,
 ) -> tuple[list[dict[str, Any]], Any]:
     """Turn selected, authorized facts into distinct content and a grounded ending."""
@@ -811,12 +813,14 @@ def _canonical_story_composition(
         if selected_content and not retained[-1]["fact_ids"]:
             raise StructuredOutputError("OUTRO has no supported selected fact that fits its narration")
 
-    kept, presentation = _prune_editorial_repetition(retained, presentation, ask)
+    kept, presentation = _prune_editorial_repetition(
+        retained, presentation, ask, enforce_coverage=enforce_coverage,
+    )
     removed = {scene["id"] for scene in scenes} - {scene["id"] for scene in kept}
     missing_before = _missing_story_topics(scenes, ask)
     newly_missing = {topic: ids for topic, ids in _missing_story_topics(kept, ask).items()
                      if topic not in missing_before}
-    if newly_missing:
+    if newly_missing and enforce_coverage:
         raise _RequestedCoverageError(newly_missing)
     if removed and isinstance(presentation, dict) and isinstance(presentation.get("scene_titles"), dict):
         presentation = {**presentation, "scene_titles": {
@@ -1945,6 +1949,7 @@ def _normalize_outline(value: dict[str, Any], allowed: set[str], ask: dict[str, 
             canonical.append(intent)
         intents, presentation = _canonical_story_composition(
             canonical, outline.get("presentation"), ask, allowed,
+            enforce_coverage=check_coverage,
             provider=provider, project_dir=project_dir, progress=progress,
         )
         if presentation is not None:
