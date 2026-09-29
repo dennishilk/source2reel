@@ -1321,7 +1321,13 @@ def _exact_relationship_fact(
                     "phase": "unknown",
                     "confidence": "high",
                 }))
-    return max(candidates, key=lambda item: item[:4])[4] if candidates else None
+    # Prefer the shortest sufficient exact source statement. Adjacent source
+    # context is only a fallback when no single line covers the requested
+    # relationship; this keeps deterministic quote grounding available.
+    return max(
+        candidates,
+        key=lambda item: (item[1], item[0], item[2], item[3]),
+    )[4] if candidates else None
 
 
 def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
