@@ -204,6 +204,7 @@ def _make_ask(
     title_hint: str,
     instructions: str,
     resource_urls: list[str] | None = None,
+    source_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     identified = _identified_research(research, evidence_index)
     visual_refs = [ref for ref in _visual_asset_refs(evidence_index)
@@ -250,6 +251,16 @@ def _make_ask(
     return {
         "grounding_contract": GROUNDING_CONTRACT,
         "editorial_contract": EDITORIAL_CONTRACT,
+        "source_context_contract": _PLANNER_SOURCE_CONTEXT_CONTRACT,
+        "source_context": source_context or [],
+        "source_context_requirement": (
+            "source_context contains bounded verbatim passages from original scoped sources. "
+            "Use it only to understand documented framing, terminology, grouping and explicitly "
+            "stated relationships. It is not factual authority: every factual proposition in "
+            "titles, summary, scenes, narration, diagrams and annotations must still be supported "
+            "by selected research fact_ids. If context contains a detail absent from research "
+            "facts, do not state that detail."
+        ),
         "project_title_hint": title_hint,
         "optional_instructions": instructions,
         "allowed_scene_types": sorted(
