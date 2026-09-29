@@ -48,6 +48,52 @@ class RequestedStoryQualityTests(unittest.TestCase):
         self.assertEqual(code["scene_intents"][0]["fact_ids"], ["F0001"])
         self.assertEqual(code["scene_intents"][0]["type"], "CODE")
 
+
+    def test_asset_recovery_defers_coverage_until_specific_repair_can_run(self):
+        raw = fact(COMMAND, "E0004", COMMAND, direct_code_evidence=True)
+        natural = fact(NATURAL, "E0004", COMMAND, direct_code_evidence=True,
+                       naturalized_code_evidence=True)
+        rollback = fact("The tool restores the previous service configuration.",
+                        "E0004", "The tool restores the previous service configuration.")
+        media = [("E0005", "fix.jpeg"), ("E0006", "menu.jpeg"),
+                 ("E0007", "undo.jpeg")]
+        inventory = [
+            {"ref": "E0004", "kind": "document", "evidence_role": "primary",
+             "relative_path": "config.sh"},
+            *[{"ref": ref, "kind": "media", "evidence_role": "primary",
+               "relative_path": f"screens/{name}"} for ref, name in media],
+        ]
+        research = {"version": 1, "facts": [raw, natural, rollback], "assets": [
+            {"evidence_ref": ref, "purpose": name, "authentic_project_media": True}
+            for ref, name in media
+        ]}
+        ask = planner._make_ask(research, [], inventory, "Configuration tool", INSTRUCTIONS)
+        # Before canonical story composition the raw command covers this topic.
+        # Composition correctly replaces it with the verified natural paraphrase,
+        # so coverage must be checked afterwards, where F0003 can repair it.
+        ask["requested_topic_fact_ids"] = {"detail-1": ["F0003", "F0001"]}
+        allowed = {entry["ref"] for entry in inventory}
+        broken = outline({
+            "type": "HERO", "purpose": NATURAL, "fact_ids": ["F0001"],
+            "evidence_refs": ["E0004"], "asset_ref": "E0004",
+        })
+
+        asset_repaired = planner._recover_outline_assets(broken, allowed, ask)
+        self.assertIsNotNone(asset_repaired)
+        self.assertEqual(asset_repaired["scene_intents"][0]["type"], "SUMMARY")
+
+        canonical = planner._normalize_outline(
+            asset_repaired, allowed, ask, check_coverage=False,
+        )
+        self.assertEqual(canonical["scene_intents"][0]["fact_ids"], ["F0002"])
+        with self.assertRaises(planner._RequestedCoverageError):
+            planner._validate_focus_coverage(canonical["scene_intents"], ask)
+
+        recovered = planner._recover_outline_coverage(canonical, ask, allowed)
+        self.assertEqual([scene["fact_ids"] for scene in recovered["scene_intents"]],
+                         [["F0002"], ["F0003"]])
+        planner._validate_focus_coverage(recovered["scene_intents"], ask)
+
     def test_two_screenshots_cannot_repeat_an_introductory_fact(self):
         purpose = "The configuration tool is designed to address idle playback delays."
         mechanism = "The tool comments idle-timeout in the service configuration."
