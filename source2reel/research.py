@@ -322,6 +322,22 @@ def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[st
     return concepts
 
 
+def _relationship_words(text: str) -> set[str]:
+    """Normalize only simple English inflections for explicit relationship matching."""
+    words = _request_words(text)
+    expanded = set(words)
+    for word in words:
+        if word.endswith("ed") and len(word) >= 6:
+            stem = word[:-2]
+            if len(stem) >= 4:
+                expanded.add(stem)
+        if word.endswith("ing") and len(word) >= 7:
+            stem = word[:-3]
+            if len(stem) >= 4:
+                expanded.add(stem)
+    return expanded
+
+
 def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
     kind = spec["kind"]
     if kind == "purpose":
@@ -330,8 +346,8 @@ def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
         return bool(_OVERVIEW.search(claim))
     words = _request_words(claim)
     if kind == "relationship":
-        terms = set(spec.get("terms", []))
-        overlap = words & terms
+        terms = _relationship_words(" ".join(spec.get("terms", [])))
+        overlap = _relationship_words(claim) & terms
         return bool(_RELATION.search(claim) and len(overlap) >= min(2, len(terms)))
     if kind == "distinction":
         # A generic overlap (e.g. "explainer production") must not imply
@@ -1243,7 +1259,7 @@ def _exact_relationship_fact(
     batch: list[dict[str, Any]], spec: dict[str, Any], roles: dict[str, str],
 ) -> dict[str, Any] | None:
     """Keep one explicit primary-source relationship as a bounded quoted fact."""
-    terms = set(spec.get("terms", []))
+    terms = _relationship_words(" ".join(spec.get("terms", [])))
     candidates: list[tuple[int, int, int, dict[str, Any]]] = []
     for entry_index, entry in enumerate(batch):
         ref, excerpt = entry.get("ref"), entry.get("excerpt")
@@ -1259,7 +1275,7 @@ def _exact_relationship_fact(
             claim = re.sub(r"^(?:[-*+]\s+|>\s*)", "", support).strip()
             if not claim or not _RELATION.search(claim):
                 continue
-            overlap = _request_words(claim) & terms
+            overlap = _relationship_words(claim) & terms
             if len(overlap) < min(2, len(terms)):
                 continue
             if (len(re.findall(r"[A-Za-z]+", claim)) < 3 or
