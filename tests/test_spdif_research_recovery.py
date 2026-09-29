@@ -150,7 +150,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             entry("E0009", "spdif-fix.sh", SCRIPT),
         ]}
 
-    def run(self, provider):
+    def run_research(self, provider):
         return research(provider, self.inventory, self.project,
                         title_hint="spdif-fix", instructions=INSTRUCTIONS,
                         max_retries=0)
@@ -158,7 +158,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
     def test_code_coverage_recovers_natural_facts_and_deduplicates_duplicate_script(self):
         self.assertGreater(len(SCRIPT), 1024)
         provider = SpdifProvider()
-        result = self.run(provider)
+        result = self.run_research(provider)
         claims = [item["claim"] for item in result["facts"]]
         self.assertIn("The script restarts PulseAudio and PipeWire.", claims)
         self.assertIn("The script comments PipeWire suspend-on-idle in its configuration.", claims)
@@ -181,7 +181,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
 
     def test_exact_code_floor_survives_even_when_focused_model_omits_code_facts(self):
         provider = SpdifProvider(omit_coverage_code=True)
-        result = self.run(provider)
+        result = self.run_research(provider)
         claims = [item["claim"] for item in result["facts"]]
         self.assertIn("systemctl --user restart pipewire pipewire-pulse || true", claims)
         self.assertIn("play -n -c2 synth sin gain -100", claims)
