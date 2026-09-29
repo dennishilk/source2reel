@@ -198,7 +198,8 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         result = self.run_research(provider)
         claims = [item["claim"] for item in result["facts"]]
         self.assertIn(
-            "The script restarts `pipewire` and `pipewire-pulse` with `systemctl`.",
+            "The PipeWire branch comments matching `suspend-on-idle` lines in "
+            "`$CONFIG_FILE`.",
             claims,
         )
         self.assertIn(
@@ -294,13 +295,13 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         result = self.run_research(provider)
         claims = {item["claim"] for item in result["facts"]}
         self.assertIn(
-            "The script comments matching `module-suspend-on-idle` lines in "
+            "The PulseAudio branch comments matching `module-suspend-on-idle` lines in "
             "`/etc/pulse/default.pa`.",
             claims,
         )
         self.assertIn(
-            "The script comments matching `suspend-on-idle` lines in "
-            "`$HOME/.config/pipewire/pipewire.conf`.",
+            "The PipeWire branch comments matching `suspend-on-idle` lines in "
+            "`$CONFIG_FILE`.",
             claims,
         )
         self.assertIn(
