@@ -183,12 +183,12 @@ _REQUEST_DETAIL_GENERIC = set((
     "solve solves architecture workflow pipeline process stage stages"
 ).split())
 _REQUEST_CLAUSE = re.compile(
-    r"\\b(?P<cue>what|why|how)\\b\\s+(?P<body>.*?)(?="
-    r"(?:,\\s*(?:and\\s+)?|\\s+and\\s+)(?:what|why|how)\\b|[.!?;\\n]|$)",
+    r"\b(?P<cue>what|why|how)\b\s+(?P<body>.*?)(?="
+    r"(?:,\s*(?:and\s+)?|\s+and\s+)(?:what|why|how)\b|[.!?;\n]|$)",
     re.I,
 )
 _DETAIL_OPERATION = re.compile(
-    r"\\b(?:detect(?:s|ed|ing)?|handl(?:e|es|ed|ing)|disabl(?:e|es|ed|ing)|"
+    r"\b(?:detect(?:s|ed|ing)?|handl(?:e|es|ed|ing)|disabl(?:e|es|ed|ing)|"
     r"enabl(?:e|es|ed|ing)|comment(?:s|ed|ing)?|uncomment(?:s|ed|ing)?|"
     r"creat(?:e|es|ed|ing)|writ(?:e|es|ten|ing)|cop(?:y|ies|ied|ying)|"
     r"mov(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|restor(?:e|es|ed|ing)|"
@@ -197,11 +197,11 @@ _DETAIL_OPERATION = re.compile(
     r"play(?:s|ed|ing)?|set(?:s|ting)?|configur(?:e|es|ed|ing)|"
     r"appl(?:y|ies|ied|ying)|run(?:s|ning)?|execut(?:e|es|ed|ing)|"
     r"read(?:s|ing)?|delete(?:s|d|ing)?|install(?:s|ed|ing)?|"
-    r"update(?:s|d|ing)?)\\b",
+    r"update(?:s|d|ing)?)\b",
     re.I,
 )
 _COVERAGE_SYSTEM = (
-    "\\n\\nFocused requested-topic recovery. Return only facts explicitly supported "
+    "\n\nFocused requested-topic recovery. Return only facts explicitly supported "
     "by these supplied primary evidence excerpts for missing_requested_topics. "
     "Use the same exact quotation, subject-scope, and grounding rules as normal "
     "research. If a requested fact is absent, omit it. Do not infer capabilities "
@@ -226,12 +226,12 @@ def _detail_term_present(term: str, claim: str, words: set[str] | None = None) -
         return True
     folded = claim.casefold()
     if term == "backup":
-        return bool(re.search(r"\\bbackup\\w*\\b", folded) or
-                    re.search(r"\\bcp\\b[^\\n]*\\.bak\\b", folded) or
-                    re.search(r"\\.bak\\b[^\\n]*\\bcp\\b", folded))
+        return bool(re.search(r"\bbackup\w*\b", folded) or
+                    re.search(r"\bcp\b[^\n]*\.bak\b", folded) or
+                    re.search(r"\.bak\b[^\n]*\bcp\b", folded))
     if term == "reset":
-        return bool(re.search(r"\\b(?:reset|restore|rollback)\\w*\\b", folded) or
-                    re.search(r"\\bmv\\b[^\\n]*\\.bak\\b", folded) or
+        return bool(re.search(r"\b(?:reset|restore|rollback)\w*\b", folded) or
+                    re.search(r"\bmv\b[^\n]*\.bak\b", folded) or
                     "load-module" in folded)
     return False
 
@@ -242,14 +242,14 @@ def _requested_detail_specs(instruction: str, title_hint: str) -> list[dict[str,
     specs: list[dict[str, Any]] = []
     seen: set[tuple[str, ...]] = set()
     for cue, body in _explicit_request_clauses(instruction):
-        if cue == "why" or re.search(r"\\b(?:architecture|workflow|pipeline|process|stages?)\\b",
+        if cue == "why" or re.search(r"\b(?:architecture|workflow|pipeline|process|stages?)\b",
                                      body, re.I):
             continue
-        if cue == "what" and re.search(r"\\b(?:is|are|solves?|means?|definition)\\b",
+        if cue == "what" and re.search(r"\b(?:is|are|solves?|means?|definition)\b",
                                        body, re.I):
             continue
-        coordinated = bool(re.search(r",|\\b(?:and|or)\\b", body, re.I))
-        parts = re.split(r",|\\b(?:and|or)\\b", body, flags=re.I) if coordinated else [body]
+        coordinated = bool(re.search(r",|\b(?:and|or)\b", body, re.I))
+        parts = re.split(r",|\b(?:and|or)\b", body, flags=re.I) if coordinated else [body]
         candidates: list[set[str]] = []
         for part in parts:
             terms = (_request_words(part) - title_words - _REQUEST_DETAIL_GENERIC)
@@ -274,23 +274,23 @@ def _requested_detail_specs(instruction: str, title_hint: str) -> list[dict[str,
 
 def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[str, Any]]:
     """Describe explicit topics without treating a request as evidence."""
-    instruction = re.sub(r"\\bend with:.*", "", instructions, flags=re.I | re.S)
+    instruction = re.sub(r"\bend with:.*", "", instructions, flags=re.I | re.S)
     concepts: dict[str, dict[str, Any]] = {}
     clauses = _explicit_request_clauses(instruction)
-    if re.search(r"\\b(?:what|overview|define|definition)\\b", instruction, re.I):
+    if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
         concepts["overview"] = {"kind": "overview"}
-    if re.search(r"\\b(?:why|purpose|motivation|reason|goal)\\b", instruction, re.I):
+    if re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
         concepts["purpose"] = {"kind": "purpose"}
-    if re.search(r"\\b(?:how|workflow|pipeline|process|stages?)\\b", instruction, re.I):
+    if re.search(r"\b(?:how|workflow|pipeline|process|stages?)\b", instruction, re.I):
         how_body = next((body for cue, body in clauses if cue == "how"), "")
         focus = _request_words(how_body)
         focus -= _request_words(title_hint)
         concepts["workflow"] = {"kind": "workflow", "terms": sorted(focus)}
     distinction_count = 0
-    for clause in re.split(r"[.!?;\\n]", instruction):
+    for clause in re.split(r"[.!?;\n]", instruction):
         match = re.search(
-            r"\\b(?:distinguish|differentiate|contrast|compare)\\s+(.+?)\\s+"
-            r"(?:from|with|versus|vs)\\s+(.+)$", clause, re.I,
+            r"\b(?:distinguish|differentiate|contrast|compare)\s+(.+?)\s+"
+            r"(?:from|with|versus|vs)\s+(.+)$", clause, re.I,
         )
         if match and distinction_count < 2:
             left, right = _request_words(match.group(1)), _request_words(match.group(2))
