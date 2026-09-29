@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from source2reel.planner import _make_ask
+from source2reel.grounding import deterministic_decision
 from source2reel.research import (_missing_requested_concepts, _repair_support_span,
                                   _requested_concepts, research)
 from source2reel.util import json_load
@@ -287,6 +288,37 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         for key, terms in details.items():
             if terms in ({"pulseaudio"}, {"pipewire"}, {"alsa"}):
                 self.assertNotIn(support_id, groups[key])
+
+    def test_requested_code_details_get_deterministic_spoken_facts_even_when_model_coverage_exists(self):
+        provider = SpdifProvider()
+        result = self.run_research(provider)
+        claims = {item["claim"] for item in result["facts"]}
+        self.assertIn(
+            "The script comments matching `module-suspend-on-idle` lines in "
+            "`/etc/pulse/default.pa`.",
+            claims,
+        )
+        self.assertIn(
+            "The script comments matching `suspend-on-idle` lines in "
+            "`$HOME/.config/pipewire/pipewire.conf`.",
+            claims,
+        )
+        self.assertIn(
+            "The script writes the `pcm.spdif_keepalive` ALSA configuration block "
+            "to `$HOME/.asoundrc`.",
+            claims,
+        )
+        self.assertIn(
+            "The script runs `sleep 3` followed by "
+            "`play -n -c2 synth sin gain -100`.",
+            claims,
+        )
+
+    def test_code_only_support_cannot_add_helper_verification_purpose(self):
+        claim = (
+            "The fallback helper runs a test tone to verify audio functionality."
+        )
+        self.assertEqual(deterministic_decision(claim, [HELPER]), "reject")
 
     def test_support_repair_never_redirects_fabricated_text(self):
         claim = "The script restarts PulseAudio and PipeWire."
