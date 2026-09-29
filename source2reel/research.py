@@ -1019,15 +1019,28 @@ def _exact_code_operation_facts(
     ranked.sort(reverse=True)
     facts = []
     per_ref: dict[str, int] = {}
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
+    entry_by_ref = {
+        entry.get("ref"): entry for entry in batch
+        if isinstance(entry.get("ref"), str)
+    }
 
     def keep(ref: str, claim: str) -> None:
-        marker = (ref, claim)
+        entry = entry_by_ref.get(ref)
+        guard = (
+            _shell_choice_guard(str(entry.get("excerpt") or ""), claim)
+            if isinstance(entry, dict) else None
+        )
+        guard_key = (
+            json.dumps(guard, ensure_ascii=False, sort_keys=True)
+            if isinstance(guard, dict) else ""
+        )
+        marker = (ref, claim, guard_key)
         if (marker in seen or per_ref.get(ref, 0) >= MAX_FACTS_PER_REF or
                 len(facts) >= limit):
             return
         seen.add(marker)
-        facts.append({
+        fact = {
             "claim": claim,
             "evidence_refs": [ref],
             "subject_scope": "main_subject",
@@ -1035,7 +1048,10 @@ def _exact_code_operation_facts(
             "phase": "unknown",
             "confidence": "high",
             "direct_code_evidence": True,
-        })
+        }
+        if isinstance(guard, dict):
+            fact["operation_guard"] = guard
+        facts.append(fact)
         per_ref[ref] = per_ref.get(ref, 0) + 1
 
     # Preserve at least one exact operation from each distinct selected source
