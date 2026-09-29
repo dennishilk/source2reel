@@ -2027,6 +2027,9 @@ def research(
     allfacts = _stabilize_requested_code_facts(
         provider, allfacts, inventory, instructions, title_hint, roles, project_dir, progress,
     )
+    allfacts = _stabilize_requested_relationship_facts(
+        provider, allfacts, inventory, instructions, title_hint, roles, project_dir, progress,
+    )
     allfacts = _current_overview_facts(allfacts, inventory, title_hint, instructions,
                                        provider, project_dir, progress)
     allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)
