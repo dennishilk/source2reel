@@ -330,7 +330,7 @@ class WorkflowSemanticsTests(unittest.TestCase):
         previous = {**current, "research_semantics_contract": "requested-topic-semantics-v10"}
         self.assertEqual(current["research_semantics_contract"],
                          RESEARCH_SEMANTICS_CONTRACT)
-        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v11")
+        self.assertEqual(RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v12")
         self.assertNotEqual(digest("Research", previous), digest("Research", current))
 
         missing = {"workflow": {"kind": "workflow", "terms": ["event"]}}
@@ -338,7 +338,7 @@ class WorkflowSemanticsTests(unittest.TestCase):
         old_coverage = {**coverage, "coverage_contract": "requested-primary-coverage-v4",
                         "research_semantics_contract": "requested-topic-semantics-v4"}
         self.assertEqual(coverage["coverage_contract"], COVERAGE_CONTRACT)
-        self.assertEqual(COVERAGE_CONTRACT, "requested-primary-coverage-v10")
+        self.assertEqual(COVERAGE_CONTRACT, "requested-primary-coverage-v11")
         self.assertNotEqual(digest("Research", {**coverage,
                                                 "coverage_contract": "requested-primary-coverage-v4"}),
                             digest("Research", coverage))
