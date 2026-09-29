@@ -1251,6 +1251,23 @@ def _validate_scene_facts(scene: dict[str, Any], ask: dict[str, Any],
         raise ValueError(f"{scene.get('id', 'Scene')}: select valid fact_ids from supplied planner facts")
     if fixed_ids is not None and ids != fixed_ids:
         raise ValueError(f"{scene.get('id', 'Scene')}: scene fact_ids differ from fixed outline selection")
+    guarded: dict[str, set[str]] = {}
+    for fact_id in ids:
+        guard = facts[fact_id].get("operation_guard")
+        if (not isinstance(guard, dict) or guard.get("kind") != "shell_equals" or
+                not isinstance(guard.get("variable"), str) or
+                not isinstance(guard.get("equals"), str)):
+            continue
+        guarded.setdefault(guard["variable"], set()).add(guard["equals"])
+    conflicts = {variable: values for variable, values in guarded.items() if len(values) > 1}
+    if conflicts:
+        detail = ", ".join(
+            "$" + variable + "={" + ", ".join(sorted(values)) + "}"
+            for variable, values in sorted(conflicts.items())
+        )
+        raise ValueError(
+            f"{scene.get('id', 'Scene')}: selected facts cross incompatible operation guards ({detail})"
+        )
     supported = {ref for fact_id in ids for ref in facts[fact_id]["evidence_refs"]}
     asset_ref = scene.get("asset_ref")
     if SCENE_CONTRACTS[scene["type"]].allows_asset_ref and asset_ref in {
@@ -1614,6 +1631,12 @@ def _retry_feedback(error: Exception) -> str:
     message = str(error)[:260]
     if "allowed_fact_ids:" in message:
         return f"{message} Copy only those exact existing IDs; preserve their cited evidence."
+    if "incompatible operation guards" in message:
+        return (
+            f"Previous storyboard rejected: {message}. Keep facts from different conditional "
+            "branches in separate scene intents; do not merge apply, undo, reset or alternate "
+            "branch behavior."
+        )
     if "no planner-scoped visual" in message:
         return (f"Previous storyboard rejected: {message}. This source has no usable "
                 "visual asset for that scene. Keep its selected facts and choose a "
@@ -1872,6 +1895,8 @@ def _brief_outline_feedback(error: Exception) -> str:
         return f"Use asset_ref {match.group(1)} or non-evidence type."
     if "allowed asset_ref: none" in message or "no planner-scoped visual" in message:
         return "Use a compatible non-evidence scene type."
+    if "incompatible operation guards" in message:
+        return "Keep different conditional branches in separate intents."
     if "fact_ids" in message:
         return "Copy only supplied fact_ids for each intent."
     if isinstance(error, _RequestedCoverageError):
