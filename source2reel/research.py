@@ -232,7 +232,7 @@ def _detail_term_present(term: str, claim: str, words: set[str] | None = None) -
     if term == "reset":
         return bool(re.search(r"\b(?:reset|restore|rollback)\w*\b", folded) or
                     re.search(r"\bmv\b[^\n]*\.bak\b", folded) or
-                    "load-module" in folded or re.search(r"s/\^#", folded))
+                    re.search(r"\bload-module\b", folded) or re.search(r"s/\^#", folded))
     return False
 
 
@@ -636,12 +636,13 @@ def _natural_code_operation(
     )
     if simple:
         cmd, first, second = simple.group("cmd"), simple.group("a"), simple.group("b")
+        context = _code_context_window(excerpt, stripped, before=1, after=2)
         if cmd == "cp" and second:
-            return f"The script copies `{first}` to `{second}`.", support
+            return f"The script copies `{first}` to `{second}`.", context
         if cmd == "mv" and second:
-            return f"The script moves `{first}` to `{second}`.", support
+            return f"The script moves `{first}` to `{second}`.", context
         if cmd == "rm":
-            return f"The script removes `{first}`.", support
+            return f"The script removes `{first}`.", context
 
     # A literal uncomment substitution is precise enough to narrate directly.
     if re.search(r"\bsed\b", stripped) and re.search(r"s/\^#", stripped):
@@ -807,7 +808,7 @@ def _exact_code_operation_facts(
                 semantic_bonus += 2
             if "reset" in terms and (
                 (".bak" in folded and re.search(r"\b(?:mv|rm)\b", folded)) or
-                "load-module" in folded or re.search(r"s/\^#", folded)
+                re.search(r"\bload-module\b", folded) or re.search(r"s/\^#", folded)
             ):
                 semantic_bonus += 2
             if not line_overlap and not path_overlap and not semantic_bonus:
@@ -861,7 +862,7 @@ def _exact_code_operation_facts(
         for _score, _entry, _line, ref, claim in ranked:
             folded = claim.casefold()
             if ((".bak" in folded and re.search(r"\b(?:mv|rm)\b", folded)) or
-                    "load-module" in folded or re.search(r"s/\^#", folded)):
+                    re.search(r"\bload-module\b", folded) or re.search(r"s/\^#", folded)):
                 keep(ref, claim)
                 break
 
