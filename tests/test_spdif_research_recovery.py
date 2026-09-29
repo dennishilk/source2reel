@@ -169,7 +169,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
 
     def test_code_coverage_recovers_natural_facts_and_deduplicates_duplicate_script(self):
         self.assertGreater(len(SCRIPT), 1024)
-        provider = SpdifProvider()
+        provider = SpdifProvider(omit_coverage_code=True)
         result = self.run_research(provider)
         claims = [item["claim"] for item in result["facts"]]
         self.assertIn("The script restarts PulseAudio and PipeWire.", claims)
@@ -224,8 +224,9 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         ])
 
         roles = {entry["ref"]: "primary" for entry in self.inventory["evidence"]}
+        paths = {entry["ref"]: entry["relative_path"] for entry in self.inventory["evidence"]}
         missing = _missing_requested_concepts(
-            result["facts"], INSTRUCTIONS, "spdif-fix", roles,
+            result["facts"], INSTRUCTIONS, "spdif-fix", roles, paths,
         )
         self.assertFalse(any(key in missing for key in details))
 
@@ -235,6 +236,14 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         for key in details:
             self.assertIn(key, groups)
             self.assertTrue(groups[key])
+
+        by_id = {fact["fact_id"]: fact["claim"] for fact in ask["research"]["facts"]}
+        reset_claims = {by_id[fact_id] for fact_id in groups["detail-5"]}
+        helper_claims = {by_id[fact_id] for fact_id in groups["detail-6"]}
+        self.assertTrue(any("s/^#" in claim or "load-module" in claim or
+                            (".bak" in claim and "mv " in claim)
+                            for claim in reset_claims))
+        self.assertIn("play -n -c2 synth sin gain -100", helper_claims)
 
         support_id = next(fact["fact_id"] for fact in ask["research"]["facts"]
                           if fact["claim"] == "The tool supports PulseAudio, PipeWire, and ALSA.")
