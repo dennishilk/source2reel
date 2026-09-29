@@ -120,10 +120,14 @@ class PlannerSourceContextTests(unittest.TestCase):
         self.assertEqual(ask["source_context_contract"], _PLANNER_SOURCE_CONTEXT_CONTRACT)
         self.assertEqual(ask["source_context"], context)
         self.assertEqual(_outline_payload(ask)["source_context"], context)
-        self.assertEqual(
-            _compact_payload(1, 1, [], "spdif-fix", INSTRUCTIONS, context)["source_context"],
-            context,
+        compact_payload = _compact_payload(
+            1, 1, [], "spdif-fix", INSTRUCTIONS, context,
         )
+        self.assertEqual(
+            compact_payload["source_context_contract"],
+            _PLANNER_SOURCE_CONTEXT_CONTRACT,
+        )
+        self.assertEqual(compact_payload["source_context"], context)
 
         fact = ask["research"]["facts"][0]
         intent = {
