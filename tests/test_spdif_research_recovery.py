@@ -205,17 +205,17 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             claims,
         )
         self.assertIn(
-            "The script copies `/etc/pulse/default.pa` to "
+            "The script copies `/etc/pulse/default.pa` to backup file "
             "`/etc/pulse/default.pa.bak`.",
             claims,
         )
         self.assertIn(
-            "The script moves `/etc/pulse/default.pa.bak` to "
-            "`/etc/pulse/default.pa`.",
+            "The script moves `/etc/pulse/default.pa.bak` back to "
+            "`/etc/pulse/default.pa`, restoring the saved file.",
             claims,
         )
         self.assertIn(
-            "The script writes the `pcm.spdif_keepalive` configuration block "
+            "The script writes the `pcm.spdif_keepalive` ALSA configuration block "
             "to `$HOME/.asoundrc`.",
             claims,
         )
