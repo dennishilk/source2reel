@@ -646,8 +646,8 @@ class StoryboardRecoveryTests(unittest.TestCase):
             part = json_load(project / "manifests" / "storyboard-parts" / "part-002.json")
             self.assertNotIn("E0099", str(part["result"]))
 
-    def test_missing_scene_and_misordered_ids_cannot_silently_assemble(self):
-        for broken in ("missing", "reordered"):
+    def test_unsplittable_single_scene_structure_recovers_from_fixed_outline(self):
+        for broken in ("missing", "reordered", "duplicate"):
             with self.subTest(broken=broken), tempfile.TemporaryDirectory() as tmp:
                 project = _project(Path(tmp))
 
@@ -658,16 +658,24 @@ class StoryboardRecoveryTests(unittest.TestCase):
                         if payload.get("storyboard_mode") == "scenes" and payload["part_number"] == 2:
                             if broken == "missing":
                                 result["scenes"] = result["scenes"][:-1]
-                            else:
+                            elif broken == "reordered":
                                 result["scenes"][0]["id"] = "s999"
+                            elif len(payload["scene_intents"]) == 1:
+                                result["scenes"].append(copy.deepcopy(result["scenes"][0]))
                         return result
 
                 provider = BrokenPart(count=6)
                 inventory, research = _source()
-                with self.assertRaisesRegex(RuntimeError, "invalid structured output"):
-                    plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
-                         max_retries=0)
-                self.assertFalse((project / "episode.json").exists())
+                episode = plan(provider, research, inventory, project, "DemoEngine", INSTRUCTIONS,
+                               max_retries=0)
+                self.assertEqual([scene["id"] for scene in episode["scenes"]],
+                                 [f"s{i:03d}" for i in range(1, 7)])
+                self.assertTrue((project / "episode.json").exists())
+                saved = project / "manifests" / "storyboard-parts"
+                serialized = " ".join(
+                    path.read_text() for path in saved.glob("part-*.json") if path.is_file()
+                )
+                self.assertNotIn("s999", serialized)
 
     def test_malformed_full_model_output_recovers_but_fast_path_ref_scope_remains_strict(self):
         with tempfile.TemporaryDirectory() as tmp:

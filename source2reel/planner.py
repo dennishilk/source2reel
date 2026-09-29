@@ -2637,22 +2637,21 @@ def _multipart_episode(
                 raise
 
         def recover_single(items: list[dict[str, Any]], error: Exception) -> dict[str, Any] | None:
-            if (max_retries > 0 and isinstance(error, StructuredOutputError) and
-                    "scene fact_ids differ from fixed outline selection" in str(error)):
-                # The final scene response still cites a different fact. Do
-                # not keep any of its prose, refs, or structured labels.
-                # Rebuild from the already validated outline and exact claims.
-                intent = items[0]
-                facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+            intent = items[0]
+            facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+
+            def exact_outline_scene(note: str) -> dict[str, Any] | None:
+                """Realize one already-validated intent without trusting rejected scene output."""
                 scene = {
                     "id": intent["id"], "type": intent["type"],
                     "title": _safe_intent_purpose(intent, facts),
                     "fact_ids": intent["fact_ids"],
                     "evidence_refs": intent["evidence_refs"],
                 }
-                if SCENE_CONTRACTS[intent["type"]].requires_asset_ref:
+                contract = SCENE_CONTRACTS[intent["type"]]
+                if contract.requires_asset_ref:
                     scene["asset_ref"] = intent["asset_ref"]
-                if SCENE_CONTRACTS[intent["type"]].requires_diagram:
+                if contract.requires_diagram:
                     labels = [facts[fact_id]["claim"] for fact_id in intent["fact_ids"]]
                     if len(labels) < 2:
                         return None
@@ -2668,13 +2667,33 @@ def _multipart_episode(
                     {"scenes": [scene]}, items, part_allowed, outline, ask,
                 )
                 if canonical["scenes"][0]["narration"] != fallback:
-                    raise StructuredOutputError(f"{intent['id']}: grounded fallback narration was modified")
+                    raise StructuredOutputError(
+                        f"{intent['id']}: grounded fallback narration was modified"
+                    )
                 if progress is not None:
-                    progress.note(f"{intent['id']}: fact selection retries exhausted; using exact outline claims")
+                    progress.note(f"{intent['id']}: {note}; using exact outline claims")
                 return canonical
+
+            message = str(error)
+            if (max_retries > 0 and isinstance(error, StructuredOutputError) and
+                    "scene fact_ids differ from fixed outline selection" in message):
+                # The final scene response still cites a different fact. Do
+                # not keep any of its prose, refs, or structured labels.
+                return exact_outline_scene("fact selection retries exhausted")
+
+            if isinstance(error, StructuredOutputError) and any(fragment in message for fragment in (
+                "Storyboard part requires exactly 1 scenes",
+                "Storyboard part must contain only a scenes list",
+                "Storyboard part scene order/id/type differs from",
+            )):
+                # The outline already fixed scene identity, type, selected
+                # facts and any authentic asset. A malformed one-scene model
+                # response cannot add authority, so reconstruct only from that
+                # validated intent instead of failing an unsplittable record.
+                return exact_outline_scene("single-scene structure retries exhausted")
+
             if not isinstance(error, _NarrationGroundingRejected):
                 return None
-            intent = items[0]
             candidate = rejected_candidates.get((intent["id"],))
             if candidate is None:
                 return None  # No structurally valid, rejected narration was ever returned.
@@ -2691,6 +2710,7 @@ def _multipart_episode(
             if progress is not None:
                 progress.note(f"{intent['id']}: narration grounding retries exhausted; using exact selected claims")
             return canonical
+
 
         try:
             results = checkpointed_split_json(
