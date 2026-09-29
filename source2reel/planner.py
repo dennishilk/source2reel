@@ -2087,6 +2087,50 @@ def _recover_outline_assets(
     return {**value, "scene_intents": repaired} if changed else None
 
 
+def _recover_outline_missing_fact_ids(
+    value: Any, allowed: set[str], ask: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Discard only intents that still omit required fact_ids after retries.
+
+    Missing selections provide no factual authority to preserve. Do not infer
+    them from prose or ambiguous refs: keep independently valid intents, then
+    let requested-topic coverage recovery re-add supported facts explicitly.
+    Unknown, malformed, or contradictory fact_ids remain fail-closed.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("scene_intents"), list):
+        return None
+    repaired = []
+    changed = False
+    for index, raw in enumerate(value["scene_intents"], 1):
+        try:
+            repaired.append(_canonical_outline_intent(
+                raw, index, allowed, ask, scene_id=f"s{index:03d}",
+            ))
+        except StructuredOutputError as exc:
+            missing = isinstance(raw, dict) and raw.get("fact_ids") in (None, [])
+            if "invalid fact_ids" not in str(exc) or not missing:
+                return None
+            changed = True
+    if not changed or not repaired:
+        return None
+
+    recovered = {**value, "scene_intents": repaired}
+    presentation = recovered.get("presentation")
+    if isinstance(presentation, dict):
+        presentation = {**presentation}
+        kept_ids = {intent["id"] for intent in repaired}
+        titles = presentation.get("scene_titles")
+        if isinstance(titles, dict):
+            presentation["scene_titles"] = {
+                scene_id: title for scene_id, title in titles.items()
+                if scene_id in kept_ids
+            }
+        if not any(intent["type"] == "OUTRO" for intent in repaired):
+            presentation.pop("outro", None)
+        recovered["presentation"] = presentation
+    return recovered
+
+
 _EDITORIAL_PREFIX = re.compile(
     r"^(?:introduce|show|explain|compare|conclude with|summarize|present|describe)\s+", re.I
 )
@@ -2588,6 +2632,34 @@ def _multipart_episode(
                 if progress is not None:
                     progress.note("Outline coverage retries exhausted; adding grounded summary scenes")
                 return recovered
+            if isinstance(error, StructuredOutputError) and "invalid fact_ids" in str(error):
+                draft = _recover_outline_missing_fact_ids(
+                    last_outline_candidate, allowed, ask,
+                )
+                if draft is not None:
+                    try:
+                        normalized = _normalize_outline(
+                            draft, allowed, ask, check_coverage=False,
+                            provider=provider, project_dir=project_dir, progress=progress,
+                        )
+                        recovered = _canonicalize_outline_metadata(
+                            provider, normalized, ask, project_dir, progress,
+                        )
+                        recovered = _normalize_outline(
+                            recovered, allowed, ask, check_coverage=False,
+                        )
+                        try:
+                            _validate_focus_coverage(recovered["scene_intents"], ask)
+                        except _RequestedCoverageError:
+                            recovered = _recover_outline_coverage(recovered, ask, allowed)
+                    except (StructuredOutputError, _RequestedCoverageError, ValueError):
+                        return None
+                    if progress is not None:
+                        progress.note(
+                            "Outline fact-ID retries exhausted; discarding intents without "
+                            "fact selections and restoring grounded requested coverage"
+                        )
+                    return recovered
             if (not isinstance(error, StructuredOutputError) or
                     "asset_ref" not in str(error)):
                 return None
