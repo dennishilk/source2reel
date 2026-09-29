@@ -270,12 +270,13 @@ class OutlineAssetRetryTests(unittest.TestCase):
                 zero_retry, 8192, 4096, 1024, 0, None, "scope",
             )
             self.assertEqual([s["type"] for s in recovered["scenes"]],
-                             ["SUMMARY", "SUMMARY", "SUMMARY"])
+                             ["HERO", "SUMMARY", "SUMMARY"])
+            self.assertEqual(recovered["scenes"][0]["asset_ref"], "E0982")
             self.assertEqual([s["fact_ids"] for s in recovered["scenes"]],
                              [["F0001"], ["F0002"], ["F0003"]])
             self.assertEqual([s["evidence_refs"] for s in recovered["scenes"]],
-                             [["E0001"], ["E0002"], ["E0003"]])
-            self.assertFalse(any("asset_ref" in s for s in recovered["scenes"]))
+                             [["E0001", "E0982"], ["E0002"], ["E0003"]])
+            self.assertFalse(any("asset_ref" in s for s in recovered["scenes"][1:]))
             self.assertEqual(non_visual.outline_calls, 1)
 
             class NonVisualAssetWithRepairableFactIds(Provider):
@@ -296,12 +297,13 @@ class OutlineAssetRetryTests(unittest.TestCase):
                 repairable, 8192, 4096, 1024, 0, None, "scope",
             )
             self.assertEqual([s["type"] for s in repaired["scenes"]],
-                             ["SUMMARY", "SUMMARY", "SUMMARY"])
+                             ["HERO", "SUMMARY", "SUMMARY"])
+            self.assertEqual(repaired["scenes"][0]["asset_ref"], "E0982")
             self.assertEqual([s["fact_ids"] for s in repaired["scenes"]],
                              [["F0001"], ["F0002"], ["F0003"]])
             self.assertEqual([s["evidence_refs"] for s in repaired["scenes"]],
-                             [["E0001"], ["E0002"], ["E0003"]])
-            self.assertFalse(any("asset_ref" in s for s in repaired["scenes"]))
+                             [["E0001", "E0982"], ["E0002"], ["E0003"]])
+            self.assertFalse(any("asset_ref" in s for s in repaired["scenes"][1:]))
             self.assertEqual(combined.outline_calls, 1)
 
             other = project.parent / "recover-out-of-scope-asset"
