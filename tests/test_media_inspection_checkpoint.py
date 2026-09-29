@@ -318,7 +318,7 @@ class VisualCheckpointTests(unittest.TestCase):
 
     def test_contracts_remain_scoped_and_asset_authority_is_preserved(self):
         self.assertEqual(MEDIA_INSPECTION_CONTRACT, "media-inspection-v1")
-        self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v17")
+        self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v18")
         self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v6")
         self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v5")
         self.assertNotIn("media_inspection_contract",
