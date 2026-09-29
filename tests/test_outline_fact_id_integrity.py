@@ -380,6 +380,33 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
         )
         self.assertEqual(len(provider.outline_calls), 1)
 
+    def test_exhausted_outline_repairs_multiple_independent_errors_in_sequence(self):
+        self.add_visual_asset()
+        value = outline()
+        value["scene_intents"][0].update({
+            "type": "PROJECT_EVIDENCE",
+            "asset_ref": "E0003",
+            "evidence_refs": ["E0001", "E0003"],
+        })
+        value["scene_intents"][1].pop("fact_ids")
+        value["scene_intents"][1]["evidence_refs"] = []
+        provider = OutlineProvider([value])
+
+        episode = self.run_parts(provider, retries=0)
+
+        self.assertEqual([scene["fact_ids"] for scene in episode["scenes"]],
+                         [["F0001"], ["F0003"]])
+        self.assertEqual(episode["scenes"][0]["type"], "SUMMARY")
+        self.assertNotIn("asset_ref", episode["scenes"][0])
+        self.assertEqual(len(provider.outline_calls), 1)
+        checkpoint = json_load(
+            self.project / "manifests" / "storyboard-parts" / "outline.json"
+        )
+        self.assertEqual(
+            [scene["fact_ids"] for scene in checkpoint["result"]["scene_intents"]],
+            [["F0001"], ["F0003"]],
+        )
+
     def test_unique_ref_repairs_only_id_then_normal_grounding_runs(self):
         provider = OutlineProvider([outline("F0004")])
         with patch("source2reel.planner._canonicalize_outline_metadata",

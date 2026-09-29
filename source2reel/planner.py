@@ -2087,48 +2087,87 @@ def _recover_outline_assets(
     return {**value, "scene_intents": repaired} if changed else None
 
 
-def _recover_outline_missing_fact_ids(
-    value: Any, allowed: set[str], ask: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Discard only intents that still omit required fact_ids after retries.
-
-    Missing selections provide no factual authority to preserve. Do not infer
-    them from prose or ambiguous refs: keep independently valid intents, then
-    let requested-topic coverage recovery re-add supported facts explicitly.
-    Unknown, malformed, or contradictory fact_ids remain fail-closed.
-    """
+def _outline_error_intent_index(error: Exception, value: Any) -> int | None:
+    """Locate only the intent named by a deterministic outline validation error."""
     if not isinstance(value, dict) or not isinstance(value.get("scene_intents"), list):
         return None
-    repaired = []
-    changed = False
-    for index, raw in enumerate(value["scene_intents"], 1):
-        try:
-            repaired.append(_canonical_outline_intent(
-                raw, index, allowed, ask, scene_id=f"s{index:03d}",
-            ))
-        except StructuredOutputError as exc:
-            missing = isinstance(raw, dict) and raw.get("fact_ids") in (None, [])
-            if "invalid fact_ids" not in str(exc) or not missing:
-                return None
-            changed = True
-    if not changed or not repaired:
+    intents = value["scene_intents"]
+    message = str(error)
+    match = re.search(r"\\b(s\\d{3})\\b", message)
+    if match:
+        scene_id = match.group(1)
+        for index, raw in enumerate(intents):
+            if isinstance(raw, dict) and raw.get("id") == scene_id:
+                return index
+        numeric = int(scene_id[1:]) - 1
+        if 0 <= numeric < len(intents):
+            return numeric
+    match = re.search(r"Storyboard intent (\\d+)", message)
+    if match:
+        numeric = int(match.group(1)) - 1
+        if 0 <= numeric < len(intents):
+            return numeric
+    return None
+
+
+def _recover_outline_missing_fact_ids(
+    value: Any, error: Exception, ask: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Discard only the currently rejected intent when its fact selection is absent.
+
+    A missing selection provides no factual authority to preserve. Other raw
+    intents are intentionally left untouched so a later deterministic recovery
+    step can handle an independent asset/schema error from the same LLM answer.
+    Unknown or contradictory fact IDs are never discarded by this repair.
+    """
+    index = _outline_error_intent_index(error, value)
+    if index is None:
+        return None
+    intents = value["scene_intents"]
+    raw = intents[index]
+    if not isinstance(raw, dict) or raw.get("fact_ids") not in (None, []):
+        return None
+    kind = raw.get("type")
+    contract = SCENE_CONTRACTS.get(kind) if isinstance(kind, str) else None
+    refs = raw.get("evidence_refs")
+    needs_facts = bool(contract and contract.requires_facts) or bool(refs)
+    if not needs_facts or len(intents) <= 1:
         return None
 
-    recovered = {**value, "scene_intents": repaired}
-    presentation = recovered.get("presentation")
+    repaired = {**value, "scene_intents": [*intents[:index], *intents[index + 1:]]}
+    presentation = repaired.get("presentation")
     if isinstance(presentation, dict):
         presentation = {**presentation}
-        kept_ids = {intent["id"] for intent in repaired}
-        titles = presentation.get("scene_titles")
-        if isinstance(titles, dict):
-            presentation["scene_titles"] = {
-                scene_id: title for scene_id, title in titles.items()
-                if scene_id in kept_ids
-            }
-        if not any(intent["type"] == "OUTRO" for intent in repaired):
+        presentation.pop("scene_titles", None)
+        if not any(isinstance(item, dict) and item.get("type") == "OUTRO"
+                   for item in repaired["scene_intents"]):
             presentation.pop("outro", None)
-        recovered["presentation"] = presentation
-    return recovered
+        repaired["presentation"] = presentation
+    return repaired
+
+
+def _recover_outline_asset_error(
+    value: Any, error: Exception, allowed: set[str], ask: dict[str, Any],
+    *, require_explicit_cited_asset: bool = False,
+) -> dict[str, Any] | None:
+    """Repair only the asset-invalid intent and leave other draft errors pending."""
+    index = _outline_error_intent_index(error, value)
+    if index is None:
+        return None
+    intents = value["scene_intents"]
+    raw = intents[index]
+    if not isinstance(raw, dict):
+        return None
+    repaired = _recover_outline_assets(
+        {"scene_intents": [raw]}, allowed, ask,
+        require_explicit_cited_asset=require_explicit_cited_asset,
+    )
+    if repaired is None:
+        return None
+    replacement = repaired["scene_intents"][0]
+    return {**value, "scene_intents": [
+        *intents[:index], replacement, *intents[index + 1:]
+    ]}
 
 
 _EDITORIAL_PREFIX = re.compile(
@@ -2632,62 +2671,59 @@ def _multipart_episode(
                 if progress is not None:
                     progress.note("Outline coverage retries exhausted; adding grounded summary scenes")
                 return recovered
-            if isinstance(error, StructuredOutputError) and "invalid fact_ids" in str(error):
-                draft = _recover_outline_missing_fact_ids(
-                    last_outline_candidate, allowed, ask,
-                )
-                if draft is not None:
+            if not isinstance(error, StructuredOutputError) or last_outline_candidate is None:
+                return None
+
+            draft = last_outline_candidate
+            current_error: Exception = error
+            intents = draft.get("scene_intents") if isinstance(draft, dict) else None
+            max_steps = min(_MAX_STORYBOARD_SCENES + 4,
+                            (len(intents) if isinstance(intents, list) else 0) + 6)
+            for _ in range(max(1, max_steps)):
+                message = str(current_error)
+                repaired = None
+                if "invalid fact_ids" in message:
+                    repaired = _recover_outline_missing_fact_ids(draft, current_error, ask)
+                elif "asset_ref" in message or "visual asset" in message:
+                    repaired = _recover_outline_asset_error(
+                        draft, current_error, allowed, ask,
+                        require_explicit_cited_asset=max_retries < 1,
+                    )
+                    if repaired is None:
+                        repaired = _recover_outline_missing_fact_ids(
+                            draft, current_error, ask,
+                        )
+                if repaired is None or repaired == draft:
+                    return None
+                draft = repaired
+
+                try:
+                    normalized = _normalize_outline(
+                        draft, allowed, ask, check_coverage=False,
+                        provider=provider, project_dir=project_dir, progress=progress,
+                    )
+                    recovered = _canonicalize_outline_metadata(
+                        provider, normalized, ask, project_dir, progress,
+                    )
+                    recovered = _normalize_outline(
+                        recovered, allowed, ask, check_coverage=False,
+                    )
                     try:
-                        normalized = _normalize_outline(
-                            draft, allowed, ask, check_coverage=False,
-                            provider=provider, project_dir=project_dir, progress=progress,
-                        )
-                        recovered = _canonicalize_outline_metadata(
-                            provider, normalized, ask, project_dir, progress,
-                        )
-                        recovered = _normalize_outline(
-                            recovered, allowed, ask, check_coverage=False,
-                        )
-                        try:
-                            _validate_focus_coverage(recovered["scene_intents"], ask)
-                        except _RequestedCoverageError:
-                            recovered = _recover_outline_coverage(recovered, ask, allowed)
-                    except (StructuredOutputError, _RequestedCoverageError, ValueError):
-                        return None
+                        _validate_focus_coverage(recovered["scene_intents"], ask)
+                    except _RequestedCoverageError:
+                        recovered = _recover_outline_coverage(recovered, ask, allowed)
                     if progress is not None:
                         progress.note(
-                            "Outline fact-ID retries exhausted; discarding intents without "
-                            "fact selections and restoring grounded requested coverage"
+                            "Outline retries exhausted; applied bounded deterministic "
+                            "repairs and restored grounded requested coverage"
                         )
                     return recovered
-            if (not isinstance(error, StructuredOutputError) or
-                    "asset_ref" not in str(error)):
-                return None
-            draft = _recover_outline_assets(
-                last_outline_candidate, allowed, ask,
-                require_explicit_cited_asset=max_retries < 1,
-            )
-            if draft is None:
-                return None
-            try:
-                normalized = _normalize_outline(
-                    draft, allowed, ask, check_coverage=False,
-                    provider=provider, project_dir=project_dir, progress=progress,
-                )
-                recovered = _canonicalize_outline_metadata(
-                    provider, normalized, ask, project_dir, progress,
-                )
-                recovered = _normalize_outline(recovered, allowed, ask,
-                                               check_coverage=False)
-                try:
-                    _validate_focus_coverage(recovered["scene_intents"], ask)
-                except _RequestedCoverageError:
-                    recovered = _recover_outline_coverage(recovered, ask, allowed)
-            except (StructuredOutputError, _RequestedCoverageError, ValueError):
-                return None
-            if progress is not None:
-                progress.note("Outline asset retries exhausted; preserving facts in summary scenes")
-            return recovered
+                except StructuredOutputError as exc:
+                    current_error = exc
+                    continue
+                except (_RequestedCoverageError, ValueError):
+                    return None
+            return None
 
         outline_checkpoint = part_dir / "outline.json"
         outline = checkpointed_complete_json(
