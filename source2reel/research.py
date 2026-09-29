@@ -656,14 +656,36 @@ def _natural_code_operation(
             )
 
     # Resolve a nearby shell variable assignment for a heredoc destination.
-    heredoc = re.search(r"^cat\s+<<\s*['\"]?\w+['\"]?\s*>\s*\"?\$(\w+)\"?$", stripped)
+    heredoc = re.search(
+        r"^cat\s+<<\s*['\"]?(?P<delimiter>\w+)['\"]?\s*>\s*\"?\$(?P<variable>\w+)\"?$",
+        stripped,
+    )
     if heredoc:
-        variable = heredoc.group(1)
+        variable = heredoc.group("variable")
+        delimiter = heredoc.group("delimiter")
         assign = re.search(
             rf"(?m)^\s*{re.escape(variable)}\s*=\s*[\"'](?P<value>[^\"']+)[\"']\s*$",
             excerpt,
         )
-        window = _code_context_window(excerpt, stripped, before=4, after=10)
+        lines = excerpt.splitlines()
+        line_index = next((i for i, value in enumerate(lines)
+                           if value.strip() == stripped), None)
+        end_index = None
+        if line_index is not None:
+            end_index = next(
+                (i for i in range(line_index + 1, len(lines))
+                 if lines[i].strip() == delimiter),
+                None,
+            )
+        start_index = line_index if line_index is not None else 0
+        if assign and line_index is not None:
+            assign_line = excerpt[:assign.start()].count("\n")
+            if 0 <= line_index - assign_line <= 4:
+                start_index = assign_line
+        if line_index is not None and end_index is not None:
+            window = "\n".join(lines[start_index:end_index + 1]).strip()
+        else:
+            window = stripped
         block = re.search(r"\b(pcm\.[A-Za-z0-9_.-]+)\s*\{", window)
         destination = assign.group("value") if assign else f"${variable}"
         if block:
