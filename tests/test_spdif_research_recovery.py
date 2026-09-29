@@ -8,7 +8,8 @@ import unittest
 
 from source2reel.planner import _make_ask
 from source2reel.grounding import deterministic_decision
-from source2reel.research import (_missing_requested_concepts, _repair_support_span,
+from source2reel.research import (_exact_code_operation_facts,
+                                  _missing_requested_concepts, _repair_support_span,
                                   _requested_concepts, research)
 from source2reel.util import json_load
 
@@ -243,16 +244,6 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
              "source": "if [ \"$CHOICE\" = \"1\" ]; then"},
         )
         exact = [item for item in result["facts"] if item.get("direct_code_evidence")]
-        raw_apply = next(
-            item for item in exact
-            if item["claim"] == "sudo sed -i '/module-suspend-on-idle/s/^/#/' /etc/pulse/default.pa"
-        )
-        self.assertEqual(raw_apply["operation_guard"]["equals"], "1")
-        raw_reset = next(
-            item for item in exact
-            if item["claim"] == "sudo mv /etc/pulse/default.pa.bak /etc/pulse/default.pa"
-        )
-        self.assertEqual(raw_reset["operation_guard"]["equals"], "2")
         self.assertGreaterEqual(len(exact), 5)
         self.assertTrue(all(item["evidence_refs"][0] in {"E0004", "E0008", "E0009"}
                             for item in exact))
@@ -266,6 +257,32 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             source = next(entry["excerpt"] for entry in self.inventory["evidence"]
                           if entry["ref"] == item["evidence_refs"][0])
             self.assertIn(item["support"][0]["text"], source)
+
+    def test_raw_code_floor_attaches_choice_guards_before_naturalization(self):
+        roles = {entry["ref"]: "primary" for entry in self.inventory["evidence"]}
+        apply = _exact_code_operation_facts(
+            self.inventory["evidence"],
+            {"kind": "detail", "terms": ["pulseaudio"]},
+            roles,
+            limit=6,
+        )
+        raw_apply = next(
+            item for item in apply
+            if item["claim"] == "sudo sed -i '/module-suspend-on-idle/s/^/#/' /etc/pulse/default.pa"
+        )
+        self.assertEqual(raw_apply["operation_guard"]["equals"], "1")
+
+        reset = _exact_code_operation_facts(
+            self.inventory["evidence"],
+            {"kind": "detail", "terms": ["reset"]},
+            roles,
+            limit=6,
+        )
+        raw_reset = next(
+            item for item in reset
+            if item["claim"] == "sudo mv /etc/pulse/default.pa.bak /etc/pulse/default.pa"
+        )
+        self.assertEqual(raw_reset["operation_guard"]["equals"], "2")
 
     def test_explicit_subtopics_become_grounded_planner_requirements(self):
         provider = SpdifProvider(omit_coverage_code=True)
