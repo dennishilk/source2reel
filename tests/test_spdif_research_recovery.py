@@ -17,6 +17,8 @@ README = """# SPDIF Fix Tool
 
 A simple interactive Bash tool to fix SPDIF sound delay and standby issues on Linux.
 Supports PulseAudio, PipeWire, and ALSA.
+Keeps SPDIF output active → no more sound delay.
+Prevents SPDIF from going into standby.
 It was designed to address delayed audio after SPDIF playback resumes.
 """
 
@@ -176,6 +178,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         self.assertIn("The script restarts PulseAudio and PipeWire.", claims)
         self.assertIn("The script comments PipeWire suspend-on-idle in its configuration.", claims)
         self.assertIn("The fallback autostart helper runs the play command.", claims)
+        self.assertIn("Keeps SPDIF output active → no more sound delay.", claims)
         restart = next(item for item in result["facts"]
                        if item["claim"] == "The script restarts PulseAudio and PipeWire.")
         self.assertLessEqual(len(restart["support"][0]["text"]), 1024)
@@ -268,6 +271,8 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         provider = SpdifProvider(omit_coverage_code=True)
         result = self.run_research(provider)
         concepts = _requested_concepts(INSTRUCTIONS, "spdif-fix")
+        self.assertIn("relationship", concepts)
+        self.assertEqual(concepts["relationship"]["kind"], "relationship")
         details = {key: set(spec["terms"]) for key, spec in concepts.items()
                    if spec["kind"] == "detail"}
         self.assertEqual(list(details.values()), [
