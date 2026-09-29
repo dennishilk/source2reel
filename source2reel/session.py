@@ -71,9 +71,13 @@ def server_command(root: Path, backend: str | None = None) -> list[str]:
     if url.hostname not in ("127.0.0.1", "localhost", "::1"):
         raise RuntimeError("Local AI endpoint must bind to localhost")
     host = "127.0.0.1" if url.hostname == "localhost" else url.hostname
+    parallel_slots = int(ai.get("parallel_slots", 1))
+    if parallel_slots < 1:
+        raise ValueError("local_ai.parallel_slots must be at least 1")
     command = [str(server), "-m", str(model), "-a", str(cfg["llm"]["model"]),
                "-ngl", "0" if selected == "cpu" else "999",
                "-c", str(int(ai.get("context_size", 32768))),
+               "-np", str(parallel_slots),
                "--host", host, "--port", str(url.port or 8080)]
     if mmproj:
         command += ["--mmproj", str(mmproj)]

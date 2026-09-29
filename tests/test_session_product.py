@@ -14,7 +14,7 @@ from unittest.mock import patch
 from source2reel.cli import clean
 from source2reel.hardware import HardwareInfo
 from source2reel.paths import local_environment
-from source2reel.session import start, status, stop_all
+from source2reel.session import server_command, start, status, stop_all
 
 
 SOURCE = Path(__file__).resolve().parents[1]
@@ -34,6 +34,15 @@ class SessionProductTests(unittest.TestCase):
         self.server = self.root / "llama-server"
         self.server.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n")
         self.server.chmod(0o755)
+
+    def test_managed_llama_server_defaults_to_one_slot(self):
+        hardware = HardwareInfo("amd", (), True, "RADV", "llama.cpp+vulkan/radv")
+        with patch.dict(os.environ, {"LLAMA_SERVER": str(self.server)}), patch(
+            "source2reel.session.detect_hardware", return_value=hardware
+        ):
+            command = server_command(self.root)
+        slot = command.index("-np")
+        self.assertEqual(command[slot + 1], "1")
 
     def test_owned_stop_does_not_touch_unrelated_server_or_reused_pid_record(self):
         unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
