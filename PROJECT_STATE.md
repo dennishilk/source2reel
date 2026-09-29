@@ -30,8 +30,9 @@ Permanent fix:
 - an explicit causal "why" request is represented as a relationship topic
   rather than generic purpose when the request itself names a causal relation;
   a missed relationship can be recovered only from an explicit bounded
-  primary-source line (for example `because`, `causes`, `leads to` or
-  `→`), never from inferred mechanism;
+  primary-source passage (for example `because`, `causes`, `leads to` or
+  `→`), including a short adjacent passage when one documented relationship
+  is split across neighboring source lines; never from inferred mechanism;
 - planner/compaction prompts explicitly use context for framing and grouping
   while forbidding facts invented from context alone.
 
