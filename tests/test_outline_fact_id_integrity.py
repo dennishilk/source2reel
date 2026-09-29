@@ -336,6 +336,31 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
         result = planner._normalize_outline(value, self.allowed, self.ask)
         self.assertEqual(result["scene_intents"][1]["fact_ids"], ["F0002"])
 
+    def test_duplicate_valid_fact_ids_are_deduplicated_without_inference(self):
+        value = outline()
+        value["scene_intents"][2]["fact_ids"] = ["F0003", "F0003"]
+        result = planner._normalize_outline(value, self.allowed, self.ask)
+        self.assertEqual(result["scene_intents"][2]["fact_ids"], ["F0003"])
+
+    def test_duplicate_valid_fact_ids_continue_through_multipart(self):
+        value = outline()
+        value["scene_intents"][2]["fact_ids"] = ["F0003", "F0003"]
+        provider = OutlineProvider([value])
+        episode = self.run_parts(provider, retries=0)
+        self.assertEqual(episode["scenes"][2]["fact_ids"], ["F0003"])
+        checkpoint = json_load(
+            self.project / "manifests" / "storyboard-parts" / "outline.json"
+        )
+        self.assertEqual(
+            checkpoint["result"]["scene_intents"][2]["fact_ids"], ["F0003"]
+        )
+
+    def test_duplicate_repair_does_not_accept_unknown_fact_ids(self):
+        value = outline()
+        value["scene_intents"][2]["fact_ids"] = ["F9999", "F9999"]
+        with self.assertRaisesRegex(StructuredOutputError, "F9999.*allowed_fact_ids"):
+            planner._normalize_outline(value, self.allowed, self.ask)
+
     def test_unique_ref_repairs_only_id_then_normal_grounding_runs(self):
         provider = OutlineProvider([outline("F0004")])
         with patch("source2reel.planner._canonicalize_outline_metadata",
