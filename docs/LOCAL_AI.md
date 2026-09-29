@@ -16,6 +16,12 @@ llama-server processes are untouched. `./s2r` provides the interactive
 starter. Vulkan/RADV is the current default; CPU is available without Vulkan.
 ROCm is not automatically installed or selected.
 
+The managed llama.cpp server defaults to one parallel slot
+(`[local_ai] parallel_slots = 1`). Source2Reel's production pipeline issues
+model requests serially, so extra idle server slots add no throughput benefit
+and can retain multiple large prompt contexts. Increase this only for a
+separate workload that intentionally sends concurrent requests.
+
 
 Source2Reel does not hard-code a model runtime or one immutable LLM. Providers and model names live in configuration.
 
