@@ -116,6 +116,14 @@ class SupportKindRegressions(unittest.TestCase):
         self.assertEqual(accepted, {'C0001'})
         self.assertEqual(provider.calls, 1)
 
+    def test_markdown_list_prefix_is_exact_quote_formatting(self):
+        claim = "Keeps SPDIF output active → no more sound delay"
+        support = ["- Keeps SPDIF output active → no more sound delay  "]
+        self.assertEqual(deterministic_decision(claim, support), "accept")
+        accepted, provider = self.verify(claim, support)
+        self.assertEqual(accepted, {"C0001"})
+        self.assertEqual(provider.calls, 0)
+
     def test_spdif_readme_paraphrase_reaches_semantic_verifier(self):
         claim = ('The SPDIF Fix Tool is an interactive Bash script designed to fix SPDIF '
                  'audio delay and standby issues on Linux systems.')
