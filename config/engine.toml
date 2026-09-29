@@ -20,6 +20,9 @@ timeout = 600
 model_path = ""
 mmproj_path = ""
 context_size = 32768
+# Source2Reel sends local model requests serially. Keep one server slot by
+# default so long prompt caches do not accumulate across idle parallel slots.
+parallel_slots = 1
 
 [vision]
 enabled = true
