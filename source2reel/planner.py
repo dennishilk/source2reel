@@ -513,6 +513,122 @@ def _explicit_topic_words(instructions: str) -> set[str]:
     return _topic_words(" ".join(subjects))
 
 
+def _bounded_source_context_text(text: str) -> str:
+    """Bound one exact source block without inventing or rewriting it."""
+    text = text.strip()
+    if len(text) <= _PLANNER_SOURCE_CONTEXT_PASSAGE_CHARS:
+        return text
+    limit = _PLANNER_SOURCE_CONTEXT_PASSAGE_CHARS
+    candidates = [
+        text.rfind("\n", 0, limit),
+        text.rfind(". ", 0, limit) + 1,
+        text.rfind("; ", 0, limit) + 1,
+    ]
+    cut = max(candidates)
+    if cut < limit // 2:
+        cut = limit
+    return text[:cut].rstrip()
+
+
+def _source_context_blocks(excerpt: str) -> list[str]:
+    """Return prose-oriented exact blocks; code-heavy blocks stay out of narrative context."""
+    blocks = []
+    for raw in re.split(r"\n[ \t]*\n+", excerpt):
+        block = raw.strip()
+        if not block or block.startswith(chr(96) * 3):
+            continue
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        prose_words = re.findall(r"[A-Za-z][A-Za-z0-9_-]*", block)
+        if len(prose_words) < 4:
+            continue
+        executable = sum(bool(re.match(
+            r"^(?:sudo|git|cd|chmod|python|pip|uv|cargo|make|cmake|sed|cp|mv|rm|"
+            r"systemctl|pactl|play|sleep|\./)[ \t]",
+            line,
+        )) for line in lines)
+        if executable * 2 > len(lines):
+            continue
+        bounded = _bounded_source_context_text(block)
+        if bounded:
+            blocks.append(bounded)
+    return blocks
+
+
+def _source_context_passages(
+    research: dict[str, Any], inventory: dict[str, Any],
+    title_hint: str, instructions: str,
+    limit: int = _PLANNER_SOURCE_CONTEXT_LIMIT,
+) -> list[dict[str, Any]]:
+    """Select bounded verbatim primary-source passages for narrative understanding only."""
+    requested = _explicit_topic_words(instructions) - _topic_words(title_hint)
+    subject = _topic_words(title_hint)
+    fact_words: set[str] = set()
+    for fact in research.get("facts", []):
+        fact_words.update(_topic_words(str(fact.get("claim", ""))))
+    fact_refs = _research_refs(research)
+    reference_focus = _reference_focus(title_hint, instructions, inventory)
+    allowed_roles = {"primary", "embedded_reference"} if reference_focus else {"primary"}
+
+    candidates: list[tuple[float, int, int, dict[str, Any]]] = []
+    for entry_index, entry in enumerate(inventory.get("evidence", [])):
+        if (entry.get("kind") != "document" or
+                (entry.get("evidence_role") or "primary") not in allowed_roles or
+                not isinstance(entry.get("excerpt"), str)):
+            continue
+        excerpt = entry["excerpt"]
+        path = str(entry.get("relative_path") or "")
+        basename = Path(path).name.casefold()
+        depth = len(Path(path).parts)
+        for block_index, block in enumerate(_source_context_blocks(excerpt)):
+            words = _topic_words(block)
+            if not words:
+                continue
+            request_overlap = len(requested & words)
+            subject_overlap = len(subject & words)
+            fact_overlap = len(fact_words & words)
+            readme_bonus = 10 if re.fullmatch(
+                r"readme(?:\.[a-z]{2})?\.(?:md|rst|txt|adoc)", basename, re.I
+            ) else 0
+            linked_bonus = 5 if entry.get("ref") in fact_refs else 0
+            shallow_bonus = max(0, 3 - depth)
+            if not (request_overlap or subject_overlap or fact_overlap or readme_bonus):
+                continue
+            score = (
+                10 * min(request_overlap, 8) +
+                3 * min(subject_overlap, 5) +
+                min(fact_overlap, 10) +
+                readme_bonus + linked_bonus + shallow_bonus -
+                0.05 * block_index
+            )
+            candidates.append((score, entry_index, block_index, {
+                "evidence_ref": entry["ref"],
+                "relative_path": path,
+                "text": block,
+                "context_role": "narrative_only",
+            }))
+
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    selected: list[tuple[int, int, dict[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+    used_chars = 0
+    for _score, entry_index, block_index, passage in candidates:
+        marker = (passage["evidence_ref"], re.sub(r"\s+", " ", passage["text"]).casefold())
+        if marker in seen:
+            continue
+        size = len(passage["text"])
+        if used_chars + size > _PLANNER_SOURCE_CONTEXT_TOTAL_CHARS:
+            continue
+        selected.append((entry_index, block_index, passage))
+        seen.add(marker)
+        used_chars += size
+        if len(selected) >= limit:
+            break
+    selected.sort(key=lambda item: (item[0], item[1]))
+    return [passage for _entry, _block, passage in selected]
+
+
 def _planner_visuals(
     research: dict[str, Any], media: list[dict[str, Any]],
     title_hint: str, instructions: str, inventory: dict[str, Any],
