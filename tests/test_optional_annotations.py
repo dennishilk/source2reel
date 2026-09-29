@@ -253,7 +253,7 @@ class OptionalAnnotationTests(unittest.TestCase):
         self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v4")
         research_request = research._payload(1, [], "BoringOS", "Physical acceptance")
         self.assertEqual(research_request["research_semantics_contract"],
-                         "requested-topic-semantics-v7")
+                         "requested-topic-semantics-v8")
         self.assertNotIn("editorial_contract", research_request)
         self.assertNotIn("editorial_contract",
                          planner._compact_payload(1, 1, [], "BoringOS", "Physical acceptance"))
