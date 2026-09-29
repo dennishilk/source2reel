@@ -15,7 +15,7 @@ from .providers import LLMProvider, StructuredOutputError
 
 # Included in research and storyboard request hashes: old normalized checkpoints
 # must not bypass a newly strengthened provenance contract.
-GROUNDING_CONTRACT = "mapped-support-kind-v4"
+GROUNDING_CONTRACT = "mapped-support-kind-v5"
 VERIFIER_BATCH_SIZE = 12
 VERIFIER_REQUEST_MAX_CHARS = 12000
 MAX_PROPOSITIONS = 16
@@ -39,6 +39,12 @@ _INITIAL_WORDS = {"The", "This", "That", "These", "Those", "An", "And", "But",
 _CAUSE = re.compile(
     r"\b(?:ensures?|because|therefore|thus|enables?|allows?|avoids?|"
     r"prevents?|guarantees?|keeps?|leads? to|as a result|in order to|so that)\b", re.I
+)
+_INTENT_EFFECT = re.compile(
+    r"\b(?:designed|created|built|used|runs?)\s+to\s+"
+    r"(?:verify|ensure|prevent|avoid|keep|enable|allow|trigger|initialize|fix|solve|address)\b|"
+    r"\b(?:in order to|so that)\b",
+    re.I,
 )
 _EXCLUSIVE = re.compile(r"\b(?:only|solely|exclusively|always|never|every)\b", re.I)
 _NEGATIVE = re.compile(r"\b(?:not|no|never|without|excludes?|doesn't|isn't|cannot)\b", re.I)
@@ -255,6 +261,13 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
     if any(claim.strip() == span.strip() for span in support):
         return "accept"  # Verbatim source syntax or prose, with no inferred meaning.
     prose = [_declarative_text(span) for span in support]
+    # Executable syntax proves what a command does, not why it is done. A
+    # generated intent/effect clause therefore needs explicit declarative
+    # source language carrying the same intent signal.
+    if _INTENT_EFFECT.search(claim) and not any(
+        text and _INTENT_EFFECT.search(text) for text in prose
+    ):
+        return "reject"
     syntactic = _syntactic_claim(claim, support)
     direct_operation = _direct_executable_operation(claim, support)
     if not any(prose) and not syntactic and not direct_operation and not any(
