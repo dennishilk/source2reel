@@ -79,7 +79,16 @@ they never authorize a factual proposition. Titles, summaries, narration,
 diagrams and annotations still require selected evidence-grounded research
 facts. The same bounded context is carried through direct planning and every
 map/reduce level, while trusted fact metadata such as conditional
-`operation_guard` is preserved through compaction.
+`operation_guard` is preserved through compaction. Mutually exclusive guards
+for the same selector cannot share one storyboard scene; exhausted outline
+recovery keeps one branch and lets grounded requested-coverage recovery restore
+the other branch separately.
+
+For an explicit causal "why" request, research distinguishes a documented
+relationship from generic project purpose. If model research omits that
+relationship, a bounded exact primary-source line containing an explicit
+relation signal such as `because`, `causes`, `leads to` or `→` can be
+recovered as a quoted research fact. This never licenses an inferred mechanism.
 
 ## Revision contract
 
