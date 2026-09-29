@@ -702,7 +702,7 @@ def _natural_code_operation(
         delay = re.fullmatch(r"sleep\s+(\d+(?:\.\d+)?)", previous)
         if delay:
             return (
-                f"The script waits {delay.group(1)} seconds and then runs `{stripped}`.",
+                f"The script runs `{previous}` followed by `{stripped}`.",
                 previous + "\n" + stripped,
             )
 
