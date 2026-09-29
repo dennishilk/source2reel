@@ -20,7 +20,7 @@ from .grounding import (GROUNDING_CONTRACT, GroundingError,
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
 from .research import (_consolidate, _fact_scope, _reference_focus,
-                       _requested_fact_groups)
+                       _requested_fact_groups, _verified_code_paraphrase)
 from .schema import (DIAGRAM_TYPES, EVIDENCE_TYPES, SCENE_CONTRACTS, SCENE_TYPES,
                      validate_episode, validate_presentation)
 from .util import json_dump, json_load
@@ -646,13 +646,36 @@ def _canonical_story_composition(
 ) -> tuple[list[dict[str, Any]], Any]:
     """Turn selected, authorized facts into distinct content and a grounded ending."""
     facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    preferred = {raw_id: natural_id for raw_id, raw in facts.items()
+                 for natural_id, natural in facts.items()
+                 if _verified_code_paraphrase(natural, raw)}
     retained: list[dict[str, Any]] = []
     exhausted: set[str] = set()
+    intro_facts: set[str] = set()
     prior_ids: list[str] = []
     used_assets: set[str] = set()
     pruned_intro_section = False
     for original in scenes:
         scene = original
+        if scene["type"] not in {"CODE", "SECTION_TITLE", "OUTRO"}:
+            selected_ids = list(dict.fromkeys(
+                preferred.get(fact_id, fact_id) for fact_id in scene["fact_ids"]
+            ))
+            if selected_ids != scene["fact_ids"]:
+                scene = {**scene, "fact_ids": selected_ids}
+                scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
+                _validate_scene_facts(scene, ask)
+                if full:
+                    kind = (scene["type"] if scene["type"] in EVIDENCE_TYPES | {"HERO"}
+                            else "SUMMARY")
+                    scene = _canonical_scene_fields({**scene, "type": kind,
+                                                     "title": "Documented observation",
+                                                     "annotations": None, "notes": None})
+                    if kind == "SUMMARY":
+                        scene.pop("asset_ref", None)
+                    scene["narration"] = _grounded_narration_fallback(scene, ask, is_final=False)
+                else:
+                    scene["purpose"] = _safe_intent_purpose(scene, facts)
         if scene["type"] == "SECTION_TITLE" and scene.get("fact_ids"):
             scene = {**scene, "type": "SUMMARY"}
             scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
@@ -678,8 +701,10 @@ def _canonical_story_composition(
         pruned_intro_section = False
         if scene["type"] in {"HERO", "OUTRO"}:
             retained.append(scene)
-            if scene["type"] == "HERO" and isinstance(scene.get("asset_ref"), str):
-                used_assets.add(scene["asset_ref"])
+            if scene["type"] == "HERO":
+                intro_facts.update(scene["fact_ids"])
+                if isinstance(scene.get("asset_ref"), str):
+                    used_assets.add(scene["asset_ref"])
             continue
 
         asset = scene.get("asset_ref") if scene["type"] in EVIDENCE_TYPES else None
@@ -693,11 +718,14 @@ def _canonical_story_composition(
             scene["evidence_refs"] = _canonical_evidence_refs(scene, ask, allowed)
             _validate_scene_facts(scene, ask)
             asset = None
-        distinct_asset = isinstance(asset, str) and asset not in used_assets
         selected = list(scene["fact_ids"])
-        if not distinct_asset:
+        if (selected and set(selected) <= intro_facts and
+                not any(prior["type"] not in {"HERO", "OUTRO", "SECTION_TITLE"}
+                        for prior in retained)):
+            continue
+        if scene["type"] != "CODE":
             selected = [fact_id for fact_id in selected if fact_id not in exhausted]
-            if selected and prior_ids:
+            if selected and prior_ids and not (asset and asset not in used_assets):
                 comparisons = []
                 entailed: set[str] = set()
                 for fact_id in selected:
@@ -2128,7 +2156,7 @@ def _suggested_scene_title(
 def _coverage_additions(
     scenes: list[dict[str, Any]], ask: dict[str, Any], allowed: set[str],
 ) -> list[dict[str, Any]]:
-    """Greedily cover missing topics with the fewest stable, cited fact choices."""
+    """Cover missing topics with specific facts before broad multi-topic facts."""
     missing = set(_missing_story_topics(scenes, ask))
     groups = ask.get("requested_topic_fact_ids", {})
     facts = ask["research"]["facts"]
@@ -2139,11 +2167,16 @@ def _coverage_additions(
                 f"Requested storyboard coverage has no room within {_MAX_STORYBOARD_SCENES} scenes: "
                 f"{', '.join(sorted(missing))}"
             )
-        ranked = [(sum(fact["fact_id"] in groups[topic] for topic in missing), -index, fact)
-                  for index, fact in enumerate(facts)]
-        count, _order, chosen = max(ranked, key=lambda item: (item[0], item[1]))
-        if not count:
+        detail_topics = [topic for topic in groups if topic in missing and
+                         topic.startswith("detail-")]
+        topic = (detail_topics or [key for key in groups if key in missing])[0]
+        candidates = {fact["fact_id"]: fact for fact in facts
+                      if fact["fact_id"] in groups[topic]}
+        if not candidates:
             raise StructuredOutputError("Requested storyboard coverage has no supported fact candidate")
+        detail_groups = [ids for key, ids in groups.items() if key.startswith("detail-")]
+        chosen = min((candidates[fact_id] for fact_id in groups[topic] if fact_id in candidates),
+                     key=lambda fact: sum(fact["fact_id"] in ids for ids in detail_groups))
         draft = {"type": "SUMMARY", "fact_ids": [chosen["fact_id"]],
                  "evidence_refs": chosen["evidence_refs"][:1],
                  "purpose": (chosen["claim"] if len(chosen["claim"]) <= _MAX_OUTLINE_PURPOSE_CHARS

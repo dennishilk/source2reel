@@ -176,9 +176,9 @@ class TimelineSuitabilityTests(unittest.TestCase):
 
     def test_current_checkpoint_is_recanonicalized_without_an_outline_model_call(self):
         ask, _ = physical_ask()
-        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v5")
+        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v6")
         self.assertEqual(ask["editorial_contract"], EDITORIAL_CONTRACT)
-        self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v12")
+        self.assertEqual(research.RESEARCH_SEMANTICS_CONTRACT, "requested-topic-semantics-v13")
         self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v5")
         self.assertEqual(MEDIA_INSPECTION_CONTRACT, "media-inspection-v1")
         provider = NoOutlineProvider()

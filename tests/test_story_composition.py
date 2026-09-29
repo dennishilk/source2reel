@@ -254,7 +254,7 @@ class CompositionTests(unittest.TestCase):
                          ["SECTION_TITLE", "SUMMARY", "SECTION_TITLE"])
         self.assertNotIn("OUTRO", [item["type"] for item in result["scene_intents"]])
 
-    def test_distinct_authentic_asset_and_hero_remain_valid(self):
+    def test_distinct_authentic_assets_do_not_repeat_hero_fact(self):
         visual = copy.deepcopy(self.ask)
         visual["evidence_index"].append({"ref": "E0090", "kind": "media",
                                          "relative_path": "authentic.png"})
@@ -273,8 +273,8 @@ class CompositionTests(unittest.TestCase):
         result = planner._normalize_outline(raw, self.allowed | {"E0090", "E0091"},
                                             visual, check_coverage=False)
         self.assertEqual([item["type"] for item in result["scene_intents"]],
-                         ["HERO", "SUMMARY", "PROJECT_EVIDENCE"])
-        self.assertEqual(result["scene_intents"][-1]["fact_ids"], ["F0001"])
+                         ["HERO"])
+        self.assertEqual(result["scene_intents"][0]["fact_ids"], ["F0001"])
         planner.validate_novelty(result["scene_intents"])
 
     def test_metadata_fallback_removes_empty_chapter_and_repeated_intro(self):
@@ -296,7 +296,7 @@ class CompositionTests(unittest.TestCase):
             initial = planner._normalize_outline(raw, allowed, visual,
                                                  check_coverage=False)
             self.assertEqual([scene["id"] for scene in initial["scene_intents"]],
-                             ["s001", "s002", "s003", "s004"])
+                             ["s001", "s002", "s004"])
             metadata = planner._canonicalize_outline_metadata(
                 PhysicalOutlineProvider(raw), initial, visual, Path(tmp))
             result = planner._normalize_outline(metadata, allowed, visual,

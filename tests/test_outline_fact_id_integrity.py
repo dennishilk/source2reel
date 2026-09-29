@@ -294,14 +294,26 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
 
     def test_sixth_intent_stray_ref_normalizes_and_checkpoint_is_reused(self):
         self.add_visual_asset()
+        # Keep the sixth scene genuinely new; a new image alone no longer
+        # justifies a second scene for F0001.
+        fourth = "WidgetEngine stores a separate verification record."
+        self.ask["evidence_index"].append({"ref": "E0004", "kind": "document",
+                                           "relative_path": "docs/4.md",
+                                           "evidence_role": "primary", "excerpt": fourth})
+        self.ask["research"]["facts"].append({
+            "fact_id": "F0004", "claim": fourth, "evidence_refs": ["E0004"],
+            "support": [{"evidence_ref": "E0004", "text": fourth}],
+            "phase": "final", "confidence": "high", "subject_scope": "main_subject",
+        })
+        self.allowed.add("E0004")
         value = outline()
         value["scene_intents"].extend(copy.deepcopy(value["scene_intents"][:3]))
         for row in value["scene_intents"][3:]:
             row["type"] = "SECTION_TITLE"
         value["scene_intents"][5].update({
             "type": "PROJECT_EVIDENCE", "asset_ref": "E0090",
-            "fact_ids": ["F0001"],
-            "evidence_refs": ["E0002", "E0001", "E0090"], "purpose": CLAIMS[0],
+            "fact_ids": ["F0004"],
+            "evidence_refs": ["E0002", "E0004", "E0090"], "purpose": fourth,
         })
         provider = OutlineProvider([value])
         with patch("source2reel.planner._canonicalize_outline_metadata",
@@ -310,11 +322,11 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
         grounding.assert_called_once()
         self.assertEqual([scene["id"] for scene in episode["scenes"]],
                          ["s001", "s002", "s003", "s006"])
-        self.assertEqual(episode["scenes"][-1]["fact_ids"], ["F0001"])
-        self.assertEqual(episode["scenes"][-1]["evidence_refs"], ["E0001", "E0090"])
+        self.assertEqual(episode["scenes"][-1]["fact_ids"], ["F0004"])
+        self.assertEqual(episode["scenes"][-1]["evidence_refs"], ["E0004", "E0090"])
         path = self.project / "manifests" / "storyboard-parts" / "outline.json"
         self.assertEqual(json_load(path)["result"]["scene_intents"][-1]["evidence_refs"],
-                         ["E0001", "E0090"])
+                         ["E0004", "E0090"])
         self.run_parts(provider)
         self.assertEqual(len(provider.outline_calls), 1)
 

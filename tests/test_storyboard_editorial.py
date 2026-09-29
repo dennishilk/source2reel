@@ -186,7 +186,7 @@ class EditorialTests(unittest.TestCase):
 
     def test_editorial_contract_is_in_both_checkpoint_inputs(self):
         contract = self.ask["editorial_contract"]
-        self.assertEqual(contract, "storyboard-editorial-grounding-v5")
+        self.assertEqual(contract, "storyboard-editorial-grounding-v6")
         self.assertEqual(planner._outline_payload(self.ask)["editorial_contract"], contract)
         selected = planner._normalize_outline({"version": 1, "title": "ETW", "slug": "etw",
             "summary": CLAIMS[1], "scene_intents": [intent("DATA_FLOW", 2)]},
@@ -203,7 +203,7 @@ class EditorialTests(unittest.TestCase):
         self.assertNotEqual(digest(old_part), digest(part))
         research_request = research._payload(1, [], "BoringOS", "Explain the project.")
         self.assertEqual(research_request["research_semantics_contract"],
-                         "requested-topic-semantics-v12")
+                         "requested-topic-semantics-v13")
         self.assertNotIn("editorial_contract", research_request)
         self.assertNotIn("editorial_contract",
                          planner._compact_payload(1, 1, [], "BoringOS", "Explain the project."))
@@ -478,8 +478,8 @@ class EditorialTests(unittest.TestCase):
         canonical = planner._normalize_outline(raw, self.allowed | {"E0090"}, visual,
                                                check_coverage=False)
         self.assertEqual([scene["id"] for scene in canonical["scene_intents"]],
-                         ["s001", "s002", "s003", "s005"])
-        self.assertEqual(canonical["scene_intents"][2]["fact_ids"], ["F0002"])
+                         ["s001", "s003", "s005"])
+        self.assertIn("F0002", canonical["scene_intents"][1]["fact_ids"])
         self.assertEqual(canonical["scene_intents"][-1]["type"], "OUTRO")
         planner.validate_novelty(canonical["scene_intents"])
 
@@ -600,16 +600,15 @@ class EditorialTests(unittest.TestCase):
             "summary": CLAIMS[0], "scene_intents": [
                 intent("SUMMARY", 1), {key: value for key, value in reused.items() if key != "id"},
             ]}, {"E0002", "E0003", "E0090"}, visual, check_coverage=False)
-        self.assertEqual([scene["id"] for scene in retained["scene_intents"]],
-                         ["s001", "s002"])
-        self.assertEqual(retained["scene_intents"][1]["asset_ref"], "E0090")
+        # The new screenshot adds no new claim to this second scene.
+        self.assertEqual([scene["id"] for scene in retained["scene_intents"]], ["s001"])
         repeated_asset = planner._normalize_outline({"version": 1, "title": "Proof",
             "slug": "proof", "summary": CLAIMS[0], "scene_intents": [
                 intent("SUMMARY", 1), {key: value for key, value in reused.items() if key != "id"},
                 {key: value for key, value in reused.items() if key != "id"},
             ]}, {"E0002", "E0003", "E0090"}, visual, check_coverage=False)
         self.assertEqual([scene["id"] for scene in repeated_asset["scene_intents"]],
-                         ["s001", "s002"])
+                         ["s001"])
         framed = [{"id": f"s{i:03d}", **intent(kind, 1)} for i, kind in
                   enumerate(("HERO", "SUMMARY", "OUTRO"), 1)]
         planner.validate_novelty(framed)

@@ -249,11 +249,11 @@ class OptionalAnnotationTests(unittest.TestCase):
     def test_checkpoint_contracts_remain_scoped(self):
         ask, _ = physical_scope()
         self.assertEqual(ask["editorial_contract"], EDITORIAL_CONTRACT)
-        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v5")
+        self.assertEqual(EDITORIAL_CONTRACT, "storyboard-editorial-grounding-v6")
         self.assertEqual(GROUNDING_CONTRACT, "mapped-support-kind-v5")
         research_request = research._payload(1, [], "BoringOS", "Physical acceptance")
         self.assertEqual(research_request["research_semantics_contract"],
-                         "requested-topic-semantics-v12")
+                         "requested-topic-semantics-v13")
         self.assertNotIn("editorial_contract", research_request)
         self.assertNotIn("editorial_contract",
                          planner._compact_payload(1, 1, [], "BoringOS", "Physical acceptance"))
