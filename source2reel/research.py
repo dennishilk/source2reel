@@ -509,10 +509,12 @@ def _exact_code_operation_facts(
     facts = []
     per_ref: dict[str, int] = {}
     seen: set[tuple[str, str]] = set()
-    for _score, _entry, _line, ref, claim in ranked:
+
+    def keep(ref: str, claim: str) -> None:
         marker = (ref, claim)
-        if marker in seen or per_ref.get(ref, 0) >= MAX_FACTS_PER_REF:
-            continue
+        if (marker in seen or per_ref.get(ref, 0) >= MAX_FACTS_PER_REF or
+                len(facts) >= limit):
+            return
         seen.add(marker)
         facts.append({
             "claim": claim,
@@ -524,6 +526,19 @@ def _exact_code_operation_facts(
             "direct_code_evidence": True,
         })
         per_ref[ref] = per_ref.get(ref, 0) + 1
+
+    # Preserve at least one exact operation from each distinct selected source
+    # before filling the remaining bounded slots by relevance.
+    reserved: set[str] = set()
+    for _score, _entry, _line, ref, claim in ranked:
+        if ref in reserved:
+            continue
+        keep(ref, claim)
+        reserved.add(ref)
+        if len(facts) >= limit:
+            return facts
+    for _score, _entry, _line, ref, claim in ranked:
+        keep(ref, claim)
         if len(facts) >= limit:
             break
     return facts
