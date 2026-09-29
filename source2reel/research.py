@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v10"
-COVERAGE_CONTRACT = "requested-primary-coverage-v9"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v11"
+COVERAGE_CONTRACT = "requested-primary-coverage-v10"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -602,9 +602,161 @@ def _repair_support_span(claim: str, span: str, excerpt: str) -> str | None:
     return best[0] if len(best) == 1 else None
 
 
+def _code_context_window(excerpt: str, line: str, before: int = 4, after: int = 8) -> str:
+    """Return a bounded exact local window around one executable source line."""
+    lines = excerpt.splitlines()
+    target = next((i for i, value in enumerate(lines) if value.strip() == line.strip()), None)
+    if target is None:
+        return line
+    start = max(0, target - before)
+    end = min(len(lines), target + after + 1)
+    return "\n".join(lines[start:end]).strip()
+
+
+def _natural_code_operation(
+    entry: dict[str, Any], line: str,
+) -> tuple[str, str] | None:
+    """Produce conservative spoken prose for a few unambiguous shell mutations."""
+    excerpt = str(entry.get("excerpt") or "")
+    stripped = line.strip()
+    support = stripped
+
+    # cp/mv/rm directly encode the filesystem operation.
+    simple = re.fullmatch(
+        r"(?:sudo\s+)?(?P<cmd>cp|mv|rm)\s+(?P<a>\S+)(?:\s+(?P<b>\S+))?"
+        r"(?:\s+2>/dev/null)?(?:\s+\|\|\s+true)?",
+        stripped,
+    )
+    if simple:
+        cmd, first, second = simple.group("cmd"), simple.group("a"), simple.group("b")
+        if cmd == "cp" and second:
+            return f"The script copies `{first}` to `{second}`.", support
+        if cmd == "mv" and second:
+            return f"The script moves `{first}` to `{second}`.", support
+        if cmd == "rm":
+            return f"The script removes `{first}`.", support
+
+    # A literal uncomment substitution is precise enough to narrate directly.
+    if re.search(r"\bsed\b", stripped) and re.search(r"s/\^#", stripped):
+        path = re.search(r"\s(/[^\s]+)(?:\s+2>/dev/null|\s+\|\||$)", stripped)
+        needle = re.search(r"\.\*([A-Za-z0-9_-]{4,})\.\*", stripped)
+        if path and needle:
+            return (
+                f"The script removes the leading comment marker from matching "
+                f"`{needle.group(1)}` lines in `{path.group(1)}`.",
+                support,
+            )
+
+    # Resolve a nearby shell variable assignment for a heredoc destination.
+    heredoc = re.search(r"^cat\s+<<\s*['\"]?\w+['\"]?\s*>\s*\"?\$(\w+)\"?$", stripped)
+    if heredoc:
+        variable = heredoc.group(1)
+        assign = re.search(
+            rf"(?m)^\s*{re.escape(variable)}\s*=\s*[\"'](?P<value>[^\"']+)[\"']\s*$",
+            excerpt,
+        )
+        window = _code_context_window(excerpt, stripped, before=4, after=10)
+        block = re.search(r"\b(pcm\.[A-Za-z0-9_.-]+)\s*\{", window)
+        destination = assign.group("value") if assign else f"${variable}"
+        if block:
+            return (
+                f"The script writes the `{block.group(1)}` configuration block "
+                f"to `{destination}`.",
+                window,
+            )
+        return f"The script writes a configuration block to `{destination}`.", window
+
+    # systemctl exposes the requested action and unit names literally.
+    systemctl = re.search(
+        r"^systemctl\s+(?P<opts>(?:--[\w-]+\s+)*)"
+        r"(?P<action>restart|start|stop)\s+(?P<units>[^|;&]+)",
+        stripped,
+    )
+    if systemctl:
+        action = systemctl.group("action")
+        units = [unit for unit in systemctl.group("units").split() if unit]
+        if units:
+            joined = " and ".join(f"`{unit}`" for unit in units)
+            verb = {"restart": "restarts", "start": "starts", "stop": "stops"}[action]
+            return f"The script {verb} {joined} with `systemctl`.", support
+
+    # When the same executable is visibly invoked with two adjacent variants,
+    # describe the sequence rather than reading one raw command as narration.
+    command = re.match(r"^(?P<exe>[A-Za-z0-9_.+-]+)\s+", stripped)
+    if command:
+        exe = command.group("exe")
+        lines = excerpt.splitlines()
+        try:
+            index = next(i for i, value in enumerate(lines) if value.strip() == stripped)
+        except StopIteration:
+            index = -1
+        if index >= 0:
+            neighbours = [value.strip() for value in lines[max(0, index - 1):index + 2]
+                          if value.strip() and not value.strip().startswith("#")]
+            sibling = next((value for value in neighbours
+                            if value != stripped and value.startswith(exe + " ")), None)
+            if sibling:
+                ordered = [value.strip() for value in lines[max(0, index - 1):index + 2]
+                           if value.strip() in {stripped, sibling}]
+                if len(ordered) == 2:
+                    return (
+                        f"The script runs `{ordered[0]}` followed by `{ordered[1]}`.",
+                        "\n".join(ordered),
+                    )
+    return None
+
+
+def _naturalize_code_facts(
+    provider: LLMProvider,
+    facts: list[dict[str, Any]],
+    batch: list[dict[str, Any]],
+    project_dir: Path,
+    progress: Progress | None,
+) -> list[dict[str, Any]]:
+    """Prefer verifier-approved spoken claims while preserving exact code support."""
+    entries = {entry.get("ref"): entry for entry in batch if isinstance(entry.get("ref"), str)}
+    candidates: list[tuple[int, dict[str, Any], str]] = []
+    checks = []
+    for index, fact in enumerate(facts):
+        ref = fact["evidence_refs"][0]
+        exact = fact["support"][0]["text"]
+        entry = entries.get(ref)
+        if not entry:
+            continue
+        natural = _natural_code_operation(entry, exact)
+        if not natural:
+            continue
+        claim, support = natural
+        candidate = {
+            **fact,
+            "claim": claim,
+            "support": [{"evidence_ref": ref, "text": support}],
+        }
+        check_id = f"N{index:04d}"
+        candidates.append((index, candidate, check_id))
+        checks.append({"id": check_id, "claim": claim, "support": [support]})
+    if not checks:
+        return facts
+    accepted = verify_claims(provider, checks, project_dir, "research", progress)
+    out = list(facts)
+    for index, candidate, check_id in candidates:
+        if check_id in accepted:
+            out[index] = candidate
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for fact in out:
+        key = (fact["claim"].casefold(), tuple(fact["evidence_refs"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(fact)
+    return deduped
+
+
 def _exact_code_operation_facts(
     batch: list[dict[str, Any]], spec: dict[str, Any], roles: dict[str, str],
-    limit: int = 6,
+    limit: int = 6, provider: LLMProvider | None = None,
+    project_dir: Path | None = None, progress: Progress | None = None,
 ) -> list[dict[str, Any]]:
     """Keep a small exact-code floor when focused model research omits operations."""
     terms = {term.casefold() for term in spec.get("terms", []) if len(term) >= 3}
@@ -668,7 +820,8 @@ def _exact_code_operation_facts(
         keep(ref, claim)
         reserved.add(ref)
         if len(facts) >= limit:
-            return facts
+            return (_naturalize_code_facts(provider, facts, batch, project_dir, progress)
+                    if provider is not None and project_dir is not None else facts)
 
     # Explicitly requested backup/reset details are easy to lose behind more
     # lexically obvious service names. Reserve exact mutation lines for them
@@ -690,6 +843,8 @@ def _exact_code_operation_facts(
         keep(ref, claim)
         if len(facts) >= limit:
             break
+    if provider is not None and project_dir is not None:
+        facts = _naturalize_code_facts(provider, facts, batch, project_dir, progress)
     return facts
 
 
@@ -1421,6 +1576,7 @@ def research(
                 for _key, spec in operational:
                     additions.extend(_exact_code_operation_facts(
                         batch, spec, roles, limit=3 if spec.get("kind") == "workflow" else 1,
+                        provider=provider, project_dir=project_dir, progress=progress,
                     ))
                 if not additions:
                     return canonical
