@@ -1,0 +1,19 @@
+name: Temporary requested detail source identity verification
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --python 3.12
+      - run: uv pip install pytest
+      - run: env PYTHONPATH=. uv run python -m py_compile source2reel/research.py source2reel/planner.py
+      - run: env PYTHONPATH=. uv run pytest -q tests/test_spdif_research_recovery.py tests/test_requested_story_coverage.py tests/test_requested_coverage_recovery.py tests/test_workflow_semantics.py tests/test_research_grounding.py tests/test_semantic_verifier_gate.py
+      - run: env PYTHONPATH=. uv run pytest -q tests -k "not repository_launcher_uses_local_interpreter"
