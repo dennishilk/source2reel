@@ -1,5 +1,33 @@
 # PROJECT_STATE
 
+## 2026-09-29 — planner narrative source context
+
+The real SPDIF-Fix production exposed a reusable information-loss boundary:
+research correctly retained grounded atomic facts, but the storyboard planner
+could lose the original README framing and conditional workflow context and
+therefore produce a technically grounded fact dump instead of a coherent
+explanation.
+
+Permanent fix:
+
+- the planner deterministically selects at most four topically relevant,
+  verbatim passages from scoped original documents, bounded to 4200 characters
+  total and 1400 characters per passage;
+- these `source_context` passages are narrative-only and cannot authorize new
+  factual claims; storyboard facts remain the sole factual authority;
+- the same source context is injected into direct planning, planner
+  map/reduce compaction, multipart outlines and scene generation;
+- source-context refs stay in the planner evidence index for provenance without
+  becoming valid scene citations by themselves;
+- conditional fact metadata such as `operation_guard` survives planner
+  records, compaction capsules and compact research;
+- planner/compaction prompts explicitly use context for framing and grouping
+  while forbidding facts invented from context alone.
+
+The implementation is source-agnostic; README receives only a modest generic
+overview-source preference and every selected passage must still overlap the
+requested subject, instructions or grounded research.
+
 ## 2026-09-24 — interactive producer (feature branch, pending Cthulhu acceptance)
 
 The bare `./s2r` entry point offers New, Continue, and Build episode menus,
