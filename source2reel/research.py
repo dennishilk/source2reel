@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v11"
-COVERAGE_CONTRACT = "requested-primary-coverage-v10"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v12"
+COVERAGE_CONTRACT = "requested-primary-coverage-v11"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -655,6 +655,27 @@ def _natural_code_operation(
         if cmd == "rm":
             return f"The script removes `{first}`.", context
 
+    # A literal comment substitution is precise enough to narrate directly.
+    if re.search(r"\bsed\b", stripped) and re.search(r"s/\^/#/", stripped):
+        needle = re.search(r"/([A-Za-z0-9_.-]{4,})/s/\^/#/", stripped)
+        absolute = re.search(r"\s(/[A-Za-z0-9_./-]+)(?:\s+2>/dev/null|\s+\|\||$)", stripped)
+        variable = re.search(r'["\']?\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)["\']?\s*(?:2>/dev/null|\|\||$)', stripped)
+        destination = absolute.group(1) if absolute else None
+        context = support
+        if variable:
+            assign = re.search(
+                rf"(?m)^\s*{re.escape(variable.group('name'))}\s*=\s*[\"'](?P<value>[^\"']+)[\"']\s*$",
+                excerpt,
+            )
+            if assign:
+                destination = assign.group("value")
+                context = _code_context_window(excerpt, stripped, before=8, after=0)
+        if needle and destination:
+            return (
+                f"The script comments matching `{needle.group(1)}` lines in `{destination}`.",
+                context,
+            )
+
     # A literal uncomment substitution is precise enough to narrate directly.
     if re.search(r"\bsed\b", stripped) and re.search(r"s/\^#", stripped):
         path = re.search(r"\s(/[^\s]+)(?:\s+2>/dev/null|\s+\|\||$)", stripped)
@@ -824,6 +845,33 @@ def _naturalize_code_facts(
     return deduped
 
 
+def _expanded_code_line(entry: dict[str, Any], line: str) -> str:
+    """Resolve simple shell variables only to rank the concrete line that uses them."""
+    excerpt = str(entry.get("excerpt") or "")
+    expanded = line
+    for variable in re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", line):
+        assign = re.search(
+            rf"(?m)^\s*{re.escape(variable)}\s*=\s*[\"'](?P<value>[^\"']+)[\"']\s*$",
+            excerpt,
+        )
+        if assign:
+            expanded += " " + assign.group("value")
+    return expanded
+
+
+def _code_topic_overlap(terms: set[str], entry: dict[str, Any], line: str) -> set[str]:
+    """Map concrete Linux audio syntax to the requested backend name without inventing effects."""
+    folded = _expanded_code_line(entry, line).casefold()
+    matched = {term for term in terms if term in folded}
+    if "pulseaudio" in terms and ("pactl" in folded or "/etc/pulse/" in folded):
+        matched.add("pulseaudio")
+    if "pipewire" in terms and "pipewire" in folded:
+        matched.add("pipewire")
+    if "alsa" in terms and (".asoundrc" in folded or re.search(r"\bpcm\.", folded)):
+        matched.add("alsa")
+    return matched
+
+
 def _exact_code_operation_facts(
     batch: list[dict[str, Any]], spec: dict[str, Any], roles: dict[str, str],
     limit: int = 6, provider: LLMProvider | None = None,
@@ -846,7 +894,7 @@ def _exact_code_operation_facts(
             if not (12 <= len(line) <= 360 and _code_line(line) and line in excerpt):
                 continue
             folded = line.casefold()
-            line_overlap = {term for term in terms if term in folded}
+            line_overlap = _code_topic_overlap(terms, entry, line)
             semantic_bonus = 0
             if "backup" in terms and ".bak" in folded:
                 semantic_bonus += 2
@@ -1159,6 +1207,37 @@ def _reference_focus(title_hint: str, instructions: str, inventory: dict[str, An
                         if len(prefix) >= len(target):
                             break
     return False
+
+
+def _stabilize_requested_code_facts(
+    provider: LLMProvider,
+    facts: list[dict[str, Any]],
+    inventory: dict[str, Any],
+    instructions: str,
+    title_hint: str,
+    roles: dict[str, str],
+    project_dir: Path,
+    progress: Progress | None,
+) -> list[dict[str, Any]]:
+    """Give every explicit operational detail one deterministic spoken code fact when available."""
+    additions: list[dict[str, Any]] = []
+    for spec in _requested_concepts(instructions, title_hint).values():
+        if spec.get("kind") != "detail":
+            continue
+        additions.extend(_exact_code_operation_facts(
+            inventory["evidence"], spec, roles, limit=1,
+            provider=provider, project_dir=project_dir, progress=progress,
+        ))
+    if not additions:
+        return facts
+    merged = _dedupe(additions + facts, lambda fact: (
+        fact["claim"].casefold(), tuple(fact["evidence_refs"]),
+        fact.get("phase", "unknown"),
+    ))
+    return _limit_by_ref(
+        _rank_requested_facts(merged, instructions, title_hint),
+        lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
+    )[:MAX_FACTS_PER_REQUEST]
 
 
 def _current_overview_facts(
@@ -1680,6 +1759,9 @@ def research(
                 allfacts, assets = _consolidate(allfacts, assets, inventory,
                                                 title_hint, instructions)
 
+    allfacts = _stabilize_requested_code_facts(
+        provider, allfacts, inventory, instructions, title_hint, roles, project_dir, progress,
+    )
     allfacts = _current_overview_facts(allfacts, inventory, title_hint, instructions,
                                        provider, project_dir, progress)
     allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)
