@@ -2336,6 +2336,65 @@ def _recover_outline_missing_fact_ids(
     return repaired
 
 
+def _recover_outline_guard_conflict(
+    value: Any, error: Exception, ask: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Keep one conditional branch; normal coverage recovery restores removed facts separately."""
+    index = _outline_error_intent_index(error, value)
+    if index is None or not isinstance(value, dict):
+        return None
+    intents = value.get("scene_intents")
+    if not isinstance(intents, list) or not 0 <= index < len(intents):
+        return None
+    raw = intents[index]
+    if not isinstance(raw, dict) or not isinstance(raw.get("fact_ids"), list):
+        return None
+
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+    ids = [fact_id for fact_id in raw["fact_ids"]
+           if isinstance(fact_id, str) and fact_id in facts]
+    if not ids:
+        return None
+
+    conflicts: dict[str, list[tuple[str, str]]] = {}
+    for fact_id in ids:
+        guard = facts[fact_id].get("operation_guard")
+        if (not isinstance(guard, dict) or guard.get("kind") != "shell_equals" or
+                not isinstance(guard.get("variable"), str) or
+                not isinstance(guard.get("equals"), str)):
+            continue
+        conflicts.setdefault(guard["variable"], []).append((fact_id, guard["equals"]))
+
+    variable = next((
+        name for name in sorted(conflicts)
+        if len({value for _fact_id, value in conflicts[name]}) > 1
+    ), None)
+    if variable is None:
+        return None
+
+    first_value = next(
+        value for fact_id, value in conflicts[variable]
+        if fact_id in ids
+    )
+    kept = []
+    for fact_id in ids:
+        guard = facts[fact_id].get("operation_guard")
+        if (isinstance(guard, dict) and guard.get("kind") == "shell_equals" and
+                guard.get("variable") == variable and guard.get("equals") != first_value):
+            continue
+        kept.append(fact_id)
+    if not kept or len(kept) == len(ids):
+        return None
+
+    refs = list(dict.fromkeys(
+        ref for fact_id in kept for ref in facts[fact_id].get("evidence_refs", [])
+    ))
+    replacement = {**raw, "fact_ids": kept, "evidence_refs": refs}
+    return {**value, "scene_intents": [
+        *intents[:index], replacement, *intents[index + 1:]
+    ]}
+
+
 def _recover_outline_asset_error(
     value: Any, error: Exception, allowed: set[str], ask: dict[str, Any],
     *, require_explicit_cited_asset: bool = False,
@@ -2880,7 +2939,9 @@ def _multipart_episode(
             for _ in range(max(1, max_steps)):
                 message = str(current_error)
                 repaired = None
-                if "invalid fact_ids" in message:
+                if "incompatible operation guards" in message:
+                    repaired = _recover_outline_guard_conflict(draft, current_error, ask)
+                elif "invalid fact_ids" in message:
                     repaired = _recover_outline_missing_fact_ids(draft, current_error, ask)
                 elif "asset_ref" in message or "visual asset" in message:
                     repaired = _recover_outline_asset_error(
