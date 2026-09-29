@@ -620,7 +620,7 @@ def _source_context_passages(
             ) else 0
             linked_bonus = 5 if entry.get("ref") in fact_refs else 0
             shallow_bonus = max(0, 3 - depth)
-            if not (request_overlap or subject_overlap or fact_overlap or readme_bonus):
+            if not (request_overlap or subject_overlap or fact_overlap):
                 continue
             score = (
                 10 * min(request_overlap, 8) +
