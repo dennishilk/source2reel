@@ -41,9 +41,9 @@ _CAUSE = re.compile(
     r"prevents?|guarantees?|keeps?|leads? to|as a result|in order to|so that)\b", re.I
 )
 _INTENT_EFFECT = re.compile(
-    r"\b(?:designed|created|built|used|runs?)\s+to\s+"
-    r"(?:verify|ensure|prevent|avoid|keep|enable|allow|trigger|initialize|fix|solve|address)\b|"
-    r"\b(?:in order to|so that)\b",
+    r"\b(?:in order to|so that)\b|"
+    r"\bto\b[^A-Za-z0-9]{0,4}"
+    r"(?:verify|ensure|prevent|avoid|keep|enable|allow|trigger|initialize|fix|solve|address)\b",
     re.I,
 )
 _EXCLUSIVE = re.compile(r"\b(?:only|solely|exclusively|always|never|every)\b", re.I)
