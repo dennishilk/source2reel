@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v8"
-COVERAGE_CONTRACT = "requested-primary-coverage-v7"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v9"
+COVERAGE_CONTRACT = "requested-primary-coverage-v8"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -177,8 +177,31 @@ _REQUEST_SPECIFIC_STOP = set((
     "end video episode project projects technical finished first local "
     "turn turns works work pipeline workflow"
 ).split())
+_REQUEST_DETAIL_GENERIC = set((
+    "tool script project system this detect detects handle handles does do make makes "
+    "change changes apply applies use uses support supports include includes whether "
+    "solve solves architecture workflow pipeline process stage stages"
+).split())
+_REQUEST_CLAUSE = re.compile(
+    r"\\b(?P<cue>what|why|how)\\b\\s+(?P<body>.*?)(?="
+    r"(?:,\\s*(?:and\\s+)?|\\s+and\\s+)(?:what|why|how)\\b|[.!?;\\n]|$)",
+    re.I,
+)
+_DETAIL_OPERATION = re.compile(
+    r"\\b(?:detect(?:s|ed|ing)?|handl(?:e|es|ed|ing)|disabl(?:e|es|ed|ing)|"
+    r"enabl(?:e|es|ed|ing)|comment(?:s|ed|ing)?|uncomment(?:s|ed|ing)?|"
+    r"creat(?:e|es|ed|ing)|writ(?:e|es|ten|ing)|cop(?:y|ies|ied|ying)|"
+    r"mov(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|restor(?:e|es|ed|ing)|"
+    r"restart(?:s|ed|ing)?|start(?:s|ed|ing)?|stop(?:s|ped|ping)?|"
+    r"load(?:s|ed|ing)?|unload(?:s|ed|ing)?|wait(?:s|ed|ing)?|"
+    r"play(?:s|ed|ing)?|set(?:s|ting)?|configur(?:e|es|ed|ing)|"
+    r"appl(?:y|ies|ied|ying)|run(?:s|ning)?|execut(?:e|es|ed|ing)|"
+    r"read(?:s|ing)?|delete(?:s|d|ing)?|install(?:s|ed|ing)?|"
+    r"update(?:s|d|ing)?)\\b",
+    re.I,
+)
 _COVERAGE_SYSTEM = (
-    "\n\nFocused requested-topic recovery. Return only facts explicitly supported "
+    "\\n\\nFocused requested-topic recovery. Return only facts explicitly supported "
     "by these supplied primary evidence excerpts for missing_requested_topics. "
     "Use the same exact quotation, subject-scope, and grounding rules as normal "
     "research. If a requested fact is absent, omit it. Do not infer capabilities "
@@ -192,24 +215,82 @@ def _request_words(text: str) -> set[str]:
             for word in words if len(word) >= 3 and word not in _REQUEST_SPECIFIC_STOP}
 
 
+def _explicit_request_clauses(instruction: str) -> list[tuple[str, str]]:
+    return [(match.group("cue").casefold(), match.group("body").strip())
+            for match in _REQUEST_CLAUSE.finditer(instruction)]
+
+
+def _detail_term_present(term: str, claim: str, words: set[str] | None = None) -> bool:
+    words = words if words is not None else _request_words(claim)
+    if term in words:
+        return True
+    folded = claim.casefold()
+    if term == "backup":
+        return bool(re.search(r"\\bbackup\\w*\\b", folded) or
+                    re.search(r"\\bcp\\b[^\\n]*\\.bak\\b", folded) or
+                    re.search(r"\\.bak\\b[^\\n]*\\bcp\\b", folded))
+    if term == "reset":
+        return bool(re.search(r"\\b(?:reset|restore|rollback)\\w*\\b", folded) or
+                    re.search(r"\\bmv\\b[^\\n]*\\.bak\\b", folded) or
+                    "load-module" in folded)
+    return False
+
+
+def _requested_detail_specs(instruction: str, title_hint: str) -> list[dict[str, Any]]:
+    """Turn explicit requested subquestions into bounded, evidence-checkable details."""
+    title_words = _request_words(title_hint)
+    specs: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for cue, body in _explicit_request_clauses(instruction):
+        if cue == "why" or re.search(r"\\b(?:architecture|workflow|pipeline|process|stages?)\\b",
+                                     body, re.I):
+            continue
+        if cue == "what" and re.search(r"\\b(?:is|are|solves?|means?|definition)\\b",
+                                       body, re.I):
+            continue
+        coordinated = bool(re.search(r",|\\b(?:and|or)\\b", body, re.I))
+        parts = re.split(r",|\\b(?:and|or)\\b", body, flags=re.I) if coordinated else [body]
+        candidates: list[set[str]] = []
+        for part in parts:
+            terms = (_request_words(part) - title_words - _REQUEST_DETAIL_GENERIC)
+            if terms:
+                candidates.append(terms)
+        if not candidates and not coordinated:
+            terms = (_request_words(body) - title_words - _REQUEST_DETAIL_GENERIC)
+            if terms:
+                candidates = [terms]
+        for terms in candidates:
+            if not 1 <= len(terms) <= 4:
+                continue
+            marker = tuple(sorted(terms))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            specs.append({"kind": "detail", "terms": list(marker)})
+            if len(specs) >= 8:
+                return specs
+    return specs
+
+
 def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[str, Any]]:
     """Describe explicit topics without treating a request as evidence."""
-    instruction = re.sub(r"\bend with:.*", "", instructions, flags=re.I | re.S)
+    instruction = re.sub(r"\\bend with:.*", "", instructions, flags=re.I | re.S)
     concepts: dict[str, dict[str, Any]] = {}
-    if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
+    clauses = _explicit_request_clauses(instruction)
+    if re.search(r"\\b(?:what|overview|define|definition)\\b", instruction, re.I):
         concepts["overview"] = {"kind": "overview"}
-    if re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
+    if re.search(r"\\b(?:why|purpose|motivation|reason|goal)\\b", instruction, re.I):
         concepts["purpose"] = {"kind": "purpose"}
-    if re.search(r"\b(?:how|workflow|pipeline|process|stages?)\b", instruction, re.I):
-        how = re.search(r"\bhow\b([^.!?;\n]+)", instruction, re.I)
-        focus = _request_words(how.group(1)) if how else set()
+    if re.search(r"\\b(?:how|workflow|pipeline|process|stages?)\\b", instruction, re.I):
+        how_body = next((body for cue, body in clauses if cue == "how"), "")
+        focus = _request_words(how_body)
         focus -= _request_words(title_hint)
         concepts["workflow"] = {"kind": "workflow", "terms": sorted(focus)}
     distinction_count = 0
-    for clause in re.split(r"[.!?;\n]", instruction):
+    for clause in re.split(r"[.!?;\\n]", instruction):
         match = re.search(
-            r"\b(?:distinguish|differentiate|contrast|compare)\s+(.+?)\s+"
-            r"(?:from|with|versus|vs)\s+(.+)$", clause, re.I,
+            r"\\b(?:distinguish|differentiate|contrast|compare)\\s+(.+?)\\s+"
+            r"(?:from|with|versus|vs)\\s+(.+)$", clause, re.I,
         )
         if match and distinction_count < 2:
             left, right = _request_words(match.group(1)), _request_words(match.group(2))
@@ -218,6 +299,8 @@ def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[st
                 concepts[f"distinction-{distinction_count}"] = {
                     "kind": "distinction", "left": sorted(left), "right": sorted(right),
                 }
+    for number, spec in enumerate(_requested_detail_specs(instruction, title_hint), 1):
+        concepts[f"detail-{number}"] = spec
     return concepts
 
 
@@ -235,6 +318,14 @@ def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
         right = set(spec["right"]) - set(spec["left"])
         return bool(words & set(spec["left"]) and right and right <= words)
     terms = set(spec["terms"])
+    if kind == "detail":
+        matched = {term for term in terms if _detail_term_present(term, claim, words)}
+        needed = len(terms) if len(terms) <= 3 else 2
+        operational = bool(_DETAIL_OPERATION.search(claim))
+        code_line = globals().get("_code_line")
+        if callable(code_line):
+            operational = operational or bool(code_line(claim))
+        return bool(len(matched) >= needed and operational)
     overlap = words & terms
     return bool((_workflow_signal(claim) and
                  len(overlap) >= min(2, len(terms))) or
