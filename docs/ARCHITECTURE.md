@@ -91,6 +91,9 @@ relation signal such as `because`, `causes`, `leads to` or `→` can be
 recovered as a quoted research fact. When one documented relationship is split
 across adjacent source lines, the bounded adjacent passage may be retained
 without inventing an intermediate mechanism. This never licenses an inferred mechanism.
+Exact-quote grounding ignores only leading Markdown list/blockquote markers
+(`-`, `*`, `+`, `>`) when comparing a recovered claim with its original
+support; the stored support remains the untouched source text.
 
 ## Revision contract
 
