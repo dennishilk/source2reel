@@ -203,7 +203,7 @@ class EditorialTests(unittest.TestCase):
         self.assertNotEqual(digest(old_part), digest(part))
         research_request = research._payload(1, [], "BoringOS", "Explain the project.")
         self.assertEqual(research_request["research_semantics_contract"],
-                         "requested-topic-semantics-v11")
+                         "requested-topic-semantics-v12")
         self.assertNotIn("editorial_contract", research_request)
         self.assertNotIn("editorial_contract",
                          planner._compact_payload(1, 1, [], "BoringOS", "Explain the project."))
