@@ -492,9 +492,9 @@ def _executable_source(entry: dict[str, Any]) -> bool:
 
 
 def _code_workflow_source_match(entry: dict[str, Any], spec: dict[str, Any]) -> bool:
-    """Allow focused workflow recovery only from actual executable source files."""
+    """Allow focused operational recovery only from actual executable source files."""
     excerpt = entry.get("excerpt")
-    if (not isinstance(excerpt, str) or spec.get("kind") != "workflow" or
+    if (not isinstance(excerpt, str) or spec.get("kind") not in {"workflow", "detail"} or
             not _executable_source(entry)):
         return False
     path = str(entry.get("relative_path") or "")
@@ -503,9 +503,14 @@ def _code_workflow_source_match(entry: dict[str, Any], spec: dict[str, Any]) -> 
         return False
     folded = (path + "\n" + excerpt).casefold()
     path_folded = path.casefold()
-    overlap = {term for term in terms if term in folded}
+    words = _request_words(folded)
+    overlap = {term for term in terms if (
+        _detail_term_present(term, folded, words) if spec.get("kind") == "detail"
+        else term in folded
+    )}
     path_overlap = {term for term in terms if term in path_folded}
-    needed = min(2, len(terms))
+    needed = (len(terms) if spec.get("kind") == "detail" and len(terms) <= 3
+              else min(2, len(terms)))
     return bool(any(_code_line(line) for line in excerpt.splitlines()) and
                 (len(overlap) >= needed or path_overlap))
 
@@ -690,6 +695,12 @@ def _coverage_candidates(
                 if prose_match or code_match:
                     matched.add(key)
                     code_workflow = code_workflow or code_match
+            elif spec["kind"] == "detail":
+                prose_match = bool(prose and _covers_request(prose, spec))
+                code_match = _code_workflow_source_match(entry, spec)
+                if prose_match or code_match:
+                    matched.add(key)
+                    code_workflow = code_workflow or code_match
             elif prose and _covers_request(prose, spec):
                 matched.add(key)
         if not matched:
@@ -727,6 +738,7 @@ def _coverage_candidates(
             selected.append(entry)
             selected_refs.add(entry["ref"])
             selected_excerpts.add(excerpt_key)
+            covered.update(matched)
             picked += 1
             if picked >= quota:
                 break
@@ -1357,22 +1369,27 @@ def research(
                 remaining = _missing_requested_concepts(
                     allfacts + canonical["facts"], instructions, title_hint, roles,
                 )
-                if "workflow" not in remaining:
+                operational = [(key, spec) for key, spec in remaining.items()
+                               if spec.get("kind") in {"workflow", "detail"}]
+                if not operational:
                     return canonical
                 additions: list[dict[str, Any]] = []
-                exact = _exact_workflow_fact(batch, remaining["workflow"], roles)
-                if exact is not None and "C0001" in verify_claims(provider, [{
-                    "id": "C0001", "claim": exact["claim"],
-                    "support": [exact["support"][0]["text"]],
-                }], project_dir, "research", progress):
-                    additions.append(exact)
+                workflow = next((spec for _key, spec in operational
+                                 if spec.get("kind") == "workflow"), None)
+                if workflow is not None:
+                    exact = _exact_workflow_fact(batch, workflow, roles)
+                    if exact is not None and "C0001" in verify_claims(provider, [{
+                        "id": "C0001", "claim": exact["claim"],
+                        "support": [exact["support"][0]["text"]],
+                    }], project_dir, "research", progress):
+                        additions.append(exact)
                 # Code-heavy projects may have no declarative prose at all.
-                # Preserve a bounded floor of exact executable source lines so
-                # focused recovery cannot collapse to zero facts merely because
-                # the model omitted or malformed its code support quotations.
-                additions.extend(_exact_code_operation_facts(
-                    batch, remaining["workflow"], roles,
-                ))
+                # Preserve a bounded exact-operation floor for each still-missing
+                # explicitly requested operational subtopic.
+                for _key, spec in operational:
+                    additions.extend(_exact_code_operation_facts(
+                        batch, spec, roles, limit=3 if spec.get("kind") == "workflow" else 1,
+                    ))
                 if not additions:
                     return canonical
                 ranked = _rank_requested_facts(
