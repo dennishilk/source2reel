@@ -2718,10 +2718,18 @@ def _multipart_episode(
                             "repairs and restored grounded requested coverage"
                         )
                     return recovered
+                except _RequestedCoverageError as exc:
+                    try:
+                        candidate = normalized if "normalized" in locals() else None
+                        if candidate is None:
+                            return None
+                        return _recover_outline_coverage(candidate, ask, allowed)
+                    except (StructuredOutputError, ValueError):
+                        return None
                 except StructuredOutputError as exc:
                     current_error = exc
                     continue
-                except (_RequestedCoverageError, ValueError):
+                except ValueError:
                     return None
             return None
 
