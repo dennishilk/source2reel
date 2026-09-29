@@ -587,6 +587,7 @@ def _source_context_passages(
     research: dict[str, Any], inventory: dict[str, Any],
     title_hint: str, instructions: str,
     limit: int = _PLANNER_SOURCE_CONTEXT_LIMIT,
+    max_chars: int = _PLANNER_SOURCE_CONTEXT_TOTAL_CHARS,
 ) -> list[dict[str, Any]]:
     """Select bounded verbatim primary-source passages for narrative understanding only."""
     requested = _explicit_topic_words(instructions) - _topic_words(title_hint)
@@ -645,7 +646,7 @@ def _source_context_passages(
         if marker in seen:
             continue
         size = len(passage["text"])
-        if used_chars + size > _PLANNER_SOURCE_CONTEXT_TOTAL_CHARS:
+        if used_chars + size > max_chars:
             continue
         selected.append((entry_index, block_index, passage))
         seen.add(marker)
@@ -3152,7 +3153,16 @@ def plan(
     valid = {e["ref"] for e in inventory["evidence"]}
     media = _media_inventory(inventory)
 
-    source_context = _source_context_passages(research, inventory, title_hint, instructions)
+    planner_input_tokens = max(
+        1024, context_size - max(0, output_reserve_tokens) - max(0, safety_tokens),
+    )
+    source_context_chars = min(
+        _PLANNER_SOURCE_CONTEXT_TOTAL_CHARS,
+        max(600, int(planner_input_tokens * 3.5 * 0.20)),
+    )
+    source_context = _source_context_passages(
+        research, inventory, title_hint, instructions, max_chars=source_context_chars,
+    )
     source_context_refs = {item["evidence_ref"] for item in source_context}
     candidate_refs = _research_refs(research) | {m["ref"] for m in media} | source_context_refs
     evidence_index = _evidence_index(inventory, candidate_refs)
