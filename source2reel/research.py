@@ -547,35 +547,46 @@ def _coverage_candidates(
         if not excerpt.strip() or len(excerpt) > MAX_COVERAGE_CHARS:
             continue
         prose = _declarative_text(excerpt)
-        if not prose:
-            continue
-        named = bool(title_key and title_key in re.sub(r"[^a-z0-9]", "", prose.casefold()))
+        named = bool(prose and title_key and
+                     title_key in re.sub(r"[^a-z0-9]", "", prose.casefold()))
         matched = set()
+        code_workflow = False
         for key, spec in missing.items():
-            if spec["kind"] in {"purpose", "overview"} and not named:
+            if spec["kind"] in {"purpose", "overview"}:
+                if named and _covers_request(prose, spec):
+                    matched.add(key)
                 continue
             if spec["kind"] == "workflow":
-                if _workflow_source_match(excerpt, spec):
+                prose_match = bool(prose and _workflow_source_match(excerpt, spec))
+                code_match = _code_workflow_source_match(entry, spec)
+                if prose_match or code_match:
                     matched.add(key)
-            elif _covers_request(prose, spec):
+                    code_workflow = code_workflow or code_match
+            elif prose and _covers_request(prose, spec):
                 matched.add(key)
         if not matched:
             continue
         path = Path(entry.get("relative_path") or "")
         score = (8 * len(matched) + 6 * (path.suffix.casefold() in doc_exts) +
-                 4 * named + 2 * (path.name.casefold() == "readme.md") -
+                 4 * named + 3 * code_workflow +
+                 2 * (path.name.casefold() == "readme.md") -
                  min(4, len(path.parts)))
         ranked.append((score, -index, entry, matched))
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
     selected: list[dict[str, Any]] = []
     selected_refs: set[str] = set()
+    selected_excerpts: set[str] = set()
     covered: set[str] = set()
-    for topic in missing:
+    for topic, spec in missing.items():
         if topic in covered:
             continue
+        quota = 2 if spec.get("kind") == "workflow" else 1
+        picked = 0
         for _score, _order, entry, matched in ranked:
-            if topic not in matched or entry["ref"] in selected_refs:
+            excerpt_key = entry["excerpt"].strip()
+            if (topic not in matched or entry["ref"] in selected_refs or
+                    excerpt_key in selected_excerpts):
                 continue
             batch = selected + [entry]
             if (len(batch) > MAX_COVERAGE_RECORDS or
@@ -587,8 +598,12 @@ def _coverage_candidates(
                 continue
             selected.append(entry)
             selected_refs.add(entry["ref"])
-            covered.update(matched)
-            break
+            selected_excerpts.add(excerpt_key)
+            picked += 1
+            if picked >= quota:
+                break
+        if picked:
+            covered.add(topic)
     return selected
 
 
@@ -1063,12 +1078,15 @@ def research(
                     invalid_support = True
                     break
                 ref, span = item.get("evidence_ref"), item.get("text")
-                if (ref not in refs or not isinstance(span, str) or
-                        not 12 <= len(span) <= MAX_SUPPORT_CHARS or
-                        span not in (by_ref[ref].get("excerpt") or "")):
+                if ref not in refs or not isinstance(span, str):
                     invalid_support = True
                     break
-                support.append({"evidence_ref": ref, "text": span})
+                excerpt = by_ref[ref].get("excerpt") or ""
+                exact = _repair_support_span(claim, span, excerpt)
+                if exact is None:
+                    invalid_support = True
+                    break
+                support.append({"evidence_ref": ref, "text": exact})
             if invalid_support or not support or any(
                 not any(item["evidence_ref"] == ref for item in support) for ref in refs
             ):
@@ -1213,17 +1231,31 @@ def research(
                 )
                 if "workflow" not in remaining:
                     return canonical
+                additions: list[dict[str, Any]] = []
                 exact = _exact_workflow_fact(batch, remaining["workflow"], roles)
-                if exact is None or "C0001" not in verify_claims(provider, [{
+                if exact is not None and "C0001" in verify_claims(provider, [{
                     "id": "C0001", "claim": exact["claim"],
                     "support": [exact["support"][0]["text"]],
                 }], project_dir, "research", progress):
+                    additions.append(exact)
+                # Code-heavy projects may have no declarative prose at all.
+                # Preserve a bounded floor of exact executable source lines so
+                # focused recovery cannot collapse to zero facts merely because
+                # the model omitted or malformed its code support quotations.
+                additions.extend(_exact_code_operation_facts(
+                    batch, remaining["workflow"], roles,
+                ))
+                if not additions:
                     return canonical
                 ranked = _rank_requested_facts(
-                    canonical["facts"] + [exact], instructions, title_hint,
+                    canonical["facts"] + additions, instructions, title_hint,
                 )
                 canonical["facts"] = _limit_by_ref(
-                    ranked, lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
+                    _dedupe(ranked, lambda fact: (
+                        fact["claim"].casefold(), tuple(fact["evidence_refs"]),
+                        fact.get("phase", "unknown"),
+                    )),
+                    lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
                 )[:MAX_FACTS_PER_REQUEST]
                 return canonical
 
