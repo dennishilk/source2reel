@@ -249,6 +249,11 @@ def _words(value: str) -> set[str]:
             if len(word) > 2 and word not in _STOP}
 
 
+def _quote_equivalent_text(value: str) -> str:
+    """Normalize only source-format list prefixes for exact-quote comparison."""
+    return re.sub(r"^(?:[-*+]\s+|>\s*)", "", value.strip()).strip()
+
+
 def deterministic_decision(claim: str, support: list[str]) -> str:
     """Reject obvious expansions; accept exact quotes; verify other paraphrases."""
     if not isinstance(claim, str) or not claim.strip() or not support or any(
@@ -258,8 +263,11 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
     members = _enumeration_members(claim)
     if any(not _member_present(member, support) for member in members):
         return "reject"
-    if any(claim.strip() == span.strip() for span in support):
-        return "accept"  # Verbatim source syntax or prose, with no inferred meaning.
+    if any(
+        _quote_equivalent_text(claim) == _quote_equivalent_text(span)
+        for span in support
+    ):
+        return "accept"  # Verbatim source prose, ignoring only list-format prefixes.
     prose = [_declarative_text(span) for span in support]
     # Executable syntax proves what a command does, not why it is done. A
     # generated intent/effect clause therefore needs explicit declarative
@@ -271,7 +279,8 @@ def deterministic_decision(claim: str, support: list[str]) -> str:
     syntactic = _syntactic_claim(claim, support)
     direct_operation = _direct_executable_operation(claim, support)
     if not any(prose) and not syntactic and not direct_operation and not any(
-        claim.strip().rstrip(" .;:!?") == span.strip().rstrip(" .;:!?") for span in support
+        _quote_equivalent_text(claim).rstrip(" .;:!?") ==
+        _quote_equivalent_text(span).rstrip(" .;:!?") for span in support
     ):
         return "reject"
     if any(prose) and not syntactic and not direct_operation:
