@@ -684,8 +684,8 @@ def _natural_code_operation(
         if needle and destination:
             backend = ""
             context_folded = context.casefold()
-            if "pulseaudio" in context_folded:
-                backend = "PulseAudio "
+            if "/etc/pulse/" in destination.casefold():
+                backend = "PulseAudio " if "pulseaudio" in context_folded else ""
             elif "pipewire" in context_folded:
                 backend = "PipeWire "
             return (
