@@ -10,7 +10,7 @@ from .flow_language import distinct_flow_actions
 from .grounding import deterministic_decision
 
 
-EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v5"
+EDITORIAL_CONTRACT = "storyboard-editorial-grounding-v6"
 FRAMING_TYPES = {"SECTION_TITLE", "HERO", "OUTRO"}
 EVIDENCE_TYPES = {"PROJECT_EVIDENCE", "TERMINAL_EVIDENCE", "HARDWARE_EVIDENCE"}
 SPECIALIZED_TYPES = {"ARCHITECTURE_DIAGRAM", "DATA_FLOW", "TIMELINE", "GRAPH", "CODE"}
@@ -292,9 +292,8 @@ def validate_scene_type(scene: dict[str, Any], facts: dict[str, dict[str, Any]],
 def _novelty_scan(
     scenes: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Classify repetitions using only selected facts and distinct evidence assets."""
+    """Require a new selected claim in content, even when its visual is new."""
     exhausted: set[str] = set()
-    used_assets: set[str] = set()
     kept = []
     redundant = []
     for scene in scenes:
@@ -302,20 +301,16 @@ def _novelty_scan(
             kept.append(scene)
             continue
         selected = set(scene.get("fact_ids", []))
-        asset = scene.get("asset_ref") if scene["type"] in EVIDENCE_TYPES else None
-        new_asset = isinstance(asset, str) and asset not in used_assets
-        if selected and selected <= exhausted and not new_asset:
+        if selected and selected <= exhausted:
             redundant.append(scene)
             continue
         kept.append(scene)
         exhausted.update(selected)
-        if asset:
-            used_assets.add(asset)
     return kept, redundant
 
 
 def prune_redundant_content_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remove later content that adds neither a selected fact nor an authentic asset.
+    """Remove later content that adds no selected fact.
 
     Call only after fact IDs and evidence assets have been canonicalized and checked.
     """
@@ -324,12 +319,12 @@ def prune_redundant_content_scenes(scenes: list[dict[str, Any]]) -> list[dict[st
 
 
 def validate_novelty(scenes: list[dict[str, Any]]) -> None:
-    """An authentic new visual may explain a prior fact; a new template alone cannot."""
+    """An authentic new visual cannot justify repeating the same claim."""
     _, redundant = _novelty_scan(scenes)
     if redundant:
         raise ValueError(
             f"{redundant[0]['id']}: content repeats already covered fact_ids "
-            "without distinct authentic evidence"
+            "without a new selected fact"
         )
 
 

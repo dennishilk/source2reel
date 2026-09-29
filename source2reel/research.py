@@ -22,7 +22,7 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v12"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v13"
 COVERAGE_CONTRACT = "requested-primary-coverage-v11"
 
 
@@ -151,10 +151,13 @@ def _rank_requested_facts(
         return {key for key, spec in concepts.items() if _covers_request(claim, spec)}
 
     remaining = list(enumerate(facts))
+    preferred_raw = {id(raw) for raw in facts if any(
+        _verified_code_paraphrase(natural, raw) for natural in facts
+    )}
     ranked = []
     covered: set[str] = set()
     while remaining:
-        def score(pair: tuple[int, dict[str, Any]]) -> tuple[int, int, int, int]:
+        def score(pair: tuple[int, dict[str, Any]]) -> tuple[int, int, int, int, int]:
             index, fact = pair
             claim = fact["claim"]
             matches = matched(claim)
@@ -162,7 +165,7 @@ def _rank_requested_facts(
             primary = fact.get("subject_scope") == "main_subject"
             quality = (fact.get("phase") == "final") + (fact.get("confidence") == "high")
             return (int(primary), 5 * len(matches - covered) + 2 * len(matches) +
-                    min(lexical, 5), quality, -index)
+                    min(lexical, 5), int(id(fact) not in preferred_raw), quality, -index)
         chosen = max(remaining, key=score)
         remaining.remove(chosen)
         claim = chosen[1]["claim"]
@@ -414,7 +417,18 @@ def _requested_fact_groups(
                all(roles.get(ref) == "primary" for ref in fact["evidence_refs"]) and
                _fact_covers_request(fact, spec, paths)]
         if ids:
-            groups[key] = list(dict.fromkeys(ids))
+            candidates = [fact for fact in facts if fact.get("fact_id") in ids]
+            # A verified description of the very same source line can cover
+            # an explanatory topic. The command stays in research for CODE.
+            preferred = [fact for fact in candidates if not any(
+                _verified_code_paraphrase(other, fact) and
+                _fact_covers_request(other, spec, paths) for other in candidates
+            )]
+            groups[key] = list(dict.fromkeys(
+                fact["fact_id"] for fact in sorted(
+                    preferred, key=lambda fact: _story_fact_tier(fact), reverse=True,
+                )
+            ))
     if re.search(r"\b(?:planned|future|later|roadmap)\b", instructions, re.I):
         future = [fact["fact_id"] for fact in facts
                   if isinstance(fact.get("fact_id"), str) and fact.get("support") and
@@ -426,6 +440,30 @@ def _requested_fact_groups(
         if future:
             groups["future-work"] = list(dict.fromkeys(future))
     return groups
+
+
+def _story_fact_tier(fact: dict[str, Any]) -> int:
+    """Natural prose, verified code paraphrase, then literal command."""
+    if _code_line(str(fact.get("claim", ""))):
+        return 0
+    return 1 if fact.get("naturalized_code_evidence") else 2
+
+
+def _verified_code_paraphrase(natural: dict[str, Any], raw: dict[str, Any]) -> bool:
+    """Match only an exact executable line inside a verifier-approved paraphrase.
+
+    Shared files or broad source excerpts are not evidence of equivalence.
+    """
+    if not natural.get("naturalized_code_evidence") or not raw.get("direct_code_evidence"):
+        return False
+    command = str(raw.get("claim", "")).strip()
+    if not _code_line(command) or natural is raw:
+        return False
+    if not set(natural.get("evidence_refs", [])) & set(raw.get("evidence_refs", [])):
+        return False
+    return any(command == line.strip()
+               for span in natural.get("support", []) if isinstance(span, dict)
+               for line in str(span.get("text", "")).splitlines())
 
 
 _MAX_WORKFLOW_SOURCE_SENTENCE = 480
@@ -856,6 +894,7 @@ def _naturalize_code_facts(
             **fact,
             "claim": claim,
             "support": [{"evidence_ref": ref, "text": support}],
+            "naturalized_code_evidence": True,
         }
         check_id = f"N{index:04d}"
         candidates.append((index, candidate, check_id))

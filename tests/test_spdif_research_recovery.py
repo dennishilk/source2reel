@@ -321,6 +321,9 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             "The fallback helper runs a test tone to verify audio functionality."
         )
         self.assertEqual(deterministic_decision(claim, [HELPER]), "reject")
+        self.assertEqual(deterministic_decision(
+            "The helper plays a test tone to verify audio functionality.", [HELPER],
+        ), "reject")
 
     def test_support_repair_never_redirects_fabricated_text(self):
         claim = "The script restarts PulseAudio and PipeWire."

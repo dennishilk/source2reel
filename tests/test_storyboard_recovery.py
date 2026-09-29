@@ -647,7 +647,7 @@ class StoryboardRecoveryTests(unittest.TestCase):
             self.assertNotIn("E0099", str(part["result"]))
 
     def test_unsplittable_single_scene_structure_recovers_from_fixed_outline(self):
-        for broken in ("missing", "reordered", "duplicate"):
+        for broken in ("missing", "wrong_id", "wrong_type", "duplicate", "wrapper"):
             with self.subTest(broken=broken), tempfile.TemporaryDirectory() as tmp:
                 project = _project(Path(tmp))
 
@@ -658,10 +658,18 @@ class StoryboardRecoveryTests(unittest.TestCase):
                         if payload.get("storyboard_mode") == "scenes" and payload["part_number"] == 2:
                             if broken == "missing":
                                 result["scenes"] = result["scenes"][:-1]
-                            elif broken == "reordered":
+                            elif broken == "wrong_id":
                                 result["scenes"][0]["id"] = "s999"
+                            elif broken == "wrong_type":
+                                result["scenes"][0]["type"] = "OUTRO"
+                            elif broken == "wrapper":
+                                return {"scenes": result["scenes"],
+                                        "untrusted_prose": "Invented verification guarantee"}
                             elif len(payload["scene_intents"]) == 1:
                                 result["scenes"].append(copy.deepcopy(result["scenes"][0]))
+                            if result["scenes"]:
+                                result["scenes"][0]["narration"] = "Invented verification guarantee"
+                                result["scenes"][0]["evidence_refs"] = ["E0099"]
                         return result
 
                 provider = BrokenPart(count=6)
@@ -676,6 +684,59 @@ class StoryboardRecoveryTests(unittest.TestCase):
                     path.read_text() for path in saved.glob("part-*.json") if path.is_file()
                 )
                 self.assertNotIn("s999", serialized)
+                self.assertNotIn("Invented verification guarantee", serialized)
+                self.assertNotIn("E0099", serialized)
+                intents = json_load(saved / "outline.json")["result"]["scene_intents"]
+                fixed = {intent["id"]: intent for intent in intents}
+                for scene in episode["scenes"]:
+                    intent = fixed[scene["id"]]
+                    self.assertEqual(scene["fact_ids"], intent["fact_ids"])
+                    self.assertEqual(scene["evidence_refs"], intent["evidence_refs"])
+                    self.assertEqual(scene.get("asset_ref"), intent.get("asset_ref"))
+                    self.assertNotIn("Invented verification guarantee", scene["narration"])
+
+    def test_structural_recovery_uses_grounded_diagram_labels_and_refuses_graph_points(self):
+        cases = [
+            ("GRAPH", ["The measured series records x 1 with y 10 and x 2 with y 20."]),
+            ("DATA_FLOW", ["The collector reads records and then normalizes the records.",
+                           "The renderer receives normalized records and displays the results."]),
+        ]
+        for kind, claims in cases:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp, \
+                 patch.object(planner, "fits_context", return_value=True):
+                facts = [{"claim": claim, "evidence_refs": ["E0003"],
+                          "support": [{"evidence_ref": "E0003", "text": claim}],
+                          "phase": "final", "confidence": "high"} for claim in claims]
+                inventory = [{"ref": "E0003", "kind": "document", "evidence_role": "primary",
+                              "relative_path": "readme.md"}]
+                ask = planner._make_ask({"version": 1, "facts": facts, "assets": []},
+                                        [], inventory, "Demo", "")
+
+                class BrokenDiagram:
+                    def complete_json(self, _system, user):
+                        payload = json.loads(user)
+                        if payload.get("storyboard_mode") == "outline":
+                            return {"version": 1, "title": "Demo", "slug": "demo",
+                                    "summary": claims[0], "scene_intents": [{
+                                        "type": kind, "purpose": claims[0],
+                                        "fact_ids": [f"F{i:04d}" for i in range(1, len(claims) + 1)],
+                                        "evidence_refs": ["E0003"],
+                                    }]}
+                        if payload.get("storyboard_mode") == "scenes":
+                            return {"scenes": []}
+                        raise AssertionError("Unexpected model call")
+
+                run = lambda: planner._multipart_episode(
+                    BrokenDiagram(), "storyboard", ask, Path(tmp), 8192, 4096, 1024,
+                    0, None, "scope")
+                if kind == "GRAPH":
+                    with self.assertRaisesRegex(RuntimeError, "invalid structured output"):
+                        run()
+                else:
+                    episode = run()
+                    self.assertEqual(episode["scenes"][0]["type"], kind)
+                    self.assertEqual(episode["scenes"][0]["diagram"]["nodes"], claims)
+                    self.assertEqual(episode["scenes"][0]["fact_ids"], ["F0001", "F0002"])
 
     def test_malformed_full_model_output_recovers_but_fast_path_ref_scope_remains_strict(self):
         with tempfile.TemporaryDirectory() as tmp:
