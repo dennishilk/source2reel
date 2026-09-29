@@ -86,9 +86,11 @@ the other branch separately.
 
 For an explicit causal "why" request, research distinguishes a documented
 relationship from generic project purpose. If model research omits that
-relationship, a bounded exact primary-source line containing an explicit
+relationship, a bounded exact primary-source passage containing an explicit
 relation signal such as `because`, `causes`, `leads to` or `→` can be
-recovered as a quoted research fact. This never licenses an inferred mechanism.
+recovered as a quoted research fact. When one documented relationship is split
+across adjacent source lines, the bounded adjacent passage may be retained
+without inventing an intermediate mechanism. This never licenses an inferred mechanism.
 
 ## Revision contract
 
