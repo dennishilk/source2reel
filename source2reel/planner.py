@@ -254,8 +254,8 @@ def _make_ask(
         "research": identified,
         "requested_topic_fact_ids": requested_fact_groups,
         "requested_topic_requirement": (
-            "Cover each topic with one listed fact ID in a content scene; "
-            "SECTION_TITLE/OUTRO do not count; separate detail-* topics when IDs differ."
+            "For each listed topic, select one listed fact ID in a content scene; "
+            "SECTION_TITLE/OUTRO do not count."
         ),
         "priority_fact_ids": priorities,
         "priority_requirement": (
