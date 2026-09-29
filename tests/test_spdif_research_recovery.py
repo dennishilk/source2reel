@@ -169,7 +169,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
 
     def test_code_coverage_recovers_natural_facts_and_deduplicates_duplicate_script(self):
         self.assertGreater(len(SCRIPT), 1024)
-        provider = SpdifProvider(omit_coverage_code=True)
+        provider = SpdifProvider()
         result = self.run_research(provider)
         claims = [item["claim"] for item in result["facts"]]
         self.assertIn("The script restarts PulseAudio and PipeWire.", claims)
@@ -213,7 +213,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             self.assertIn(item["claim"], source)
 
     def test_explicit_subtopics_become_grounded_planner_requirements(self):
-        provider = SpdifProvider()
+        provider = SpdifProvider(omit_coverage_code=True)
         result = self.run_research(provider)
         concepts = _requested_concepts(INSTRUCTIONS, "spdif-fix")
         details = {key: set(spec["terms"]) for key, spec in concepts.items()
