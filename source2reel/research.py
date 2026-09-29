@@ -352,6 +352,18 @@ def _fact_covers_request(
     if any(_covers_request(line, spec)
            for span in support_spans for line in span.splitlines() if line.strip()):
         return True
+    terms = set(spec.get("terms", []))
+    folded_support = "\n".join(support_spans).casefold()
+    operational = bool(_DETAIL_OPERATION.search(claim)) or any(
+        _code_line(line.strip()) for span in support_spans for line in span.splitlines()
+        if line.strip()
+    )
+    if operational and (
+        ("pulseaudio" in terms and ("pactl" in folded_support or "/etc/pulse/" in folded_support)) or
+        ("pipewire" in terms and "pipewire" in folded_support) or
+        ("alsa" in terms and (".asoundrc" in folded_support or re.search(r"\bpcm\.", folded_support)))
+    ):
+        return True
     if not paths or not fact.get("evidence_refs"):
         return False
     identity = {term for term in spec.get("terms", [])
@@ -672,7 +684,7 @@ def _natural_code_operation(
         if needle and destination:
             backend = ""
             context_folded = context.casefold()
-            if "pulseaudio" in context_folded or "/etc/pulse/" in destination.casefold():
+            if "pulseaudio" in context_folded:
                 backend = "PulseAudio "
             elif "pipewire" in context_folded:
                 backend = "PipeWire "
@@ -692,7 +704,7 @@ def _natural_code_operation(
         verb = "unloads" if pactl.group("action") == "unload-module" else "loads"
         context = _code_context_window(excerpt, stripped, before=4, after=0)
         return (
-            f"The PulseAudio branch {verb} `{pactl.group('module')}` with `pactl`.",
+            f"The script {verb} `{pactl.group('module')}` with `pactl`.",
             context,
         )
 
