@@ -568,7 +568,7 @@ def _source_context_blocks(excerpt: str) -> list[str]:
         if not lines:
             continue
         prose_words = re.findall(r"[A-Za-z][A-Za-z0-9_-]*", block)
-        if len(prose_words) < 4:
+        if len(prose_words) < 4 and not (len(prose_words) >= 2 and re.search(r"\d", block)):
             continue
         executable = sum(bool(re.match(
             r"^(?:sudo|git|cd|chmod|python|pip|uv|cargo|make|cmake|sed|cp|mv|rm|"
