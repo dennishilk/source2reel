@@ -1751,6 +1751,15 @@ def _outline_fact_ids(raw: Any, intent: dict[str, Any], ask: dict[str, Any]) -> 
     if _valid_outline_fact_ids(raw, intent, ask):
         return ids
 
+    # Repeating an already valid fact ID does not introduce a new selection or
+    # require inference. Normalize only exact duplicates before attempting any
+    # evidence-ref-based repair; unknown IDs and oversized outputs still fail.
+    if (isinstance(raw, list) and len(raw) <= 6 and raw and
+            all(isinstance(fact_id, str) and fact_id in allowed_set for fact_id in raw)):
+        deduped = list(dict.fromkeys(raw))
+        if len(deduped) < len(raw):
+            return deduped
+
     invalid = ([str(fact_id)[:60] for fact_id in ids[:6] if not isinstance(fact_id, str)
                 or fact_id not in allowed_set] if isinstance(raw, list) else
                [str(raw)[:60] if raw is not None else "<missing>"])
