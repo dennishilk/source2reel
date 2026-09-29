@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v8"
-COVERAGE_CONTRACT = "requested-primary-coverage-v7"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v9"
+COVERAGE_CONTRACT = "requested-primary-coverage-v8"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -177,6 +177,29 @@ _REQUEST_SPECIFIC_STOP = set((
     "end video episode project projects technical finished first local "
     "turn turns works work pipeline workflow"
 ).split())
+_REQUEST_DETAIL_GENERIC = set((
+    "tool script project system this detect detects handle handles does do make makes "
+    "change changes apply applies use uses support supports include includes whether "
+    "solve solves architecture workflow pipeline process stage stages"
+).split())
+_REQUEST_CLAUSE = re.compile(
+    r"\b(?P<cue>what|why|how)\b\s+(?P<body>.*?)(?="
+    r"(?:,\s*(?:and\s+)?|\s+and\s+)(?:what|why|how)\b|[.!?;\n]|$)",
+    re.I,
+)
+_DETAIL_OPERATION = re.compile(
+    r"\b(?:detect(?:s|ed|ing)?|handl(?:e|es|ed|ing)|disabl(?:e|es|ed|ing)|"
+    r"enabl(?:e|es|ed|ing)|comment(?:s|ed|ing)?|uncomment(?:s|ed|ing)?|"
+    r"creat(?:e|es|ed|ing)|writ(?:e|es|ten|ing)|cop(?:y|ies|ied|ying)|"
+    r"mov(?:e|es|ed|ing)|remov(?:e|es|ed|ing)|restor(?:e|es|ed|ing)|"
+    r"restart(?:s|ed|ing)?|start(?:s|ed|ing)?|stop(?:s|ped|ping)?|"
+    r"load(?:s|ed|ing)?|unload(?:s|ed|ing)?|wait(?:s|ed|ing)?|"
+    r"play(?:s|ed|ing)?|set(?:s|ting)?|configur(?:e|es|ed|ing)|"
+    r"appl(?:y|ies|ied|ying)|run(?:s|ning)?|execut(?:e|es|ed|ing)|"
+    r"read(?:s|ing)?|delete(?:s|d|ing)?|install(?:s|ed|ing)?|"
+    r"update(?:s|d|ing)?)\b",
+    re.I,
+)
 _COVERAGE_SYSTEM = (
     "\n\nFocused requested-topic recovery. Return only facts explicitly supported "
     "by these supplied primary evidence excerpts for missing_requested_topics. "
@@ -192,17 +215,75 @@ def _request_words(text: str) -> set[str]:
             for word in words if len(word) >= 3 and word not in _REQUEST_SPECIFIC_STOP}
 
 
+def _explicit_request_clauses(instruction: str) -> list[tuple[str, str]]:
+    return [(match.group("cue").casefold(), match.group("body").strip())
+            for match in _REQUEST_CLAUSE.finditer(instruction)]
+
+
+def _detail_term_present(term: str, claim: str, words: set[str] | None = None) -> bool:
+    words = words if words is not None else _request_words(claim)
+    if term in words:
+        return True
+    folded = claim.casefold()
+    if term == "backup":
+        return bool(re.search(r"\bbackup\w*\b", folded) or
+                    re.search(r"\bcp\b[^\n]*\.bak\b", folded) or
+                    re.search(r"\.bak\b[^\n]*\bcp\b", folded))
+    if term == "reset":
+        return bool(re.search(r"\b(?:reset|restore|rollback)\w*\b", folded) or
+                    re.search(r"\bmv\b[^\n]*\.bak\b", folded) or
+                    "load-module" in folded)
+    return False
+
+
+def _requested_detail_specs(instruction: str, title_hint: str) -> list[dict[str, Any]]:
+    """Turn explicit requested subquestions into bounded, evidence-checkable details."""
+    title_words = _request_words(title_hint)
+    specs: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for cue, body in _explicit_request_clauses(instruction):
+        if cue == "why" or re.search(r"\b(?:architecture|workflow|pipeline|process|stages?)\b",
+                                     body, re.I):
+            continue
+        if cue == "what" and re.search(r"\b(?:is|are|solves?|means?|definition)\b",
+                                       body, re.I):
+            continue
+        coordinated = bool(re.search(r",|\b(?:and|or)\b", body, re.I))
+        parts = re.split(r",|\b(?:and|or)\b", body, flags=re.I) if coordinated else [body]
+        candidates: list[set[str]] = []
+        for part in parts:
+            terms = (_request_words(part) - title_words - _REQUEST_DETAIL_GENERIC)
+            if terms:
+                candidates.append(terms)
+        if not candidates and not coordinated:
+            terms = (_request_words(body) - title_words - _REQUEST_DETAIL_GENERIC)
+            if terms:
+                candidates = [terms]
+        for terms in candidates:
+            if not 1 <= len(terms) <= 4:
+                continue
+            marker = tuple(sorted(terms))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            specs.append({"kind": "detail", "terms": list(marker)})
+            if len(specs) >= 8:
+                return specs
+    return specs
+
+
 def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[str, Any]]:
     """Describe explicit topics without treating a request as evidence."""
     instruction = re.sub(r"\bend with:.*", "", instructions, flags=re.I | re.S)
     concepts: dict[str, dict[str, Any]] = {}
+    clauses = _explicit_request_clauses(instruction)
     if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
         concepts["overview"] = {"kind": "overview"}
     if re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
         concepts["purpose"] = {"kind": "purpose"}
     if re.search(r"\b(?:how|workflow|pipeline|process|stages?)\b", instruction, re.I):
-        how = re.search(r"\bhow\b([^.!?;\n]+)", instruction, re.I)
-        focus = _request_words(how.group(1)) if how else set()
+        how_body = next((body for cue, body in clauses if cue == "how"), "")
+        focus = _request_words(how_body)
         focus -= _request_words(title_hint)
         concepts["workflow"] = {"kind": "workflow", "terms": sorted(focus)}
     distinction_count = 0
@@ -218,6 +299,8 @@ def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[st
                 concepts[f"distinction-{distinction_count}"] = {
                     "kind": "distinction", "left": sorted(left), "right": sorted(right),
                 }
+    for number, spec in enumerate(_requested_detail_specs(instruction, title_hint), 1):
+        concepts[f"detail-{number}"] = spec
     return concepts
 
 
@@ -235,6 +318,14 @@ def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
         right = set(spec["right"]) - set(spec["left"])
         return bool(words & set(spec["left"]) and right and right <= words)
     terms = set(spec["terms"])
+    if kind == "detail":
+        matched = {term for term in terms if _detail_term_present(term, claim, words)}
+        needed = len(terms) if len(terms) <= 3 else 2
+        operational = bool(_DETAIL_OPERATION.search(claim))
+        code_line = globals().get("_code_line")
+        if callable(code_line):
+            operational = operational or bool(code_line(claim))
+        return bool(len(matched) >= needed and operational)
     overlap = words & terms
     return bool((_workflow_signal(claim) and
                  len(overlap) >= min(2, len(terms))) or
@@ -401,9 +492,9 @@ def _executable_source(entry: dict[str, Any]) -> bool:
 
 
 def _code_workflow_source_match(entry: dict[str, Any], spec: dict[str, Any]) -> bool:
-    """Allow focused workflow recovery only from actual executable source files."""
+    """Allow focused operational recovery only from actual executable source files."""
     excerpt = entry.get("excerpt")
-    if (not isinstance(excerpt, str) or spec.get("kind") != "workflow" or
+    if (not isinstance(excerpt, str) or spec.get("kind") not in {"workflow", "detail"} or
             not _executable_source(entry)):
         return False
     path = str(entry.get("relative_path") or "")
@@ -412,9 +503,14 @@ def _code_workflow_source_match(entry: dict[str, Any], spec: dict[str, Any]) -> 
         return False
     folded = (path + "\n" + excerpt).casefold()
     path_folded = path.casefold()
-    overlap = {term for term in terms if term in folded}
+    words = _request_words(folded)
+    overlap = {term for term in terms if (
+        _detail_term_present(term, folded, words) if spec.get("kind") == "detail"
+        else term in folded
+    )}
     path_overlap = {term for term in terms if term in path_folded}
-    needed = min(2, len(terms))
+    needed = (len(terms) if spec.get("kind") == "detail" and len(terms) <= 3
+              else min(2, len(terms)))
     return bool(any(_code_line(line) for line in excerpt.splitlines()) and
                 (len(overlap) >= needed or path_overlap))
 
@@ -599,6 +695,12 @@ def _coverage_candidates(
                 if prose_match or code_match:
                     matched.add(key)
                     code_workflow = code_workflow or code_match
+            elif spec["kind"] == "detail":
+                prose_match = bool(prose and _covers_request(prose, spec))
+                code_match = _code_workflow_source_match(entry, spec)
+                if prose_match or code_match:
+                    matched.add(key)
+                    code_workflow = code_workflow or code_match
             elif prose and _covers_request(prose, spec):
                 matched.add(key)
         if not matched:
@@ -636,6 +738,7 @@ def _coverage_candidates(
             selected.append(entry)
             selected_refs.add(entry["ref"])
             selected_excerpts.add(excerpt_key)
+            covered.update(matched)
             picked += 1
             if picked >= quota:
                 break
@@ -1266,22 +1369,27 @@ def research(
                 remaining = _missing_requested_concepts(
                     allfacts + canonical["facts"], instructions, title_hint, roles,
                 )
-                if "workflow" not in remaining:
+                operational = [(key, spec) for key, spec in remaining.items()
+                               if spec.get("kind") in {"workflow", "detail"}]
+                if not operational:
                     return canonical
                 additions: list[dict[str, Any]] = []
-                exact = _exact_workflow_fact(batch, remaining["workflow"], roles)
-                if exact is not None and "C0001" in verify_claims(provider, [{
-                    "id": "C0001", "claim": exact["claim"],
-                    "support": [exact["support"][0]["text"]],
-                }], project_dir, "research", progress):
-                    additions.append(exact)
+                workflow = next((spec for _key, spec in operational
+                                 if spec.get("kind") == "workflow"), None)
+                if workflow is not None:
+                    exact = _exact_workflow_fact(batch, workflow, roles)
+                    if exact is not None and "C0001" in verify_claims(provider, [{
+                        "id": "C0001", "claim": exact["claim"],
+                        "support": [exact["support"][0]["text"]],
+                    }], project_dir, "research", progress):
+                        additions.append(exact)
                 # Code-heavy projects may have no declarative prose at all.
-                # Preserve a bounded floor of exact executable source lines so
-                # focused recovery cannot collapse to zero facts merely because
-                # the model omitted or malformed its code support quotations.
-                additions.extend(_exact_code_operation_facts(
-                    batch, remaining["workflow"], roles,
-                ))
+                # Preserve a bounded exact-operation floor for each still-missing
+                # explicitly requested operational subtopic.
+                for _key, spec in operational:
+                    additions.extend(_exact_code_operation_facts(
+                        batch, spec, roles, limit=3 if spec.get("kind") == "workflow" else 1,
+                    ))
                 if not additions:
                     return canonical
                 ranked = _rank_requested_facts(
