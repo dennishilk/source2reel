@@ -1253,7 +1253,8 @@ def _exact_relationship_fact(
             overlap = _request_words(claim) & terms
             if len(overlap) < min(2, len(terms)):
                 continue
-            if not _declarative_text(support):
+            if (len(re.findall(r"[A-Za-z]+", claim)) < 3 or
+                    _code_line(support)):
                 continue
             score = 5 * len(overlap) + 3 * int(bool(re.search(r"->|→", claim)))
             candidates.append((score, -entry_index, -line_index, {
