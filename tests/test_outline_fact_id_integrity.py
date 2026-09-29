@@ -396,8 +396,9 @@ class OutlineFactIdIntegrityTests(unittest.TestCase):
 
         self.assertEqual([scene["fact_ids"] for scene in episode["scenes"]],
                          [["F0001"], ["F0003"]])
-        self.assertEqual(episode["scenes"][0]["type"], "SUMMARY")
-        self.assertNotIn("asset_ref", episode["scenes"][0])
+        self.assertEqual(episode["scenes"][0]["type"], "PROJECT_EVIDENCE")
+        self.assertEqual(episode["scenes"][0]["asset_ref"], "E0001")
+        self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0001"])
         self.assertEqual(len(provider.outline_calls), 1)
         checkpoint = json_load(
             self.project / "manifests" / "storyboard-parts" / "outline.json"
