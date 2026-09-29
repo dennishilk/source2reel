@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v9"
-COVERAGE_CONTRACT = "requested-primary-coverage-v8"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v10"
+COVERAGE_CONTRACT = "requested-primary-coverage-v9"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -232,7 +232,7 @@ def _detail_term_present(term: str, claim: str, words: set[str] | None = None) -
     if term == "reset":
         return bool(re.search(r"\b(?:reset|restore|rollback)\w*\b", folded) or
                     re.search(r"\bmv\b[^\n]*\.bak\b", folded) or
-                    "load-module" in folded)
+                    "load-module" in folded or re.search(r"s/\^#", folded))
     return False
 
 
@@ -332,21 +332,52 @@ def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
                 (overlap and len(distinct_flow_actions(claim)) >= 2))
 
 
+_REQUEST_DETAIL_SOURCE_ROLE = {"fallback", "helper", "script", "tool"}
+
+
+def _fact_covers_request(
+    fact: dict[str, Any], spec: dict[str, Any],
+    paths: dict[str, str] | None = None,
+) -> bool:
+    """Match grounded fact text first; use executable source identity only as a narrow fallback."""
+    claim = str(fact.get("claim", ""))
+    if _covers_request(claim, spec):
+        return True
+    if (spec.get("kind") != "detail" or not fact.get("direct_code_evidence") or
+            not paths or not fact.get("evidence_refs")):
+        return False
+    identity = {term for term in spec.get("terms", [])
+                if term not in _REQUEST_DETAIL_SOURCE_ROLE and len(term) >= 4}
+    if not identity:
+        return False
+    operational = bool(_DETAIL_OPERATION.search(claim))
+    code_line = globals().get("_code_line")
+    if callable(code_line):
+        operational = operational or bool(code_line(claim))
+    if not operational:
+        return False
+    for ref in fact["evidence_refs"]:
+        folded_path = re.sub(r"[^a-z0-9]+", "", str(paths.get(ref, "")).casefold())
+        if folded_path and all(term in folded_path for term in identity):
+            return True
+    return False
+
+
 def _missing_requested_concepts(
     facts: list[dict[str, Any]], instructions: str, title_hint: str,
-    roles: dict[str, str],
+    roles: dict[str, str], paths: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     concepts = _requested_concepts(instructions, title_hint)
     primary = [fact for fact in facts if fact.get("evidence_refs") and
                all(roles.get(ref) == "primary" for ref in fact["evidence_refs"])]
     return {key: spec for key, spec in concepts.items() if not any(
-        _covers_request(fact["claim"], spec) for fact in primary
+        _fact_covers_request(fact, spec, paths) for fact in primary
     )}
 
 
 def _requested_fact_groups(
     facts: list[dict[str, Any]], instructions: str, title_hint: str,
-    roles: dict[str, str],
+    roles: dict[str, str], paths: dict[str, str] | None = None,
 ) -> dict[str, list[str]]:
     """Map supported requested topics to original main-subject facts in stable order.
 
@@ -361,7 +392,7 @@ def _requested_fact_groups(
                isinstance(fact.get("claim"), str) and
                fact.get("support") and fact.get("evidence_refs") and
                all(roles.get(ref) == "primary" for ref in fact["evidence_refs"]) and
-               _covers_request(fact["claim"], spec)]
+               _fact_covers_request(fact, spec, paths)]
         if ids:
             groups[key] = list(dict.fromkeys(ids))
     if re.search(r"\b(?:planned|future|later|roadmap)\b", instructions, re.I):
@@ -1163,6 +1194,7 @@ def research(
     system = (project_dir.parents[1] / "prompts" / "research.txt").read_text()
     valid = {e["ref"] for e in inventory["evidence"]}
     roles = {e["ref"]: e.get("evidence_role", "primary") for e in inventory["evidence"]}
+    paths = {e["ref"]: str(e.get("relative_path") or "") for e in inventory["evidence"]}
     reference_focus = _reference_focus(title_hint, instructions, inventory)
 
     def normalize(result: dict[str, Any], batch: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1353,7 +1385,7 @@ def research(
 
     allfacts, assets = _consolidate(allfacts, assets, inventory, title_hint, instructions)
 
-    missing = _missing_requested_concepts(allfacts, instructions, title_hint, roles)
+    missing = _missing_requested_concepts(allfacts, instructions, title_hint, roles, paths)
     if missing:
         coverage_system = system + _COVERAGE_SYSTEM
         batch = _coverage_candidates(
@@ -1367,7 +1399,7 @@ def research(
             def normalize_coverage(value: dict[str, Any]) -> dict[str, Any]:
                 canonical = normalize(value, batch)
                 remaining = _missing_requested_concepts(
-                    allfacts + canonical["facts"], instructions, title_hint, roles,
+                    allfacts + canonical["facts"], instructions, title_hint, roles, paths,
                 )
                 operational = [(key, spec) for key, spec in remaining.items()
                                if spec.get("kind") in {"workflow", "detail"}]
