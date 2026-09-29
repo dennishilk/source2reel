@@ -155,6 +155,39 @@ class OutlineAssetRetryTests(unittest.TestCase):
         self.assertEqual(episode["scenes"][0]["evidence_refs"], ["E0001", "E0982"])
         self.assertEqual(len(stubborn.outline_requests), 1)
 
+    def test_exhausted_outline_downgrades_ambiguous_out_of_scope_asset(self):
+        ask = _ask()
+        for ref in ("E0983", "E0984"):
+            ask["evidence_index"].append({
+                "ref": ref, "kind": "media", "relative_path": f"{ref}.png",
+                "evidence_role": "primary",
+            })
+            ask["research"]["assets"].append({
+                "evidence_ref": ref, "purpose": "Authentic project screenshot",
+                "authentic_project_media": True,
+            })
+            ask["visual_asset_refs"].append(ref)
+        allowed = {item["ref"] for item in ask["evidence_index"]}
+        raw = {
+            "version": 1, "title": "BoringOS", "slug": "boringos",
+            "summary": "BoringOS has a kernel.",
+            "scene_intents": [{
+                "type": "TERMINAL_EVIDENCE",
+                "purpose": "BoringOS has a kernel.",
+                "fact_ids": ["F0001"],
+                "evidence_refs": ["E0001", "E0999"],
+                "asset_ref": "E0999",
+            }],
+        }
+        recovered = planner._recover_outline_assets(raw, allowed, ask)
+        self.assertIsNotNone(recovered)
+        intent = recovered["scene_intents"][0]
+        self.assertEqual(intent["type"], "SUMMARY")
+        self.assertEqual(intent["fact_ids"], ["F0001"])
+        self.assertEqual(intent["evidence_refs"], ["E0001"])
+        self.assertNotIn("asset_ref", intent)
+        self.assertNotIn("E0999", json.dumps(recovered))
+
     def test_exhausted_outline_downgrades_unusable_evidence_scenes_without_losing_facts(self):
         index = [{"ref": f"E{i:04d}", "kind": "document",
                   "relative_path": f"source-{i}.md", "evidence_role": "primary"}
@@ -237,12 +270,13 @@ class OutlineAssetRetryTests(unittest.TestCase):
                 zero_retry, 8192, 4096, 1024, 0, None, "scope",
             )
             self.assertEqual([s["type"] for s in recovered["scenes"]],
-                             ["SUMMARY", "SUMMARY", "SUMMARY"])
+                             ["HERO", "SUMMARY", "SUMMARY"])
+            self.assertEqual(recovered["scenes"][0]["asset_ref"], "E0982")
             self.assertEqual([s["fact_ids"] for s in recovered["scenes"]],
                              [["F0001"], ["F0002"], ["F0003"]])
             self.assertEqual([s["evidence_refs"] for s in recovered["scenes"]],
-                             [["E0001"], ["E0002"], ["E0003"]])
-            self.assertFalse(any("asset_ref" in s for s in recovered["scenes"]))
+                             [["E0982", "E0001"], ["E0002"], ["E0003"]])
+            self.assertFalse(any("asset_ref" in s for s in recovered["scenes"][1:]))
             self.assertEqual(non_visual.outline_calls, 1)
 
             class NonVisualAssetWithRepairableFactIds(Provider):
@@ -263,19 +297,28 @@ class OutlineAssetRetryTests(unittest.TestCase):
                 repairable, 8192, 4096, 1024, 0, None, "scope",
             )
             self.assertEqual([s["type"] for s in repaired["scenes"]],
-                             ["SUMMARY", "SUMMARY", "SUMMARY"])
+                             ["HERO", "SUMMARY", "SUMMARY"])
+            self.assertEqual(repaired["scenes"][0]["asset_ref"], "E0982")
             self.assertEqual([s["fact_ids"] for s in repaired["scenes"]],
                              [["F0001"], ["F0002"], ["F0003"]])
             self.assertEqual([s["evidence_refs"] for s in repaired["scenes"]],
-                             [["E0001"], ["E0002"], ["E0003"]])
-            self.assertFalse(any("asset_ref" in s for s in repaired["scenes"]))
+                             [["E0982", "E0001"], ["E0002"], ["E0003"]])
+            self.assertFalse(any("asset_ref" in s for s in repaired["scenes"][1:]))
             self.assertEqual(combined.outline_calls, 1)
 
-            other = project.parent / "reject"
+            other = project.parent / "recover-out-of-scope-asset"
             other.mkdir()
-            with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):
-                planner._multipart_episode(Provider(out_of_scope=True), "storyboard", ask,
-                                           other, 8192, 4096, 1024, 1, None, "scope")
+            out_of_scope = Provider(out_of_scope=True)
+            recovered = planner._multipart_episode(
+                out_of_scope, "storyboard", ask,
+                other, 8192, 4096, 1024, 1, None, "scope",
+            )
+            self.assertEqual([s["type"] for s in recovered["scenes"]],
+                             ["HERO", "SUMMARY", "SUMMARY"])
+            self.assertEqual(recovered["scenes"][0]["asset_ref"], "E0982")
+            self.assertEqual([s["fact_ids"] for s in recovered["scenes"]],
+                             [["F0001"], ["F0002"], ["F0003"]])
+            self.assertNotIn("E0999", json.dumps(recovered))
 
 
 if __name__ == "__main__":
