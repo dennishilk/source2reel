@@ -294,7 +294,10 @@ def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[st
         r"because|due\s+to)\b",
         why_body, re.I,
     ):
-        terms = _request_words(why_body) - _request_words(title_hint)
+        # Relationship subjects are part of the relationship evidence.
+        # Do not subtract title words here: doing so can remove the only
+        # explicit subject shared by the request and the source statement.
+        terms = _request_words(why_body)
         if terms:
             concepts["relationship"] = {"kind": "relationship", "terms": sorted(terms)}
     elif re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
