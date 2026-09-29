@@ -537,6 +537,23 @@ def _exact_code_operation_facts(
         reserved.add(ref)
         if len(facts) >= limit:
             return facts
+
+    # Explicitly requested backup/reset details are easy to lose behind more
+    # lexically obvious service names. Reserve exact mutation lines for them
+    # before the remaining relevance-ranked fill.
+    if "backup" in terms:
+        for _score, _entry, _line, ref, claim in ranked:
+            if ".bak" in claim.casefold():
+                keep(ref, claim)
+                break
+    if "reset" in terms:
+        for _score, _entry, _line, ref, claim in ranked:
+            folded = claim.casefold()
+            if ((".bak" in folded and re.search(r"\b(?:mv|rm)\b", folded)) or
+                    "load-module" in folded or re.search(r"s/\^#", folded)):
+                keep(ref, claim)
+                break
+
     for _score, _entry, _line, ref, claim in ranked:
         keep(ref, claim)
         if len(facts) >= limit:
