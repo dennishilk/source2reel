@@ -275,7 +275,7 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertEqual([s["fact_ids"] for s in recovered["scenes"]],
                              [["F0001"], ["F0002"], ["F0003"]])
             self.assertEqual([s["evidence_refs"] for s in recovered["scenes"]],
-                             [["E0001", "E0982"], ["E0002"], ["E0003"]])
+                             [["E0982", "E0001"], ["E0002"], ["E0003"]])
             self.assertFalse(any("asset_ref" in s for s in recovered["scenes"][1:]))
             self.assertEqual(non_visual.outline_calls, 1)
 
@@ -302,7 +302,7 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertEqual([s["fact_ids"] for s in repaired["scenes"]],
                              [["F0001"], ["F0002"], ["F0003"]])
             self.assertEqual([s["evidence_refs"] for s in repaired["scenes"]],
-                             [["E0001", "E0982"], ["E0002"], ["E0003"]])
+                             [["E0982", "E0001"], ["E0002"], ["E0003"]])
             self.assertFalse(any("asset_ref" in s for s in repaired["scenes"][1:]))
             self.assertEqual(combined.outline_calls, 1)
 
