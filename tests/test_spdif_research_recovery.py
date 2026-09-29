@@ -240,6 +240,16 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
              "source": "if [ \"$CHOICE\" = \"1\" ]; then"},
         )
         exact = [item for item in result["facts"] if item.get("direct_code_evidence")]
+        raw_apply = next(
+            item for item in exact
+            if item["claim"] == "sudo sed -i '/module-suspend-on-idle/s/^/#/' /etc/pulse/default.pa"
+        )
+        self.assertEqual(raw_apply["operation_guard"]["equals"], "1")
+        raw_reset = next(
+            item for item in exact
+            if item["claim"] == "sudo mv /etc/pulse/default.pa.bak /etc/pulse/default.pa"
+        )
+        self.assertEqual(raw_reset["operation_guard"]["equals"], "2")
         self.assertGreaterEqual(len(exact), 5)
         self.assertTrue(all(item["evidence_refs"][0] in {"E0004", "E0008", "E0009"}
                             for item in exact))
