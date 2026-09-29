@@ -2093,7 +2093,7 @@ def _outline_error_intent_index(error: Exception, value: Any) -> int | None:
         return None
     intents = value["scene_intents"]
     message = str(error)
-    match = re.search(r"\\b(s\\d{3})\\b", message)
+    match = re.search(r"\b(s\d{3})\b", message)
     if match:
         scene_id = match.group(1)
         for index, raw in enumerate(intents):
@@ -2102,7 +2102,7 @@ def _outline_error_intent_index(error: Exception, value: Any) -> int | None:
         numeric = int(scene_id[1:]) - 1
         if 0 <= numeric < len(intents):
             return numeric
-    match = re.search(r"Storyboard intent (\\d+)", message)
+    match = re.search(r"Storyboard intent (\d+)", message)
     if match:
         numeric = int(match.group(1)) - 1
         if 0 <= numeric < len(intents):
