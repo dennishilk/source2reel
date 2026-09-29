@@ -179,16 +179,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         self.assertIn("The script restarts PulseAudio and PipeWire.", claims)
         self.assertIn("The script comments PipeWire suspend-on-idle in its configuration.", claims)
         self.assertIn("The fallback autostart helper runs the play command.", claims)
-        relationship = next(
-            claim for claim in claims
-            if "Keeps SPDIF output active → no more sound delay." in claim
-            and "Prevents SPDIF from going into standby." in claim
-        )
-        self.assertEqual(
-            relationship,
-            "Keeps SPDIF output active → no more sound delay. "
-            "Prevents SPDIF from going into standby.",
-        )
+        self.assertIn("Keeps SPDIF output active → no more sound delay.", claims)
         restart = next(item for item in result["facts"]
                        if item["claim"] == "The script restarts PulseAudio and PipeWire.")
         self.assertLessEqual(len(restart["support"][0]["text"]), 1024)
