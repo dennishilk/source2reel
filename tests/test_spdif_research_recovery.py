@@ -6,7 +6,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from source2reel.research import _repair_support_span, research
+from source2reel.planner import _make_ask
+from source2reel.research import (_missing_requested_concepts, _repair_support_span,
+                                  _requested_concepts, research)
 from source2reel.util import json_load
 
 
@@ -209,6 +211,36 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             source = next(entry["excerpt"] for entry in self.inventory["evidence"]
                           if entry["ref"] == item["evidence_refs"][0])
             self.assertIn(item["claim"], source)
+
+    def test_explicit_subtopics_become_grounded_planner_requirements(self):
+        provider = SpdifProvider()
+        result = self.run_research(provider)
+        concepts = _requested_concepts(INSTRUCTIONS, "spdif-fix")
+        details = {key: set(spec["terms"]) for key, spec in concepts.items()
+                   if spec["kind"] == "detail"}
+        self.assertEqual(list(details.values()), [
+            {"pulseaudio"}, {"pipewire"}, {"alsa"}, {"backup"}, {"reset"},
+            {"fallback", "autostart", "helper"},
+        ])
+
+        roles = {entry["ref"]: "primary" for entry in self.inventory["evidence"]}
+        missing = _missing_requested_concepts(
+            result["facts"], INSTRUCTIONS, "spdif-fix", roles,
+        )
+        self.assertFalse(any(key in missing for key in details))
+
+        ask = _make_ask(result, [], self.inventory["evidence"],
+                        "spdif-fix", INSTRUCTIONS)
+        groups = ask["requested_topic_fact_ids"]
+        for key in details:
+            self.assertIn(key, groups)
+            self.assertTrue(groups[key])
+
+        support_id = next(fact["fact_id"] for fact in ask["research"]["facts"]
+                          if fact["claim"] == "The tool supports PulseAudio, PipeWire, and ALSA.")
+        for key, terms in details.items():
+            if terms in ({"pulseaudio"}, {"pipewire"}, {"alsa"}):
+                self.assertNotIn(support_id, groups[key])
 
     def test_support_repair_never_redirects_fabricated_text(self):
         claim = "The script restarts PulseAudio and PipeWire."
