@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v7"
-COVERAGE_CONTRACT = "requested-primary-coverage-v6"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v8"
+COVERAGE_CONTRACT = "requested-primary-coverage-v7"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -390,18 +390,23 @@ def _code_line(value: str) -> bool:
     return bool(_CODE_EXECUTABLE.search(line))
 
 
-def _code_workflow_source_match(entry: dict[str, Any], spec: dict[str, Any]) -> bool:
-    """Allow focused workflow recovery to inspect relevant primary executable code."""
+def _executable_source(entry: dict[str, Any]) -> bool:
+    """Require an executable file identity before applying exact-code semantics."""
     excerpt = entry.get("excerpt")
-    if not isinstance(excerpt, str) or spec.get("kind") != "workflow":
+    if not isinstance(excerpt, str):
         return False
     path = str(entry.get("relative_path") or "")
     suffix = Path(path).suffix.casefold()
-    code_like = suffix in _CODE_SUFFIXES or excerpt.startswith("#!") or any(
-        _code_line(line) for line in excerpt.splitlines()
-    )
-    if not code_like:
+    return suffix in _CODE_SUFFIXES or excerpt.lstrip().startswith("#!")
+
+
+def _code_workflow_source_match(entry: dict[str, Any], spec: dict[str, Any]) -> bool:
+    """Allow focused workflow recovery only from actual executable source files."""
+    excerpt = entry.get("excerpt")
+    if (not isinstance(excerpt, str) or spec.get("kind") != "workflow" or
+            not _executable_source(entry)):
         return False
+    path = str(entry.get("relative_path") or "")
     terms = {term.casefold() for term in spec.get("terms", []) if len(term) >= 3}
     if not terms:
         return False
@@ -600,7 +605,7 @@ def _coverage_candidates(
             continue
         path = Path(entry.get("relative_path") or "")
         score = (8 * len(matched) + 6 * (path.suffix.casefold() in doc_exts) +
-                 4 * named + 3 * code_workflow +
+                 4 * named + 12 * code_workflow +
                  2 * (path.name.casefold() == "readme.md") -
                  min(4, len(path.parts)))
         ranked.append((score, -index, entry, matched))
