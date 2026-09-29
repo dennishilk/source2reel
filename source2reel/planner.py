@@ -1939,16 +1939,21 @@ def _recover_outline_assets(
     value: Any, allowed: set[str], ask: dict[str, Any],
     *, require_explicit_cited_asset: bool = False,
 ) -> dict[str, Any] | None:
-    """Retain selected facts when an exhausted outline cannot supply a visual.
+    """Retain grounded facts when an exhausted outline chose an unusable visual.
 
-    Only an asset validation failure on an evidence intent may change its
-    presentation type. Out-of-scope refs and malformed fact selections still
-    require a new, valid outline instead of being silently discarded.
+    A rejected asset never becomes evidence. After normal retries are exhausted,
+    strip only that rejected visual choice, recover the selected facts under a
+    non-visual contract, then either use one unambiguous authorized visual or
+    downgrade the scene to SUMMARY. Malformed fact selections still fail closed.
     """
     if not isinstance(value, dict) or not isinstance(value.get("scene_intents"), list):
         return None
     repaired = []
     changed = False
+    visual_refs = set(_visual_asset_refs(ask["evidence_index"])) & _research_refs(ask["research"])
+    asset_refs = {asset.get("evidence_ref") for asset in ask["research"].get("assets", [])}
+    facts = {fact["fact_id"]: fact for fact in ask["research"]["facts"]}
+
     for index, raw in enumerate(value["scene_intents"], 1):
         try:
             _canonical_outline_intent(raw, index, allowed, ask)
@@ -1961,30 +1966,65 @@ def _recover_outline_assets(
             except ValueError:
                 return None
             selected_asset = raw.get("asset_ref")
-            if ((require_explicit_cited_asset and (
-                    not isinstance(selected_asset, str) or not selected_asset.strip() or
-                    selected_asset not in refs)) or
-                    selected_asset is not None and
-                    (not isinstance(selected_asset, str) or
-                     selected_asset and selected_asset not in allowed)):
+            if selected_asset is not None and not isinstance(selected_asset, str):
+                return None
+            if require_explicit_cited_asset and (
+                not isinstance(selected_asset, str) or not selected_asset.strip() or
+                selected_asset not in refs or selected_asset not in allowed
+            ):
                 return None
 
-            # Match normal outline canonicalization: a stale/invalid fact_id may
-            # still be repaired when the cited evidence maps uniquely to one
-            # existing research fact. Do not make asset recovery stricter than
-            # the primary normalization path.
+            # The rejected visual cannot participate in fact-ID recovery. With
+            # valid fact IDs, other noisy refs are handled by the ordinary
+            # canonical ref filter; with missing/invalid IDs, unique ref repair
+            # still requires every remaining cited ref to be in scope.
+            repair_refs = [
+                ref for ref in refs
+                if not (selected_asset and ref == selected_asset and ref not in allowed)
+            ]
             repair_intent = {
                 "id": raw.get("id") or f"s{index:03d}",
-                "type": raw["type"],
-                "evidence_refs": list(dict.fromkeys(refs)),
+                "type": "SUMMARY",
+                "evidence_refs": list(dict.fromkeys(repair_refs)),
             }
-            if SCENE_CONTRACTS[raw["type"]].allows_asset_ref:
-                repair_intent["asset_ref"] = selected_asset
             valid_fact_ids = _valid_outline_fact_ids(raw.get("fact_ids"), repair_intent, ask)
-            if not valid_fact_ids and any(ref not in allowed for ref in refs):
+            if not valid_fact_ids and any(ref not in allowed for ref in repair_refs):
                 return None
             try:
                 fact_ids = _outline_fact_ids(raw.get("fact_ids"), repair_intent, ask)
+            except StructuredOutputError:
+                return None
+
+            fact_refs = {
+                ref for fact_id in fact_ids for ref in facts[fact_id]["evidence_refs"]
+                if ref in allowed
+            }
+            eligible = [
+                ref for ref in ask.get(
+                    "visual_asset_refs", _visual_asset_refs(ask["evidence_index"])
+                )
+                if ref in allowed and ref in visual_refs and
+                (ref in fact_refs or ref in asset_refs)
+            ]
+            if len(eligible) == 1:
+                replacement_asset = eligible[0]
+                visual = {**raw, "fact_ids": fact_ids, "asset_ref": replacement_asset}
+                visual["evidence_refs"] = [
+                    ref for ref in refs
+                    if ref != selected_asset or ref == replacement_asset
+                ]
+                if replacement_asset not in visual["evidence_refs"]:
+                    visual["evidence_refs"].append(replacement_asset)
+                try:
+                    _canonical_outline_intent(visual, index, allowed, ask)
+                except StructuredOutputError:
+                    pass
+                else:
+                    repaired.append(visual)
+                    changed = True
+                    continue
+
+            try:
                 downgraded = {**raw, "type": "SUMMARY", "fact_ids": fact_ids}
                 downgraded.pop("asset_ref", None)
                 downgraded["evidence_refs"] = _canonical_evidence_refs(
@@ -1992,11 +2032,11 @@ def _recover_outline_assets(
                         "id": repair_intent["id"],
                         "type": "SUMMARY",
                         "fact_ids": fact_ids,
-                        "evidence_refs": refs,
+                        "evidence_refs": repair_refs,
                     },
                     ask, allowed,
                 )
-            except (StructuredOutputError, ValueError):
+            except ValueError:
                 return None
             repaired.append(downgraded)
             changed = True
