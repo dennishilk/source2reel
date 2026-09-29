@@ -378,10 +378,20 @@ def _planner_records(
     return records
 
 
-def _compact_payload(level: int, part: int, records: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
+def _compact_payload(
+    level: int, part: int, records: list[dict[str, Any]], title_hint: str, instructions: str,
+    source_context: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "grounding_contract": GROUNDING_CONTRACT,
         "planner_media_contract": _PLANNER_MEDIA_CONTRACT,
+        "source_context_contract": _PLANNER_SOURCE_CONTEXT_CONTRACT,
+        "source_context": source_context or [],
+        "source_context_requirement": (
+            "Narrative-only verbatim source context may guide selection and grouping, but it "
+            "cannot create or rewrite a fact. Every factual capsule must still select one "
+            "supplied source_fact_id."
+        ),
         "level": level,
         "part": part,
         "project_title_hint": title_hint,
@@ -1802,6 +1812,9 @@ _SCENES_SYSTEM = (
 def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
     return {
         "storyboard_mode": "outline",
+        "source_context_contract": ask.get("source_context_contract", _PLANNER_SOURCE_CONTEXT_CONTRACT),
+        "source_context": ask.get("source_context", []),
+        "source_context_requirement": ask.get("source_context_requirement", ""),
         "allowed_fact_ids": [fact["fact_id"] for fact in ask["research"]["facts"]],
         "fact_id_requirement": "Every intent fact_id must be copied verbatim from allowed_fact_ids.",
         "fact_evidence_map": {fact["fact_id"]: fact["evidence_refs"]
@@ -2612,6 +2625,9 @@ def _scene_part_payload(
         "scope_sha256": scope_id,
         "project_title_hint": ask["project_title_hint"],
         "optional_instructions": ask["optional_instructions"],
+        "source_context_contract": ask.get("source_context_contract", _PLANNER_SOURCE_CONTEXT_CONTRACT),
+        "source_context": ask.get("source_context", []),
+        "source_context_requirement": ask.get("source_context_requirement", ""),
         "episode_metadata": metadata,
         "total_scenes": len(all_intents),
         "contains_final_scene": intents[-1]["id"] == all_intents[-1]["id"],
