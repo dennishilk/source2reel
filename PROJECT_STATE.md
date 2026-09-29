@@ -34,7 +34,12 @@ Permanent fix:
   `→`), including a short adjacent passage when one documented relationship
   is split across neighboring source lines; never from inferred mechanism;
 - planner/compaction prompts explicitly use context for framing and grouping
-  while forbidding facts invented from context alone.
+  while forbidding facts invented from context alone;
+- exact-quote grounding treats leading Markdown list/blockquote markers as
+  presentation-only for equality checks, while preserving the untouched source
+  span in stored support. This prevents verbatim README bullets such as the
+  SPDIF relationship statement from being discarded solely because of `- `
+  formatting.
 
 The implementation is source-agnostic; README receives only a modest generic
 overview-source preference and every selected passage must still overlap the
