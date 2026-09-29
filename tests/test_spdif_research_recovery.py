@@ -210,8 +210,8 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             claims,
         )
         self.assertIn(
-            "The script removes the leading comment marker from matching "
-            "`module-suspend-on-idle` lines in `/etc/pulse/default.pa`.",
+            "The script moves `/etc/pulse/default.pa.bak` to "
+            "`/etc/pulse/default.pa`.",
             claims,
         )
         self.assertIn(
@@ -267,8 +267,13 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         reset_claims = {by_id[fact_id] for fact_id in groups["detail-5"]}
         helper_claims = {by_id[fact_id] for fact_id in groups["detail-6"]}
         self.assertIn(
-            "The script removes the leading comment marker from matching "
-            "`module-suspend-on-idle` lines in `/etc/pulse/default.pa`.",
+            "The script moves `/etc/pulse/default.pa.bak` to "
+            "`/etc/pulse/default.pa`.",
+            reset_claims,
+        )
+        self.assertNotIn(
+            "The script writes the `pcm.spdif_keepalive` configuration block "
+            "to `$HOME/.asoundrc`.",
             reset_claims,
         )
         self.assertIn(
