@@ -1230,6 +1230,43 @@ def _exact_workflow_fact(
     return None
 
 
+def _exact_relationship_fact(
+    batch: list[dict[str, Any]], spec: dict[str, Any], roles: dict[str, str],
+) -> dict[str, Any] | None:
+    """Keep one explicit primary-source relationship as a bounded quoted fact."""
+    terms = set(spec.get("terms", []))
+    candidates: list[tuple[int, int, int, dict[str, Any]]] = []
+    for entry_index, entry in enumerate(batch):
+        ref, excerpt = entry.get("ref"), entry.get("excerpt")
+        if (entry.get("kind") != "document" or not isinstance(ref, str) or
+                roles.get(ref) != "primary" or
+                entry.get("evidence_role", "primary") != "primary" or
+                not isinstance(excerpt, str)):
+            continue
+        for line_index, raw in enumerate(excerpt.splitlines()):
+            support = raw.strip()
+            if not 12 <= len(support) <= 360 or not _RELATION.search(support):
+                continue
+            claim = re.sub(r"^(?:[-*+]\s+|>\s*)", "", support).strip()
+            if not claim or not _RELATION.search(claim):
+                continue
+            overlap = _request_words(claim) & terms
+            if len(overlap) < min(2, len(terms)):
+                continue
+            if not _declarative_text(support):
+                continue
+            score = 5 * len(overlap) + 3 * int(bool(re.search(r"->|→", claim)))
+            candidates.append((score, -entry_index, -line_index, {
+                "claim": claim,
+                "evidence_refs": [ref],
+                "subject_scope": "main_subject",
+                "support": [{"evidence_ref": ref, "text": support}],
+                "phase": "unknown",
+                "confidence": "high",
+            }))
+    return max(candidates, key=lambda item: (item[0], item[1], item[2]))[3] if candidates else None
+
+
 def _fact_scope(refs: list[str], roles: dict[str, str]) -> str:
     """Derive subject scope from citations rather than a model-supplied label."""
     primary = any(roles.get(ref, "primary") == "primary" for ref in refs)
@@ -1849,11 +1886,20 @@ def research(
                 remaining = _missing_requested_concepts(
                     allfacts + canonical["facts"], instructions, title_hint, roles, paths,
                 )
+                relationships = [(key, spec) for key, spec in remaining.items()
+                                 if spec.get("kind") == "relationship"]
                 operational = [(key, spec) for key, spec in remaining.items()
                                if spec.get("kind") in {"workflow", "detail"}]
-                if not operational:
+                if not relationships and not operational:
                     return canonical
                 additions: list[dict[str, Any]] = []
+                for number, (_key, spec) in enumerate(relationships, 1):
+                    exact = _exact_relationship_fact(batch, spec, roles)
+                    if exact is not None and f"REL{number:04d}" in verify_claims(provider, [{
+                        "id": f"REL{number:04d}", "claim": exact["claim"],
+                        "support": [exact["support"][0]["text"]],
+                    }], project_dir, "research", progress):
+                        additions.append(exact)
                 workflow = next((spec for _key, spec in operational
                                  if spec.get("kind") == "workflow"), None)
                 if workflow is not None:
