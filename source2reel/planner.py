@@ -254,10 +254,8 @@ def _make_ask(
         "research": identified,
         "requested_topic_fact_ids": requested_fact_groups,
         "requested_topic_requirement": (
-            "For each listed topic, select one listed fact ID in a content scene; "
-            "SECTION_TITLE/OUTRO do not count. Keep explicit detail-* topics in "
-            "distinct content scenes when their supporting fact IDs differ; do not "
-            "bundle unrelated requested mechanisms into one scene merely to satisfy coverage."
+            "Cover each topic with one listed fact ID in a content scene; "
+            "SECTION_TITLE/OUTRO do not count; separate detail-* topics when IDs differ."
         ),
         "priority_fact_ids": priorities,
         "priority_requirement": (
@@ -268,8 +266,7 @@ def _make_ask(
         "authoritative_resource_urls": resource_urls or [],
         "required_narration_suffix": _final_narration_suffix(instructions),
         "fact_selection_requirement": (
-            "Every factual scene must select up to six fact_ids from research.facts. For explicit "
-            "detail-* requested topics, normally use one mechanism/topic per content scene. Base its actual "
+            "Every factual scene must select up to six fact_ids from research.facts. Base its actual "
             "claims only on those selected facts; respect each fact's derived subject_scope: "
             "supporting_only facts describe examples, and only primary-backed facts can "
             "define the main project's properties; cite only their evidence_refs (plus a "
