@@ -7,7 +7,7 @@ from typing import Any
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
 from .flow_language import distinct_flow_actions
-from .grounding import GROUNDING_CONTRACT, _declarative_text, verify_claims
+from .grounding import GROUNDING_CONTRACT, _declarative_text, deterministic_decision, verify_claims
 from .inventory import _EMBEDDED_ROOTS
 from .progress import Progress, step
 from .providers import LLMProvider
@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v6"
-COVERAGE_CONTRACT = "requested-primary-coverage-v5"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v7"
+COVERAGE_CONTRACT = "requested-primary-coverage-v6"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
@@ -363,6 +363,204 @@ def _workflow_source_match(excerpt: str, spec: dict[str, Any]) -> bool:
     return _workflow_source_passage(excerpt, spec) is not None
 
 
+_CODE_SUFFIXES = {
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".py", ".rb", ".pl",
+    ".js", ".ts", ".c", ".h", ".cc", ".cpp", ".rs", ".go", ".java",
+}
+_CODE_CONTROL = re.compile(
+    r"^(?:if|then|fi|else|elif|for|while|until|case|esac|do|done|function|"
+    r"(?:async\s+)?def|class|return|break|continue|set|read)\b", re.I,
+)
+_CODE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*=")
+_CODE_EXECUTABLE = re.compile(
+    r"(?:^|\s)--?[A-Za-z0-9][\w-]*|[|&;<>]{1,2}|\$[A-Za-z_][\w]*|"
+    r"(?:^|\s)/(?:[\w.@+~-]+/)*[\w.@+~-]+|\b[A-Za-z_][\w.]*\s*\([^)]*\)",
+)
+
+
+def _code_line(value: str) -> bool:
+    """Recognize executable-looking source without assigning it semantic meaning."""
+    line = value.strip().strip(chr(96))
+    if (not line or line.startswith(("#", "//", "/*", "*", "*/")) or
+            _CODE_CONTROL.match(line) or _CODE_ASSIGNMENT.match(line)):
+        return False
+    command = line.split(None, 1)[0].casefold() if line.split() else ""
+    if command in {"echo", "printf", "read", "true", "false"}:
+        return False
+    return bool(_CODE_EXECUTABLE.search(line))
+
+
+def _code_workflow_source_match(entry: dict[str, Any], spec: dict[str, Any]) -> bool:
+    """Allow focused workflow recovery to inspect relevant primary executable code."""
+    excerpt = entry.get("excerpt")
+    if not isinstance(excerpt, str) or spec.get("kind") != "workflow":
+        return False
+    path = str(entry.get("relative_path") or "")
+    suffix = Path(path).suffix.casefold()
+    code_like = suffix in _CODE_SUFFIXES or excerpt.startswith("#!") or any(
+        _code_line(line) for line in excerpt.splitlines()
+    )
+    if not code_like:
+        return False
+    terms = {term.casefold() for term in spec.get("terms", []) if len(term) >= 3}
+    if not terms:
+        return False
+    folded = (path + "\n" + excerpt).casefold()
+    path_folded = path.casefold()
+    overlap = {term for term in terms if term in folded}
+    path_overlap = {term for term in terms if term in path_folded}
+    needed = min(2, len(terms))
+    return bool(any(_code_line(line) for line in excerpt.splitlines()) and
+                (len(overlap) >= needed or path_overlap))
+
+
+def _collapsed_support(value: str) -> str:
+    value = re.sub(r"\`\`\`[^\n]*\n?", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _repair_support_span(claim: str, span: str, excerpt: str) -> str | None:
+    """Recover one bounded exact local span from the model-cited source only."""
+    if 12 <= len(span) <= MAX_SUPPORT_CHARS and span in excerpt:
+        return span
+    exact_region = span if span in excerpt else None
+    raw_shape = _collapsed_support(span)
+    source_shape = _collapsed_support(excerpt)
+    if exact_region is None and (
+        len(raw_shape) < 12 or not raw_shape or raw_shape not in source_shape
+    ):
+        return None
+    region = exact_region or excerpt
+    lines = region.splitlines(keepends=True)
+    if not lines:
+        return None
+    claim_words = _request_words(claim)
+    raw_words = _request_words(span)
+    candidates: list[tuple[tuple[int, int, int, int], str]] = []
+    for start in range(len(lines)):
+        text = ""
+        for end in range(start, min(len(lines), start + 16)):
+            text += lines[end]
+            candidate = text.strip("\r\n")
+            if len(candidate) > MAX_SUPPORT_CHARS:
+                break
+            if len(candidate) < 12 or candidate not in excerpt:
+                continue
+            if exact_region is None:
+                shape = _collapsed_support(candidate)
+                if shape not in raw_shape and raw_shape not in shape:
+                    continue
+            decision = deterministic_decision(claim, [candidate])
+            if decision == "reject":
+                continue
+            words = _request_words(candidate)
+            score = (
+                int(decision == "accept"),
+                len(claim_words & words),
+                len(raw_words & words),
+                -len(candidate),
+            )
+            candidates.append((score, candidate))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score = candidates[0][0]
+    best = list(dict.fromkeys(candidate for score, candidate in candidates
+                              if score == best_score))
+    return best[0] if len(best) == 1 else None
+
+
+def _exact_code_operation_facts(
+    batch: list[dict[str, Any]], spec: dict[str, Any], roles: dict[str, str],
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    """Keep a small exact-code floor when focused model research omits operations."""
+    terms = {term.casefold() for term in spec.get("terms", []) if len(term) >= 3}
+    ranked: list[tuple[int, int, int, str, str]] = []
+    for entry_index, entry in enumerate(batch):
+        ref, excerpt = entry.get("ref"), entry.get("excerpt")
+        if (not isinstance(ref, str) or roles.get(ref) != "primary" or
+                entry.get("evidence_role", "primary") != "primary" or
+                not isinstance(excerpt, str) or
+                not _code_workflow_source_match(entry, spec)):
+            continue
+        path_folded = str(entry.get("relative_path") or "").casefold()
+        path_overlap = {term for term in terms if term in path_folded}
+        for line_index, raw in enumerate(excerpt.splitlines()):
+            line = raw.strip()
+            if not (12 <= len(line) <= 360 and _code_line(line) and line in excerpt):
+                continue
+            folded = line.casefold()
+            line_overlap = {term for term in terms if term in folded}
+            semantic_bonus = 0
+            if "backup" in terms and ".bak" in folded:
+                semantic_bonus += 2
+            if "reset" in terms and (
+                (".bak" in folded and re.search(r"\b(?:mv|rm)\b", folded)) or
+                "load-module" in folded or re.search(r"s/\^#", folded)
+            ):
+                semantic_bonus += 2
+            if not line_overlap and not path_overlap and not semantic_bonus:
+                continue
+            option_bonus = int(bool(re.search(r"(?:^|\s)--?[\w-]+", line)))
+            score = 6 * len(line_overlap) + 3 * len(path_overlap) + semantic_bonus + option_bonus
+            ranked.append((score, -entry_index, -line_index, ref, line))
+    ranked.sort(reverse=True)
+    facts = []
+    per_ref: dict[str, int] = {}
+    seen: set[tuple[str, str]] = set()
+
+    def keep(ref: str, claim: str) -> None:
+        marker = (ref, claim)
+        if (marker in seen or per_ref.get(ref, 0) >= MAX_FACTS_PER_REF or
+                len(facts) >= limit):
+            return
+        seen.add(marker)
+        facts.append({
+            "claim": claim,
+            "evidence_refs": [ref],
+            "subject_scope": "main_subject",
+            "support": [{"evidence_ref": ref, "text": claim}],
+            "phase": "unknown",
+            "confidence": "high",
+            "direct_code_evidence": True,
+        })
+        per_ref[ref] = per_ref.get(ref, 0) + 1
+
+    # Preserve at least one exact operation from each distinct selected source
+    # before filling the remaining bounded slots by relevance.
+    reserved: set[str] = set()
+    for _score, _entry, _line, ref, claim in ranked:
+        if ref in reserved:
+            continue
+        keep(ref, claim)
+        reserved.add(ref)
+        if len(facts) >= limit:
+            return facts
+
+    # Explicitly requested backup/reset details are easy to lose behind more
+    # lexically obvious service names. Reserve exact mutation lines for them
+    # before the remaining relevance-ranked fill.
+    if "backup" in terms:
+        for _score, _entry, _line, ref, claim in ranked:
+            if ".bak" in claim.casefold():
+                keep(ref, claim)
+                break
+    if "reset" in terms:
+        for _score, _entry, _line, ref, claim in ranked:
+            folded = claim.casefold()
+            if ((".bak" in folded and re.search(r"\b(?:mv|rm)\b", folded)) or
+                    "load-module" in folded or re.search(r"s/\^#", folded)):
+                keep(ref, claim)
+                break
+
+    for _score, _entry, _line, ref, claim in ranked:
+        keep(ref, claim)
+        if len(facts) >= limit:
+            break
+    return facts
+
+
 def _coverage_candidates(
     inventory: dict[str, Any], missing: dict[str, dict[str, Any]],
     title_hint: str, system: str, context_size: int,
@@ -381,35 +579,46 @@ def _coverage_candidates(
         if not excerpt.strip() or len(excerpt) > MAX_COVERAGE_CHARS:
             continue
         prose = _declarative_text(excerpt)
-        if not prose:
-            continue
-        named = bool(title_key and title_key in re.sub(r"[^a-z0-9]", "", prose.casefold()))
+        named = bool(prose and title_key and
+                     title_key in re.sub(r"[^a-z0-9]", "", prose.casefold()))
         matched = set()
+        code_workflow = False
         for key, spec in missing.items():
-            if spec["kind"] in {"purpose", "overview"} and not named:
+            if spec["kind"] in {"purpose", "overview"}:
+                if named and _covers_request(prose, spec):
+                    matched.add(key)
                 continue
             if spec["kind"] == "workflow":
-                if _workflow_source_match(excerpt, spec):
+                prose_match = bool(prose and _workflow_source_match(excerpt, spec))
+                code_match = _code_workflow_source_match(entry, spec)
+                if prose_match or code_match:
                     matched.add(key)
-            elif _covers_request(prose, spec):
+                    code_workflow = code_workflow or code_match
+            elif prose and _covers_request(prose, spec):
                 matched.add(key)
         if not matched:
             continue
         path = Path(entry.get("relative_path") or "")
         score = (8 * len(matched) + 6 * (path.suffix.casefold() in doc_exts) +
-                 4 * named + 2 * (path.name.casefold() == "readme.md") -
+                 4 * named + 3 * code_workflow +
+                 2 * (path.name.casefold() == "readme.md") -
                  min(4, len(path.parts)))
         ranked.append((score, -index, entry, matched))
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
     selected: list[dict[str, Any]] = []
     selected_refs: set[str] = set()
+    selected_excerpts: set[str] = set()
     covered: set[str] = set()
-    for topic in missing:
+    for topic, spec in missing.items():
         if topic in covered:
             continue
+        quota = 2 if spec.get("kind") == "workflow" else 1
+        picked = 0
         for _score, _order, entry, matched in ranked:
-            if topic not in matched or entry["ref"] in selected_refs:
+            excerpt_key = entry["excerpt"].strip()
+            if (topic not in matched or entry["ref"] in selected_refs or
+                    excerpt_key in selected_excerpts):
                 continue
             batch = selected + [entry]
             if (len(batch) > MAX_COVERAGE_RECORDS or
@@ -421,8 +630,12 @@ def _coverage_candidates(
                 continue
             selected.append(entry)
             selected_refs.add(entry["ref"])
-            covered.update(matched)
-            break
+            selected_excerpts.add(excerpt_key)
+            picked += 1
+            if picked >= quota:
+                break
+        if picked:
+            covered.add(topic)
     return selected
 
 
@@ -897,12 +1110,15 @@ def research(
                     invalid_support = True
                     break
                 ref, span = item.get("evidence_ref"), item.get("text")
-                if (ref not in refs or not isinstance(span, str) or
-                        not 12 <= len(span) <= MAX_SUPPORT_CHARS or
-                        span not in (by_ref[ref].get("excerpt") or "")):
+                if ref not in refs or not isinstance(span, str):
                     invalid_support = True
                     break
-                support.append({"evidence_ref": ref, "text": span})
+                excerpt = by_ref[ref].get("excerpt") or ""
+                exact = _repair_support_span(claim, span, excerpt)
+                if exact is None:
+                    invalid_support = True
+                    break
+                support.append({"evidence_ref": ref, "text": exact})
             if invalid_support or not support or any(
                 not any(item["evidence_ref"] == ref for item in support) for ref in refs
             ):
@@ -1047,17 +1263,31 @@ def research(
                 )
                 if "workflow" not in remaining:
                     return canonical
+                additions: list[dict[str, Any]] = []
                 exact = _exact_workflow_fact(batch, remaining["workflow"], roles)
-                if exact is None or "C0001" not in verify_claims(provider, [{
+                if exact is not None and "C0001" in verify_claims(provider, [{
                     "id": "C0001", "claim": exact["claim"],
                     "support": [exact["support"][0]["text"]],
                 }], project_dir, "research", progress):
+                    additions.append(exact)
+                # Code-heavy projects may have no declarative prose at all.
+                # Preserve a bounded floor of exact executable source lines so
+                # focused recovery cannot collapse to zero facts merely because
+                # the model omitted or malformed its code support quotations.
+                additions.extend(_exact_code_operation_facts(
+                    batch, remaining["workflow"], roles,
+                ))
+                if not additions:
                     return canonical
                 ranked = _rank_requested_facts(
-                    canonical["facts"] + [exact], instructions, title_hint,
+                    canonical["facts"] + additions, instructions, title_hint,
                 )
                 canonical["facts"] = _limit_by_ref(
-                    ranked, lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
+                    _dedupe(ranked, lambda fact: (
+                        fact["claim"].casefold(), tuple(fact["evidence_refs"]),
+                        fact.get("phase", "unknown"),
+                    )),
+                    lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
                 )[:MAX_FACTS_PER_REQUEST]
                 return canonical
 
