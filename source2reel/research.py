@@ -127,6 +127,12 @@ _PURPOSE = re.compile(
     r"\b(?:purpose|goal|motivation|because|so that|designed to|created to|"
     r"built to|aims? to|exists? to|in order to)\b", re.I,
 )
+_RELATION = re.compile(
+    r"\b(?:cause(?:s|d|ing)?|lead(?:s|ing)?\s+to|result(?:s|ed|ing)?\s+in|"
+    r"because|due\s+to|therefore|prevents?|avoid(?:s|ed|ing)?|"
+    r"eliminat(?:e|es|ed|ing)|means?)\b|->|→",
+    re.I,
+)
 _WORKFLOW = re.compile(
     r"\b(?:pipeline|workflow|stages?|transform(?:s|ed|ing)?|turn(?:s|ed|ing)?)\b", re.I,
 )
@@ -282,7 +288,16 @@ def _requested_concepts(instructions: str, title_hint: str) -> dict[str, dict[st
     clauses = _explicit_request_clauses(instruction)
     if re.search(r"\b(?:what|overview|define|definition)\b", instruction, re.I):
         concepts["overview"] = {"kind": "overview"}
-    if re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
+    why_body = next((body for cue, body in clauses if cue == "why"), "")
+    if why_body and re.search(
+        r"\b(?:cause(?:s|d|ing)?|lead(?:s|ing)?\s+to|result(?:s|ed|ing)?\s+in|"
+        r"because|due\s+to)\b",
+        why_body, re.I,
+    ):
+        terms = _request_words(why_body) - _request_words(title_hint)
+        if terms:
+            concepts["relationship"] = {"kind": "relationship", "terms": sorted(terms)}
+    elif re.search(r"\b(?:why|purpose|motivation|reason|goal)\b", instruction, re.I):
         concepts["purpose"] = {"kind": "purpose"}
     if re.search(r"\b(?:how|workflow|pipeline|process|stages?)\b", instruction, re.I):
         how_body = next((body for cue, body in clauses if cue == "how"), "")
@@ -314,6 +329,10 @@ def _covers_request(claim: str, spec: dict[str, Any]) -> bool:
     if kind == "overview":
         return bool(_OVERVIEW.search(claim))
     words = _request_words(claim)
+    if kind == "relationship":
+        terms = set(spec.get("terms", []))
+        overlap = words & terms
+        return bool(_RELATION.search(claim) and len(overlap) >= min(2, len(terms)))
     if kind == "distinction":
         # A generic overlap (e.g. "explainer production") must not imply
         # that a named production profile was actually covered. The compared
