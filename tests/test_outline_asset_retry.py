@@ -245,6 +245,32 @@ class OutlineAssetRetryTests(unittest.TestCase):
             self.assertFalse(any("asset_ref" in s for s in recovered["scenes"]))
             self.assertEqual(non_visual.outline_calls, 1)
 
+            class NonVisualAssetWithRepairableFactIds(Provider):
+                def complete_json(self, system, user):
+                    request = json.loads(user)
+                    result = super().complete_json(system, user)
+                    if request.get("storyboard_mode") == "outline":
+                        for intent in result["scene_intents"]:
+                            intent["fact_ids"] = ["F9999"]
+                            intent["asset_ref"] = intent["evidence_refs"][0]
+                    return result
+
+            repairable = project.parent / "recover-fact-id-and-asset"
+            repairable.mkdir()
+            combined = NonVisualAssetWithRepairableFactIds()
+            repaired = planner._multipart_episode(
+                combined, "storyboard", ask,
+                repairable, 8192, 4096, 1024, 0, None, "scope",
+            )
+            self.assertEqual([s["type"] for s in repaired["scenes"]],
+                             ["SUMMARY", "SUMMARY", "SUMMARY"])
+            self.assertEqual([s["fact_ids"] for s in repaired["scenes"]],
+                             [["F0001"], ["F0002"], ["F0003"]])
+            self.assertEqual([s["evidence_refs"] for s in repaired["scenes"]],
+                             [["E0001"], ["E0002"], ["E0003"]])
+            self.assertFalse(any("asset_ref" in s for s in repaired["scenes"]))
+            self.assertEqual(combined.outline_calls, 1)
+
             other = project.parent / "reject"
             other.mkdir()
             with self.assertRaisesRegex(StructuredOutputError, "asset_ref"):

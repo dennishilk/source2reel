@@ -1963,17 +1963,40 @@ def _recover_outline_assets(
             if ((require_explicit_cited_asset and (
                     not isinstance(selected_asset, str) or not selected_asset.strip() or
                     selected_asset not in refs)) or
-                    any(ref not in allowed for ref in refs) or
                     selected_asset is not None and
                     (not isinstance(selected_asset, str) or
-                     selected_asset and selected_asset not in allowed) or
-                    not _valid_outline_fact_ids(
-                        raw.get("fact_ids"),
-                        {"type": raw["type"], "evidence_refs": refs}, ask,
-                    )):
+                     selected_asset and selected_asset not in allowed)):
                 return None
-            downgraded = {**raw, "type": "SUMMARY"}
-            downgraded.pop("asset_ref", None)
+
+            # Match normal outline canonicalization: a stale/invalid fact_id may
+            # still be repaired when the cited evidence maps uniquely to one
+            # existing research fact. Do not make asset recovery stricter than
+            # the primary normalization path.
+            repair_intent = {
+                "id": raw.get("id") or f"s{index:03d}",
+                "type": raw["type"],
+                "evidence_refs": list(dict.fromkeys(refs)),
+            }
+            if SCENE_CONTRACTS[raw["type"]].allows_asset_ref:
+                repair_intent["asset_ref"] = selected_asset
+            valid_fact_ids = _valid_outline_fact_ids(raw.get("fact_ids"), repair_intent, ask)
+            if not valid_fact_ids and any(ref not in allowed for ref in refs):
+                return None
+            try:
+                fact_ids = _outline_fact_ids(raw.get("fact_ids"), repair_intent, ask)
+                downgraded = {**raw, "type": "SUMMARY", "fact_ids": fact_ids}
+                downgraded.pop("asset_ref", None)
+                downgraded["evidence_refs"] = _canonical_evidence_refs(
+                    {
+                        "id": repair_intent["id"],
+                        "type": "SUMMARY",
+                        "fact_ids": fact_ids,
+                        "evidence_refs": refs,
+                    },
+                    ask, allowed,
+                )
+            except (StructuredOutputError, ValueError):
+                return None
             repaired.append(downgraded)
             changed = True
         else:
