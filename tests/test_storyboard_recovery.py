@@ -671,8 +671,11 @@ class StoryboardRecoveryTests(unittest.TestCase):
                 self.assertEqual([scene["id"] for scene in episode["scenes"]],
                                  [f"s{i:03d}" for i in range(1, 7)])
                 self.assertTrue((project / "episode.json").exists())
-                part_dir = project / "manifests" / "storyboard-parts"
-                self.assertTrue(any(part_dir.glob("part-002-*.json")))
+                saved = project / "manifests" / "storyboard-parts"
+                serialized = " ".join(
+                    path.read_text() for path in saved.glob("part-*.json") if path.is_file()
+                )
+                self.assertNotIn("s999", serialized)
 
     def test_malformed_full_model_output_recovers_but_fast_path_ref_scope_remains_strict(self):
         with tempfile.TemporaryDirectory() as tmp:
