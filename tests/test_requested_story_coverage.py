@@ -122,8 +122,11 @@ class RequestedStoryCoverageTests(unittest.TestCase):
             self.assertIn(f"{topic} -> choose one of {fact_id}", feedback)
         self.assertNotIn("distinction-1 ->", feedback)
         self.assertNotIn("rewrite summary", feedback.lower())
-        self.assertEqual(planner._outline_payload(self.ask)["requested_topic_fact_ids"],
+        payload = planner._outline_payload(self.ask)
+        self.assertEqual(payload["requested_topic_fact_ids"],
                          self.ask["requested_topic_fact_ids"])
+        self.assertEqual(payload["requested_topic_specs"],
+                         self.ask["requested_topic_specs"])
 
     def test_one_two_and_many_content_scenes_repeating_a_fact_fail(self):
         for count in (1, 2, 5):
