@@ -1415,6 +1415,56 @@ def _reference_focus(title_hint: str, instructions: str, inventory: dict[str, An
     return False
 
 
+def _stabilize_requested_relationship_facts(
+    provider: LLMProvider,
+    facts: list[dict[str, Any]],
+    inventory: dict[str, Any],
+    instructions: str,
+    title_hint: str,
+    roles: dict[str, str],
+    project_dir: Path,
+    progress: Progress | None,
+) -> list[dict[str, Any]]:
+    """Reserve requested explicit primary-source relationships."""
+    additions = []
+    for spec in _requested_concepts(instructions, title_hint).values():
+        if spec.get("kind") != "relationship":
+            continue
+        exact = _exact_relationship_fact(inventory["evidence"], spec, roles)
+        if exact is None:
+            continue
+        check_id = "REL-STABLE"
+        accepted = verify_claims(provider, [{
+            "id": check_id,
+            "claim": exact["claim"],
+            "support": [exact["support"][0]["text"]],
+        }], project_dir, "research", progress)
+        if check_id in accepted:
+            additions.append(exact)
+    if not additions:
+        return facts
+    keys = {
+        (fact["claim"].casefold(), tuple(fact["evidence_refs"]))
+        for fact in additions
+    }
+    merged = _dedupe(additions + facts, lambda fact: (
+        fact["claim"].casefold(), tuple(fact["evidence_refs"]),
+        fact.get("phase", "unknown"),
+    ))
+    ordinary = [
+        fact for fact in _rank_requested_facts(merged, instructions, title_hint)
+        if (fact["claim"].casefold(), tuple(fact["evidence_refs"])) not in keys
+    ]
+    ordered = additions + ordinary
+    return _limit_by_ref(
+        _dedupe(ordered, lambda fact: (
+            fact["claim"].casefold(), tuple(fact["evidence_refs"]),
+            fact.get("phase", "unknown"),
+        )),
+        lambda fact: fact["evidence_refs"], MAX_FACTS_PER_REF,
+    )[:MAX_FACTS_PER_REQUEST]
+
+
 def _stabilize_requested_code_facts(
     provider: LLMProvider,
     facts: list[dict[str, Any]],
