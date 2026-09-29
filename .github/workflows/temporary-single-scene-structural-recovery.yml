@@ -1,0 +1,19 @@
+name: Temporary single-scene structural recovery verification
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --python 3.12
+      - run: uv pip install pytest
+      - run: env PYTHONPATH=. uv run python -m py_compile source2reel/planner.py
+      - run: env PYTHONPATH=. uv run pytest -q tests/test_storyboard_recovery.py tests/test_narration_fallback.py
+      - run: env PYTHONPATH=. uv run pytest -q tests -k "not repository_launcher_uses_local_interpreter"
