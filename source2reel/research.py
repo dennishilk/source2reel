@@ -380,7 +380,7 @@ _CODE_EXECUTABLE = re.compile(
 
 def _code_line(value: str) -> bool:
     """Recognize executable-looking source without assigning it semantic meaning."""
-    line = value.strip().strip("\`")
+    line = value.strip().strip(chr(96))
     if (not line or line.startswith(("#", "//", "/*", "*", "*/")) or
             _CODE_CONTROL.match(line) or _CODE_ASSIGNMENT.match(line)):
         return False
