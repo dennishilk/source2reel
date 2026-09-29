@@ -2590,7 +2590,12 @@ def _scene_part_payload(
     media = [item for item in ask["media_inventory"] if item["ref"] in supplied]
     assets = [asset for asset in ask["research"].get("assets", [])
               if asset.get("evidence_ref") in supplied]
-    index = [item for item in ask["evidence_index"] if item["ref"] in supplied]
+    context_refs = {
+        item.get("evidence_ref") for item in ask.get("source_context", [])
+        if isinstance(item, dict) and isinstance(item.get("evidence_ref"), str)
+    }
+    index = [item for item in ask["evidence_index"]
+             if item["ref"] in supplied or item["ref"] in context_refs]
     all_intents = outline["scene_intents"]
     first = next(index for index, item in enumerate(all_intents)
                  if item["id"] == intents[0]["id"])
