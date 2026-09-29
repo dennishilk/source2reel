@@ -204,6 +204,7 @@ def _make_ask(
     visual_refs = [ref for ref in _visual_asset_refs(evidence_index)
                    if ref in _research_refs(identified)]
     roles = {entry["ref"]: entry.get("evidence_role") or "primary" for entry in evidence_index}
+    paths = {entry["ref"]: str(entry.get("relative_path") or "") for entry in evidence_index}
     scoped_refs = set(roles)
     requested_fact_groups = _requested_fact_groups(
         [fact for fact in identified["facts"]
@@ -212,7 +213,7 @@ def _make_ask(
              span.get("evidence_ref") in fact["evidence_refs"] and
              isinstance(span.get("text"), str) and span["text"].strip()
              for span in fact.get("support", []))],
-        instructions, title_hint, roles,
+        instructions, title_hint, roles, paths,
     )
     requested = _explicit_topic_words(instructions) - _topic_words(title_hint)
     ranked = sorted((
