@@ -71,6 +71,16 @@ Every evidence item receives a stable ref such as `E0007` plus path, SHA-256, ty
 
 The research pass labels facts as `development`, `final`, `background` or `unknown`. The storyboard pass is instructed not to merge prototype architecture into final architecture.
 
+The planner also receives a small deterministic set of verbatim `source_context`
+passages from scoped original documents. These passages preserve framing,
+terminology, grouping, menu/flow context and relationships that can disappear
+when research is reduced to atomic facts. They are narrative context only:
+they never authorize a factual proposition. Titles, summaries, narration,
+diagrams and annotations still require selected evidence-grounded research
+facts. The same bounded context is carried through direct planning and every
+map/reduce level, while trusted fact metadata such as conditional
+`operation_guard` is preserved through compaction.
+
 ## Revision contract
 
 `source2reel revise <project> "instruction"` sends the current episode JSON, research file and valid evidence refs to the local model. The model returns a complete revised episode JSON. Previous versions are stored under `revisions/`; scene code is not rebuilt manually.
