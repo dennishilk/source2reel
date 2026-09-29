@@ -343,8 +343,15 @@ def _fact_covers_request(
     claim = str(fact.get("claim", ""))
     if _covers_request(claim, spec):
         return True
-    if (spec.get("kind") != "detail" or not fact.get("direct_code_evidence") or
-            not paths or not fact.get("evidence_refs")):
+    if spec.get("kind") != "detail" or not fact.get("direct_code_evidence"):
+        return False
+    support_text = "\n".join(
+        str(span.get("text") or "") for span in fact.get("support", [])
+        if isinstance(span, dict)
+    )
+    if support_text.strip() and _covers_request(support_text, spec):
+        return True
+    if not paths or not fact.get("evidence_refs"):
         return False
     identity = {term for term in spec.get("terms", [])
                 if term not in _REQUEST_DETAIL_SOURCE_ROLE and len(term) >= 4}
