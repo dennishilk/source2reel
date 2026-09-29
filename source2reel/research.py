@@ -7,7 +7,7 @@ from typing import Any
 
 from .chunking import checkpointed_complete_json, checkpointed_split_json, fits_context, split_for_context
 from .flow_language import distinct_flow_actions
-from .grounding import GROUNDING_CONTRACT, _declarative_text, verify_claims
+from .grounding import GROUNDING_CONTRACT, _declarative_text, deterministic_decision, verify_claims
 from .inventory import _EMBEDDED_ROOTS
 from .progress import Progress, step
 from .providers import LLMProvider
@@ -22,8 +22,8 @@ MAX_RANKED_CANDIDATES = 128
 MAX_COVERAGE_RECORDS = 4
 MAX_COVERAGE_CHARS = 16000
 MAX_SUPPORT_CHARS = 1024
-RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v6"
-COVERAGE_CONTRACT = "requested-primary-coverage-v5"
+RESEARCH_SEMANTICS_CONTRACT = "requested-topic-semantics-v7"
+COVERAGE_CONTRACT = "requested-primary-coverage-v6"
 
 
 def _payload(batch_number: int, evidence: list[dict[str, Any]], title_hint: str, instructions: str) -> dict[str, Any]:
