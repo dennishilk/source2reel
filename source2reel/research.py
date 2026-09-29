@@ -1149,6 +1149,15 @@ def _coverage_candidates(
                 if prose_match or code_match:
                     matched.add(key)
                     code_workflow = code_workflow or code_match
+            elif spec["kind"] == "relationship":
+                if any(
+                    _covers_request(
+                        re.sub(r"^(?:[-*+]\s+|>\s*)", "", line.strip()),
+                        spec,
+                    )
+                    for line in excerpt.splitlines() if line.strip()
+                ):
+                    matched.add(key)
             elif prose and _covers_request(prose, spec):
                 matched.add(key)
         if not matched:
