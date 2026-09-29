@@ -192,25 +192,51 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         saved = json_load(self.project / "manifests" / "research.json")
         self.assertEqual(saved, result)
 
-    def test_exact_code_floor_survives_even_when_focused_model_omits_code_facts(self):
+    def test_exact_code_floor_survives_with_verified_spoken_claims(self):
         provider = SpdifProvider(omit_coverage_code=True)
         result = self.run_research(provider)
         claims = [item["claim"] for item in result["facts"]]
-        self.assertIn("systemctl --user restart pipewire pipewire-pulse || true", claims)
-        self.assertIn("play -n -c2 synth sin gain -100", claims)
-        self.assertTrue(any(".bak" in claim for claim in claims))
+        self.assertIn(
+            "The script restarts `pipewire` and `pipewire-pulse` with `systemctl`.",
+            claims,
+        )
+        self.assertIn(
+            "The script runs `sleep 3` followed by `play -n -c2 synth sin gain -100`.",
+            claims,
+        )
+        self.assertIn(
+            "The script copies `/etc/pulse/default.pa` to backup file "
+            "`/etc/pulse/default.pa.bak`.",
+            claims,
+        )
+        self.assertIn(
+            "The script moves `/etc/pulse/default.pa.bak` back to "
+            "`/etc/pulse/default.pa`, restoring the saved file.",
+            claims,
+        )
+        self.assertIn(
+            "The script writes the `pcm.spdif_keepalive` ALSA configuration block "
+            "to `$HOME/.asoundrc`.",
+            claims,
+        )
+        self.assertIn(
+            "The script runs `pulseaudio -k` followed by `pulseaudio --start`.",
+            claims,
+        )
         exact = [item for item in result["facts"] if item.get("direct_code_evidence")]
-        self.assertGreaterEqual(len(exact), 3)
+        self.assertGreaterEqual(len(exact), 5)
         self.assertTrue(all(item["evidence_refs"][0] in {"E0004", "E0008", "E0009"}
                             for item in exact))
         self.assertFalse(any(item["evidence_refs"][0] in {"E0002", "E0003"}
                              for item in exact))
         self.assertFalse(any("Implementierung erweitern" in item["claim"] for item in result["facts"]))
+        self.assertFalse(any(item["claim"].strip() == item["support"][0]["text"].strip()
+                             for item in exact
+                             if item["claim"].startswith("The script ")))
         for item in exact:
-            self.assertEqual(item["claim"], item["support"][0]["text"])
             source = next(entry["excerpt"] for entry in self.inventory["evidence"]
                           if entry["ref"] == item["evidence_refs"][0])
-            self.assertIn(item["claim"], source)
+            self.assertIn(item["support"][0]["text"], source)
 
     def test_explicit_subtopics_become_grounded_planner_requirements(self):
         provider = SpdifProvider(omit_coverage_code=True)
@@ -240,10 +266,21 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         by_id = {fact["fact_id"]: fact["claim"] for fact in ask["research"]["facts"]}
         reset_claims = {by_id[fact_id] for fact_id in groups["detail-5"]}
         helper_claims = {by_id[fact_id] for fact_id in groups["detail-6"]}
-        self.assertTrue(any("s/^#" in claim or "load-module" in claim or
-                            (".bak" in claim and "mv " in claim)
-                            for claim in reset_claims))
-        self.assertIn("play -n -c2 synth sin gain -100", helper_claims)
+        self.assertIn(
+            "The script moves `/etc/pulse/default.pa.bak` back to "
+            "`/etc/pulse/default.pa`, restoring the saved file.",
+            reset_claims,
+        )
+        self.assertNotIn(
+            "The script writes the `pcm.spdif_keepalive` configuration block "
+            "to `$HOME/.asoundrc`.",
+            reset_claims,
+        )
+        self.assertIn(
+            "The script runs `sleep 3` followed by "
+            "`play -n -c2 synth sin gain -100`.",
+            helper_claims,
+        )
 
         support_id = next(fact["fact_id"] for fact in ask["research"]["facts"]
                           if fact["claim"] == "The tool supports PulseAudio, PipeWire, and ALSA.")
