@@ -20,7 +20,8 @@ from .grounding import (GROUNDING_CONTRACT, GroundingError,
 from .progress import Progress, step
 from .providers import LLMProvider, StructuredOutputError
 from .research import (_consolidate, _fact_scope, _reference_focus,
-                       _requested_fact_groups, _verified_code_paraphrase)
+                       _requested_concepts, _requested_fact_groups,
+                       _verified_code_paraphrase)
 from .schema import (DIAGRAM_TYPES, EVIDENCE_TYPES, SCENE_CONTRACTS, SCENE_TYPES,
                      validate_episode, validate_presentation)
 from .util import json_dump, json_load
@@ -215,6 +216,10 @@ def _make_ask(
              for span in fact.get("support", []))],
         instructions, title_hint, roles, paths,
     )
+    requested_topic_specs = {
+        key: spec for key, spec in _requested_concepts(instructions, title_hint).items()
+        if key in requested_fact_groups
+    }
     requested = _explicit_topic_words(instructions) - _topic_words(title_hint)
     ranked = sorted((
         (len(requested & _topic_words(fact["claim"])), index, fact["fact_id"])
@@ -253,6 +258,7 @@ def _make_ask(
         ),
         "research": identified,
         "requested_topic_fact_ids": requested_fact_groups,
+        "requested_topic_specs": requested_topic_specs,
         "requested_topic_requirement": (
             "For each listed topic, select one listed fact ID in a content scene; "
             "SECTION_TITLE/OUTRO do not count."
@@ -1675,6 +1681,7 @@ def _outline_payload(ask: dict[str, Any]) -> dict[str, Any]:
         "priority_fact_ids": ask["priority_fact_ids"],
         "priority_requirement": ask["priority_requirement"],
         "requested_topic_fact_ids": ask.get("requested_topic_fact_ids", {}),
+        "requested_topic_specs": ask.get("requested_topic_specs", {}),
         "requested_topic_requirement": ask.get("requested_topic_requirement", ""),
         "scene_type_requirements": {
             "asset_ref_required_types": sorted(EVIDENCE_TYPES),
