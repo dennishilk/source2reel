@@ -896,6 +896,9 @@ def _exact_code_operation_facts(
             folded = line.casefold()
             line_overlap = _code_topic_overlap(terms, entry, line)
             semantic_bonus = 0
+            expanded_folded = _expanded_code_line(entry, line).casefold()
+            if terms & {"pulseaudio", "pipewire"} and "suspend-on-idle" in expanded_folded:
+                semantic_bonus += 4
             if "backup" in terms and ".bak" in folded:
                 semantic_bonus += 2
             if "reset" in terms and (
