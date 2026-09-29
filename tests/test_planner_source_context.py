@@ -49,7 +49,7 @@ chmod +x spdif-fix.sh
 3 - close
 """
 
-SCRIPT = """if [ "$CHOICE" = "1" ]; then
+SCRIPT = r"""if [ "$CHOICE" = "1" ]; then
     sudo sed -i '/module-suspend-on-idle/s/^/#/' /etc/pulse/default.pa
 elif [ "$CHOICE" = "2" ]; then
     sudo sed -i 's/^#\(.*module-suspend-on-idle.*\)/\1/' /etc/pulse/default.pa
