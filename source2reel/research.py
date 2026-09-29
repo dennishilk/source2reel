@@ -661,20 +661,40 @@ def _natural_code_operation(
         absolute = re.search(r"\s(/[A-Za-z0-9_./-]+)(?:\s+2>/dev/null|\s+\|\||$)", stripped)
         variable = re.search(r'["\']?\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)["\']?\s*(?:2>/dev/null|\|\||$)', stripped)
         destination = absolute.group(1) if absolute else None
-        context = support
+        context = _code_context_window(excerpt, stripped, before=8, after=0)
         if variable:
             assign = re.search(
                 rf"(?m)^\s*{re.escape(variable.group('name'))}\s*=\s*[\"'](?P<value>[^\"']+)[\"']\s*$",
                 excerpt,
             )
             if assign:
-                destination = assign.group("value")
-                context = _code_context_window(excerpt, stripped, before=8, after=0)
+                destination = f"$" + variable.group("name")
         if needle and destination:
+            backend = ""
+            context_folded = context.casefold()
+            if "pulseaudio" in context_folded or "/etc/pulse/" in destination.casefold():
+                backend = "PulseAudio "
+            elif "pipewire" in context_folded:
+                backend = "PipeWire "
             return (
-                f"The script comments matching `{needle.group(1)}` lines in `{destination}`.",
+                f"The {backend}branch comments matching `{needle.group(1)}` lines in "
+                f"`{destination}`.",
                 context,
             )
+
+    # pactl makes the PulseAudio module mutation explicit.
+    pactl = re.fullmatch(
+        r"pactl\s+(?P<action>unload-module|load-module)\s+(?P<module>\S+)"
+        r"(?:\s+2>/dev/null)?(?:\s+\|\|\s+true)?",
+        stripped,
+    )
+    if pactl:
+        verb = "unloads" if pactl.group("action") == "unload-module" else "loads"
+        context = _code_context_window(excerpt, stripped, before=4, after=0)
+        return (
+            f"The PulseAudio branch {verb} `{pactl.group('module')}` with `pactl`.",
+            context,
+        )
 
     # A literal uncomment substitution is precise enough to narrate directly.
     if re.search(r"\bsed\b", stripped) and re.search(r"s/\^#", stripped):
