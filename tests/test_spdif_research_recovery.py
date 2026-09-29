@@ -222,7 +222,8 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
             claims,
         )
         self.assertIn(
-            "The script runs `pulseaudio -k` followed by `pulseaudio --start`.",
+            "The script comments matching `module-suspend-on-idle` lines in "
+            "`/etc/pulse/default.pa`.",
             claims,
         )
         exact = [item for item in result["facts"] if item.get("direct_code_evidence")]
@@ -295,7 +296,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         result = self.run_research(provider)
         claims = {item["claim"] for item in result["facts"]}
         self.assertIn(
-            "The PulseAudio branch comments matching `module-suspend-on-idle` lines in "
+            "The script comments matching `module-suspend-on-idle` lines in "
             "`/etc/pulse/default.pa`.",
             claims,
         )
