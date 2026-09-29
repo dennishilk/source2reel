@@ -345,6 +345,8 @@ def _planner_records(
             "support": fact.get("support", []),
             "phase": fact.get("phase", "unknown"),
             "confidence": fact.get("confidence", "low"),
+            **({"operation_guard": fact["operation_guard"]}
+               if isinstance(fact.get("operation_guard"), dict) else {}),
             "subject_scope": _fact_scope(refs, {ref: evidence_by_ref[ref].get("evidence_role") or "primary"
                                                 for ref in refs}),
             "evidence_refs": refs,
@@ -480,6 +482,8 @@ def _normalize_capsules(
             "media_refs": list(dict.fromkeys(mrefs)),
             "phase": source.get("phase", "unknown"),
             "confidence": source.get("confidence", "low"),
+            **({"operation_guard": source["operation_guard"]}
+               if isinstance(source.get("operation_guard"), dict) else {}),
             "visual_purpose": str(capsule.get("visual_purpose", "")).strip()[:160],
         })
     return {"capsules": capsules}
@@ -489,8 +493,10 @@ def _dedupe_capsules(capsules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen = set()
     out = []
     for capsule in capsules:
+        guard = capsule.get("operation_guard")
+        guard_key = json.dumps(guard, ensure_ascii=False, sort_keys=True) if isinstance(guard, dict) else ""
         marker = (capsule.get("source_fact_id"), capsule["claim"].casefold(),
-                  tuple(capsule["evidence_refs"]))
+                  tuple(capsule["evidence_refs"]), guard_key)
         if marker in seen:
             continue
         seen.add(marker)
@@ -992,6 +998,8 @@ def _primary_anchors(
             "media_refs": [r for r in refs if r in media_refs],
             "phase": fact.get("phase", "unknown"),
             "confidence": fact.get("confidence", "low"), "visual_purpose": "",
+            **({"operation_guard": fact["operation_guard"]}
+               if isinstance(fact.get("operation_guard"), dict) else {}),
             "current_overview": fact.get("current_overview") is True,
         })
 
@@ -1121,6 +1129,8 @@ def _capsules_to_research(capsules: list[dict[str, Any]]) -> dict[str, Any]:
             "support": c["support"],
             "phase": c["phase"],
             "confidence": c["confidence"],
+            **({"operation_guard": c["operation_guard"]}
+               if isinstance(c.get("operation_guard"), dict) else {}),
         } for c in capsules if c.get("kind") != "asset"],
         "assets": [{
             "evidence_ref": ref,
