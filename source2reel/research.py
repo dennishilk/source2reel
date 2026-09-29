@@ -345,11 +345,12 @@ def _fact_covers_request(
         return True
     if spec.get("kind") != "detail" or not fact.get("direct_code_evidence"):
         return False
-    support_text = "\n".join(
+    support_spans = [
         str(span.get("text") or "") for span in fact.get("support", [])
-        if isinstance(span, dict)
-    )
-    if support_text.strip() and _covers_request(support_text, spec):
+        if isinstance(span, dict) and str(span.get("text") or "").strip()
+    ]
+    if any(_covers_request(line, spec)
+           for span in support_spans for line in span.splitlines() if line.strip()):
         return True
     if not paths or not fact.get("evidence_refs"):
         return False
@@ -638,8 +639,18 @@ def _natural_code_operation(
         cmd, first, second = simple.group("cmd"), simple.group("a"), simple.group("b")
         context = _code_context_window(excerpt, stripped, before=1, after=2)
         if cmd == "cp" and second:
+            if second == first + ".bak":
+                return (
+                    f"The script copies `{first}` to backup file `{second}`.",
+                    context,
+                )
             return f"The script copies `{first}` to `{second}`.", context
         if cmd == "mv" and second:
+            if first == second + ".bak":
+                return (
+                    f"The script moves `{first}` back to `{second}`, restoring the saved file.",
+                    context,
+                )
             return f"The script moves `{first}` to `{second}`.", context
         if cmd == "rm":
             return f"The script removes `{first}`.", context
@@ -689,8 +700,11 @@ def _natural_code_operation(
         block = re.search(r"\b(pcm\.[A-Za-z0-9_.-]+)\s*\{", window)
         destination = assign.group("value") if assign else f"${variable}"
         if block:
+            family = "ALSA " if (
+                "alsa" in variable.casefold() or ".asoundrc" in destination.casefold()
+            ) else ""
             return (
-                f"The script writes the `{block.group(1)}` configuration block "
+                f"The script writes the `{block.group(1)}` {family}configuration block "
                 f"to `{destination}`.",
                 window,
             )
@@ -724,9 +738,10 @@ def _natural_code_operation(
         )
         delay = re.fullmatch(r"sleep\s+(\d+(?:\.\d+)?)", previous)
         if delay:
+            exact_sequence = "\n".join(lines[line_index - 1:line_index + 1]).strip()
             return (
                 f"The script runs `{previous}` followed by `{stripped}`.",
-                previous + "\n" + stripped,
+                exact_sequence,
             )
 
     # When the same executable is visibly invoked with two adjacent variants,
@@ -748,9 +763,16 @@ def _natural_code_operation(
                 ordered = [value.strip() for value in lines[max(0, index - 1):index + 2]
                            if value.strip() in {stripped, sibling}]
                 if len(ordered) == 2:
+                    pair_indices = [
+                        i for i in range(max(0, index - 1), min(len(lines), index + 2))
+                        if lines[i].strip() in {stripped, sibling}
+                    ]
+                    exact_sequence = "\n".join(
+                        lines[min(pair_indices):max(pair_indices) + 1]
+                    ).strip()
                     return (
                         f"The script runs `{ordered[0]}` followed by `{ordered[1]}`.",
-                        "\n".join(ordered),
+                        exact_sequence,
                     )
     return None
 
