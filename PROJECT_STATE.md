@@ -11,8 +11,9 @@ explanation.
 Permanent fix:
 
 - the planner deterministically selects at most four topically relevant,
-  verbatim passages from scoped original documents, bounded to 4200 characters
-  total and 1400 characters per passage;
+  verbatim passages from scoped original documents, bounded to 1400 characters
+  per passage and at most 4200 characters total; the total budget scales down
+  automatically for smaller configured local-model contexts;
 - these `source_context` passages are narrative-only and cannot authorize new
   factual claims; storyboard facts remain the sole factual authority;
 - the same source context is injected into direct planning, planner
@@ -20,7 +21,17 @@ Permanent fix:
 - source-context refs stay in the planner evidence index for provenance without
   becoming valid scene citations by themselves;
 - conditional fact metadata such as `operation_guard` survives planner
-  records, compaction capsules and compact research;
+  records, compaction capsules and compact research, and is attached to both
+  naturalized and raw exact code facts;
+- facts from mutually exclusive values of the same operation guard cannot be
+  merged into one scene; exhausted outline recovery deterministically keeps one
+  branch and existing requested-coverage recovery restores the omitted branch
+  separately;
+- an explicit causal "why" request is represented as a relationship topic
+  rather than generic purpose when the request itself names a causal relation;
+  a missed relationship can be recovered only from an explicit bounded
+  primary-source line (for example `because`, `causes`, `leads to` or
+  `→`), never from inferred mechanism;
 - planner/compaction prompts explicitly use context for framing and grouping
   while forbidding facts invented from context alone.
 
