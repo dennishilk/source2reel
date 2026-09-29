@@ -61,6 +61,15 @@ sleep 3
 play -n -c2 synth sin gain -100
 """
 
+TASKS = """# Vorschläge
+
+- Entweder Dokumentation präzisieren (nur PulseAudio/PipeWire gesichert),
+- PulseAudio (removes `module-suspend-on-idle`)
+- PipeWire (disables suspend in `pipewire.conf`)
+- ALSA (creates `.asoundrc` for SPDIF keepalive)
+- oder Implementierung erweitern (vor Änderungen `~/.asoundrc.bak` anlegen und gezielt wiederherstellen).
+"""
+
 INSTRUCTIONS = (
     "Explain what this project solves, why SPDIF standby or suspend can cause delayed "
     "audio after playback resumes, how the tool detects and handles PulseAudio, PipeWire, "
@@ -145,6 +154,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         self.project = root / "projects" / "spdif-fix-guided"
         self.inventory = {"evidence": [
             entry("E0002", "README.md", README),
+            entry("E0003", "TASK_VORSCHLAEGE.md", TASKS),
             entry("E0004", "run.sh", SCRIPT),
             entry("E0008", "soundfixforautostart.sh", HELPER),
             entry("E0009", "spdif-fix.sh", SCRIPT),
@@ -175,6 +185,7 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         self.assertIn("E0002", refs)
         self.assertIn("E0008", refs)
         self.assertEqual(len({"E0004", "E0009"} & set(refs)), 1)
+        self.assertNotIn("E0003", refs)
 
         saved = json_load(self.project / "manifests" / "research.json")
         self.assertEqual(saved, result)
@@ -188,6 +199,11 @@ class SpdifResearchRecoveryTests(unittest.TestCase):
         self.assertTrue(any(".bak" in claim for claim in claims))
         exact = [item for item in result["facts"] if item.get("direct_code_evidence")]
         self.assertGreaterEqual(len(exact), 3)
+        self.assertTrue(all(item["evidence_refs"][0] in {"E0004", "E0008", "E0009"}
+                            for item in exact))
+        self.assertFalse(any(item["evidence_refs"][0] in {"E0002", "E0003"}
+                             for item in exact))
+        self.assertFalse(any("Implementierung erweitern" in item["claim"] for item in result["facts"]))
         for item in exact:
             self.assertEqual(item["claim"], item["support"][0]["text"])
             source = next(entry["excerpt"] for entry in self.inventory["evidence"]
