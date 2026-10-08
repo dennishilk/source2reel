@@ -1,56 +1,71 @@
-# VOICE
+# Voice
 
-## Dennis Explainer Voice — MVP candidate
+## Default Dennis Explainer voice
 
-Engine/model: Kokoro-82M v1.0  
-Inference: \`kokoro==0.9.4\`  
-Voice: \`am_michael\`  
-Language: American English (\`lang_code='a'\`)  
-Speed: 0.94  
-Target delivery: clear, calm, technical, natural  
-Model-rate output: 24 kHz mono; Source2Reel normalizes to -16 LUFS / -1.5 dBTP and 48 kHz for mux.
+| Setting | Value |
+| --- | --- |
+| Model | Kokoro-82M v1.0 |
+| Inference package | `kokoro==0.9.4` |
+| Stock voice | `am_michael` |
+| Language | American English, `lang_code="a"` |
+| Speed | 0.94 |
+| Model output | 24 kHz mono |
+| Video normalization | -16 LUFS / -1.5 dBTP, resampled to 48 kHz |
 
-This voice does not imitate or clone a named third party. It is a stock Kokoro voicepack.
+The stock voice was accepted in the physical Cthulhu reference render on
+23 September 2026. [voices/dennis-explainer.toml](voices/dennis-explainer.toml)
+records that approval; [PROJECT_STATE.md](PROJECT_STATE.md) records the
+reference episode. This does not replace a listening check after a fresh
+installation or a later voice/runtime change.
 
-## Runtime architecture
+The voice is a supplied Kokoro voicepack and does not clone or imitate a named
+third party.
 
-Kokoro is intentionally **not a Source2Reel core Python dependency**.
+## Separate CPU runtime
 
-The permanent-voice candidate is installed explicitly with:
+Kokoro and Torch are optional and stay outside the Source2Reel core dependency
+graph. Install the voice stack explicitly:
 
-\`\`\`bash
+```bash
 ./tools/setup-voice.sh
-\`\`\`
+```
 
-The script creates the separate runtime:
+It uses `.venv-voice-kokoro/bin/python`, selected by the voice profile.
+Setup installs the English `en_core_web_sm==3.8.0` spaCy model into that
+environment and verifies `spacy.load("en_core_web_sm")` and
+`KPipeline(lang_code="a")` before narration.
 
-\`\`\`text
-.venv-voice-kokoro/bin/python
-\`\`\`
+CPU Torch comes from the official CPU wheel index. Kokoro's remaining
+dependencies are installed separately, then `kokoro==0.9.4` is installed with
+`--no-deps`. The core resolver does not install a CUDA/NVIDIA Torch stack.
 
-Setup explicitly installs `en_core_web_sm==3.8.0` through `uv pip`
-into the voice interpreter. It checks `spacy.load("en_core_web_sm")` and
-initializes `KPipeline(lang_code="a")`, preventing Misaki from invoking
-pip during first narration. `./s2r voice-test` renders
-`output/tests/voice-test.wav` for a physical listening decision.
+Local LLM inference can use Vulkan independently of the CPU voice stack.
 
-The Dennis profile records that interpreter in \`voices/dennis-explainer.toml\`.
+## Listen to the configured voice
 
-For the first frozen baseline, Torch is installed from the official CPU wheel index. Kokoro's remaining non-Torch dependencies are installed separately and \`kokoro==0.9.4\` is then installed with \`--no-deps\`. This prevents the reusable core resolver from silently selecting a CUDA/NVIDIA Torch stack.
+```bash
+./s2r voice-test
+```
 
-The local LLM may simultaneously use Vulkan/RADV on the AMD GPU. ROCm is not required for TTS.
+The normalized sample is written to `output/tests/voice-test.wav`.
+Listen to it on the target machine before producing an episode.
 
 ## Pronunciation rules
 
-- CP-9951 → “C P ninety-nine fifty-one”
-- ARMv6 → “A R M V six”
-- /dev/fb1 → “slash dev slash F B one”
-- v.666 → “version six sixty-six”
+The default profile applies these substitutions before Kokoro narration:
 
-## eSpeak
+| Source text | Spoken form |
+| --- | --- |
+| CP-9951 | C P ninety-nine fifty-one |
+| ARMv6 | A R M V six |
+| /dev/fb1 | slash dev slash F B one |
+| v.666 | version six sixty-six |
 
-eSpeak is a renderer smoke-test fallback only. It is not the Dennis Explainer production voice and must never be silently promoted to one.
+## eSpeak preview
 
-## Freeze gate
+`--preview-espeak` explicitly permits an eSpeak fallback when Kokoro cannot
+render a scene. The preview supports either an `espeak` or `espeak-ng`
+executable and still normalizes the resulting audio through FFmpeg.
 
-The candidate becomes permanent only after the first canonical Kokoro render is listened to on physical Cthulhu. Once accepted, later episodes reuse the exact model release, voice, speed, runtime policy and pronunciation conventions unless a documented engine-wide migration is approved.
+The preview is for smoke tests. It does not change the configured production
+voice or mark a Kokoro render as accepted.

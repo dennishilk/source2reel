@@ -1,10 +1,15 @@
 [project]
 name = "source2reel"
 version = "0.2.1"
-description = "Local, evidence-first AI-assisted technical explainer production engine"
+description = "Create 1080p technical explainer videos from project sources with local AI, narration and FFmpeg"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "pillow>=11,<13",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
 ]
 
 [project.scripts]

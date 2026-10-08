@@ -13,7 +13,7 @@ from source2reel.planner import (
     _canonicalize_outline_metadata,
     _scene_part_payload, plan,
 )
-from source2reel.chunking import fits_context
+from source2reel.chunking import estimate_tokens, fits_context
 from source2reel.providers import OutputLimitExceeded, StructuredOutputError
 from source2reel.schema import validate_episode
 from source2reel.util import json_load
@@ -195,10 +195,15 @@ class EditorialGroundingTests(unittest.TestCase):
 
     def test_final_request_budget_includes_possible_multipart_outline(self):
         ask = _ask()
+        # Size this boundary from the real direct request so additions to
+        # its contract do not invalidate an unrelated fixture constant.
+        direct_budget = estimate_tokens("storyboard") + estimate_tokens(
+            json.dumps(ask, ensure_ascii=False)
+        )
         self.assertTrue(fits_context("storyboard", json.dumps(ask, ensure_ascii=False),
-                                     1500, 0, 0))
-        self.assertFalse(_final_requests_fit("storyboard", ask, 1500, 0, 0))
-        self.assertTrue(_final_requests_fit("storyboard", ask, 2100, 0, 0))
+                                     direct_budget, 0, 0))
+        self.assertFalse(_final_requests_fit("storyboard", ask, direct_budget, 0, 0))
+        self.assertTrue(_final_requests_fit("storyboard", ask, direct_budget + 4096, 0, 0))
 
     def test_selected_fact_scope_excludes_unrelated_setup_profile_and_config(self):
         ask = _ask()

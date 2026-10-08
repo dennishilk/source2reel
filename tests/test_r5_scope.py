@@ -192,9 +192,10 @@ class PlannerRoleTests(unittest.TestCase):
                          "source_fact_id": fact["source_fact_id"]}
                         for fact in selected if fact.get("source_fact_id")
                     ]]}
-                first = payload["evidence_index"][0]["ref"]
-                selected = next(fact for fact in payload["research"]["facts"]
-                                if first in fact["evidence_refs"])
+                # Narrative-only source context may appear in the evidence
+                # index without being allowed to supply a factual claim.
+                selected = payload["research"]["facts"][0]
+                first = selected["evidence_refs"][0]
                 return {"version": 1, "title": "Demo", "slug": "demo", "summary": "Demo",
                         "scenes": [{"id": "s001", "type": "SUMMARY", "title": "Proof",
                                     "narration": selected["claim"], "evidence_refs": [first],

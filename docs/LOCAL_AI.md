@@ -66,12 +66,12 @@ When a model is accepted, record exact upstream repository/revision, model filen
 
 ## Hardware detection and Python dependency boundary
 
-Source2Reel now performs local hardware detection independently of the model provider. \`source2reel/hardware.py\` inspects PCI display controllers and \`vulkaninfo --summary\` and reports a selected baseline:
+Source2Reel now performs local hardware detection independently of the model provider. `source2reel/hardware.py` inspects PCI display controllers and `vulkaninfo --summary` and reports a selected baseline:
 
-- AMD + Vulkan → \`llama.cpp+vulkan/radv\`
-- other GPU + Vulkan → \`llama.cpp+vulkan\`
-- no usable Vulkan → \`llama.cpp+cpu\`
+- AMD + Vulkan → `llama.cpp+vulkan/radv`
+- other GPU + Vulkan → `llama.cpp+vulkan`
+- no usable Vulkan → `llama.cpp+cpu`
 
 The detector does not infer NVIDIA/CUDA from Linux or x86_64. The normal Python core environment contains no Kokoro or Torch dependency. This keeps local LLM runtime choice, Python rendering dependencies and optional TTS acceleration separate.
 
-Kokoro is configured as an explicit CPU voice stack under \`.venv-voice-kokoro\`; ROCm remains an optional benchmark path rather than a core installation requirement.
+Kokoro is configured as an explicit CPU voice stack under `.venv-voice-kokoro`; ROCm remains an optional benchmark path rather than a core installation requirement.

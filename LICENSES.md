@@ -62,6 +62,6 @@ Before freezing any downloaded GGUF/quantization, record the exact source reposi
 
 
 ## PyTorch CPU runtime for optional voice stack
-- installed only by \`tools/setup-voice.sh\`, not by the Source2Reel core resolver
+- installed only by `tools/setup-voice.sh`, not by the Source2Reel core resolver
 - initial policy: official PyTorch CPU wheel index; no CUDA/NVIDIA runtime required
 - exact Torch version is not frozen until physical Cthulhu voice validation; record it in provenance when the voice baseline is accepted

@@ -20,6 +20,14 @@ from source2reel.session import server_command, start, status, stop_all
 SOURCE = Path(__file__).resolve().parents[1]
 
 
+def matching_proc_namespace():
+    """Real PID ownership checks need /proc mounted for this PID namespace."""
+    try:
+        return int(Path("/proc/self/stat").read_text().split(" ", 1)[0]) == os.getpid()
+    except (OSError, ValueError):
+        return False
+
+
 class SessionProductTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -44,6 +52,7 @@ class SessionProductTests(unittest.TestCase):
         slot = command.index("-np")
         self.assertEqual(command[slot + 1], "1")
 
+    @unittest.skipUnless(matching_proc_namespace(), "mounted /proc does not match the PID namespace")
     def test_owned_stop_does_not_touch_unrelated_server_or_reused_pid_record(self):
         unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         self.addCleanup(lambda: (unrelated.terminate(), unrelated.wait()))

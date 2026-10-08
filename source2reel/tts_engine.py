@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, subprocess, tomllib
+import os, shutil, subprocess, tomllib
 from pathlib import Path
 from typing import Any
 from .config import profile_paths
@@ -46,8 +46,11 @@ def kokoro_scene(text: str, out: Path, root: Path, engine_cfg: dict[str,Any]):
 
 
 def espeak_preview(text: str, out: Path):
+    binary = shutil.which("espeak") or shutil.which("espeak-ng")
+    if binary is None:
+        raise RuntimeError("eSpeak preview requires espeak or espeak-ng on PATH")
     out.parent.mkdir(parents=True,exist_ok=True)
-    subprocess.run(["espeak","-v","en-us+m3","-s","150","-p","32","-a","180","-w",str(out),text],check=True)
+    subprocess.run([binary,"-v","en-us+m3","-s","150","-p","32","-a","180","-w",str(out),text],check=True)
 
 
 def render_scene_audio(text: str, raw: Path, normalized: Path, root: Path, engine_cfg: dict[str,Any], preview_espeak: bool=False):

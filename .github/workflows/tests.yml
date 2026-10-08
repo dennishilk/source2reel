@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python 3.12 and FFmpeg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install render test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg fonts-dejavu-core
+      - name: Install core and tests
+        run: python -m pip install -e '.[dev]'
+      - name: Check shell syntax
+        run: |
+          bash -n install.sh
+          bash -n s2r
+          for script in tools/*.sh; do
+            bash -n "$script"
+          done
+      - name: Check Python syntax
+        run: python -m compileall -q source2reel tests
+      - name: Verify Linux process identity
+        run: |
+          python -c 'import os; from pathlib import Path; assert int(Path("/proc/self/stat").read_text().split(" ", 1)[0]) == os.getpid(), "The runner needs /proc mounted for its PID namespace"'
+      - name: Run tests
+        run: python -m pytest -q

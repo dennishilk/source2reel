@@ -228,7 +228,17 @@ class ContextChunkingTests(unittest.TestCase):
             self.assertEqual(provider.calls, calls_after_first)
 
     def test_planner_uses_map_reduce_when_direct_payload_is_too_large(self):
-        provider = FakeProvider()
+        # The current storyboard/recovery contracts need more metadata room,
+        # while the original research still cannot fit this small context.
+        context_size = 8192
+        test_case = self
+
+        class BudgetCheckingProvider(FakeProvider):
+            def complete_json(self, system, user):
+                test_case.assertTrue(fits_context(system, user, context_size, 1000, 500))
+                return super().complete_json(system, user)
+
+        provider = BudgetCheckingProvider()
         evidence = []
         facts = []
         for i in range(1, 25):
@@ -266,7 +276,7 @@ class ContextChunkingTests(unittest.TestCase):
                 project,
                 "Demo",
                 "Keep it grounded.",
-                context_size=4200,
+                context_size=context_size,
                 output_reserve_tokens=1000,
                 safety_tokens=500,
                 progress=Progress(progress_output),
